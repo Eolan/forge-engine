@@ -19,6 +19,8 @@ pub(crate) struct PlanetVars {
     bloom: Var<bool>,
     bloom_strength: Var<f64>,
     compensation: Var<f64>,
+    /// The player's brightness (#377), added to the compensation.
+    brightness: Var<f64>,
     ao: Var<bool>,
     lod_error: Var<f64>,
     wireframe: Var<bool>,
@@ -79,6 +81,7 @@ impl PlanetDemo {
                 0.0,
                 self.exposure.compensation,
             ),
+            brightness: s.add(rs::brightness()),
             ao: s.add_from(rs::ao(true), true, self.ao_on),
             lod_error: s.add_from_f32(rs::lod_error(1.0), 1.0, self.args.lod_error),
             wireframe: s.add_from(
@@ -163,8 +166,8 @@ impl PlanetDemo {
             self.taa.bloom_strength = strength;
             self.args.bloom = if s.get(v.bloom) { strength } else { 0.0 };
         }
-        if s.changed_since(v.compensation, seen) {
-            self.exposure.compensation = s.get(v.compensation) as f32;
+        if s.changed_since(v.compensation, seen) || s.changed_since(v.brightness, seen) {
+            self.exposure.compensation = (s.get(v.compensation) + s.get(v.brightness)) as f32;
         }
         if changed(v.ao) {
             self.ao_on = s.get(v.ao);

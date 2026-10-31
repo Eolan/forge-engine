@@ -2700,6 +2700,19 @@ Most of it is `gi/trace`: each hit weighs every flat lamp of its place exactly, 
 then the pick, `hit_lamps`), 0.1 to 0.2 ms a lamp at this size, the probes' bounce as SHaRC's.
 To halve if the authored scenes grow many flat lamps: keep the weights of the first loop.
 
+## The menu's frosted glass (#377, D-092, 2026-10-31)
+
+Five passes, only while the game's menu shows (`app/menu glass *`), the village paused behind
+the settings (`city-plan --village 600 --exec "app.menu graphics"`, 150 frames, the 5070 Ti):
+
+| Window | copy | down (4 × 4) | blur x | blur y | glass | total |
+|---|---|---|---|---|---|---|
+| 1920 × 1080 | 0.019 | 0.010 | 0.006 | 0.005 | 0.011 | 0.051 ms |
+| 3840 × 2160 | 0.044 | 0.025 | 0.012 | 0.011 | 0.039 | 0.131 ms |
+
+The copy is a plain image copy of the frame; the blurs run at a quarter of its size in RGBA16F,
+25 taps each. The menu's own quads (`app/hud`) cost 0.014 ms at 1080p, 0.041 ms at 4K.
+
 ## Not measured yet
 
 - **Streaming**: residency pools, request queue depth, drive and decompression throughput.

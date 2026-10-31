@@ -415,6 +415,11 @@ pub struct Settings {
     /// A value was set as the user's ([`Source::User`]) since the user's file was read or
     /// written: the shell writes the file again ([`Settings::take_user_changed`]).
     user_changed: bool,
+    /// The user's choices, name to value (#377): what the user's file holds and is written from.
+    /// A choice stays whether or not this run registers its variable (the asteroids' DLSS mode
+    /// in the village) and whether or not `forge.cfg` or `--set` override it now, until
+    /// [`Settings::forget_user`] takes it out.
+    user: BTreeMap<String, String>,
 }
 
 /// The completion of a console line ([`Settings::complete`]).
@@ -620,6 +625,10 @@ impl Settings {
             Some(index) => self.set_from(index, value, source),
             None if source == Source::Console => Err(format!("no setting '{name}'")),
             None => {
+                if source == Source::User {
+                    self.user.insert(name.to_owned(), value.trim().to_owned());
+                    self.user_changed = true;
+                }
                 self.pending.push(Pending {
                     name: name.to_owned(),
                     value: value.to_owned(),
@@ -736,15 +745,94 @@ impl Settings {
         count
     }
 
-    /// The user's settings ([`Source::User`]) as `name value` lines, by name: what the user's
-    /// file holds ([`Settings::load_file_as`]).
+    /// The user's choices as `name value` lines, by name: what the user's file holds
+    /// ([`Settings::load_file_as`]), those this run does not register or overrides included.
     pub fn user_lines(&self) -> Vec<String> {
-        self.by_name
-            .values()
-            .map(|&i| &self.vars[i])
-            .filter(|v| v.source == Source::User)
-            .map(|v| format!("{} {}", v.name, v.value_text()))
+        self.user
+            .iter()
+            .map(|(name, value)| format!("{name} {value}"))
             .collect()
+    }
+
+    /// The user's choice for `name`, as the user's file holds it: what a setting read at start
+    /// ([`Flags::RESTART`]) takes at the next run.
+    pub fn user_value(&self, name: &str) -> Option<&str> {
+        self.user.get(name).map(String::as_str)
+    }
+
+    /// The user's choice of `value` for `name` (a registered setting), kept for the next run
+    /// only: the user's file is written with it, the value now stays. For a setting read at
+    /// start ([`Flags::RESTART`]), which the menu marks "applies after restart".
+    pub fn set_user_next_run(&mut self, name: &str, value: &str) -> Result<String, String> {
+        let index = self.visible_index(name)?;
+        let info = &self.vars[index];
+        if info.flags.contains(Flags::READ_ONLY) {
+            return Err(format!("{name} is read-only"));
+        }
+        let text = format_value(&info.kind, parse_value(&info.kind, value)?);
+        self.user.insert(name.to_owned(), text.clone());
+        self.user_changed = true;
+        Ok(format!("{name} = {text} after a restart"))
+    }
+
+    /// A choice of the user's made once `forge.cfg` and `--set` were read (the first launch's):
+    /// kept in the user's file, and in force only where neither of them, nor anything above
+    /// them, set `name`: as if it had been read from the user's file first.
+    pub fn set_user_beneath(&mut self, name: &str, value: &str) -> Result<String, String> {
+        let name = name.to_ascii_lowercase();
+        let above = |s: Source| !matches!(s, Source::Default | Source::User);
+        let text = match self.by_name.get(&name).copied() {
+            Some(index) if above(self.vars[index].source) => {
+                let kind = &self.vars[index].kind;
+                format_value(kind, parse_value(kind, value)?)
+            }
+            None if self
+                .pending
+                .iter()
+                .any(|p| p.name == name && above(p.source)) =>
+            {
+                value.trim().to_owned()
+            }
+            _ => return self.set_text(&name, value, Source::User),
+        };
+        self.user.insert(name.clone(), text.clone());
+        self.user_changed = true;
+        Ok(format!(
+            "{name} = {text} in the user's file, overridden now"
+        ))
+    }
+
+    /// Takes `name` out of the user's choices (the menu's Defaults): its line leaves the user's
+    /// file, and a registered setting not read at start goes back to its default now, unless
+    /// `forge.cfg` or `--set` gave its value (they still rank above the user's file). Returns
+    /// whether the user had chosen it.
+    pub fn forget_user(&mut self, name: &str) -> bool {
+        let had = self.user.remove(name).is_some();
+        self.user_changed |= had;
+        if let Ok(index) = self.visible_index(name)
+            && !self.vars[index].flags.contains(Flags::RESTART)
+            && !self.vars[index].flags.contains(Flags::READ_ONLY)
+            && !matches!(self.vars[index].source, Source::File | Source::CommandLine)
+        {
+            let default = self.vars[index].default;
+            self.store(index, default, Source::Default);
+        }
+        had
+    }
+
+    /// `text` as `name`'s value is written (`on` as `1`, a choice by its name, a number without
+    /// its trailing zeros), or `None` when `name` is not registered or `text` is not one of its
+    /// values: the menu compares values so.
+    pub fn canonical(&self, name: &str, text: &str) -> Option<String> {
+        let info = self.info(name)?;
+        parse_value(&info.kind, text)
+            .ok()
+            .map(|v| format_value(&info.kind, v))
+    }
+
+    /// `name`'s default as text, if it is registered.
+    pub fn default_text(&self, name: &str) -> Option<String> {
+        self.info(name).map(|v| format_value(&v.kind, v.default))
     }
 
     /// Whether a value was set as the user's since the user's file was read or written, and
@@ -1013,6 +1101,10 @@ impl Settings {
             info.changed = self.changes;
         }
         if source == Source::User {
+            // Kept even at its default: a shared name's default is each demo's own (the tone
+            // curve), so the line would be lost to the others.
+            let info = &self.vars[index];
+            self.user.insert(info.name.clone(), info.value_text());
             self.user_changed = true;
         }
     }
@@ -1354,6 +1446,48 @@ mod user_file_tests {
     use super::*;
 
     #[test]
+    fn the_first_launchs_choices_rank_under_forge_cfg_and_the_command_line() {
+        let mut s = Settings::new();
+        let window = s.add(Spec::choice(
+            "app.window",
+            &["windowed", "fullscreen"],
+            0,
+            "w",
+        ));
+        let ao = s.add(Spec::bool("r.ao", true, "ao"));
+        s.set_text("app.window", "windowed", Source::CommandLine)
+            .unwrap();
+        s.set_text("r.preset", "low", Source::File).unwrap();
+        // Chosen after both were read: in the user's file, in force only where nothing else
+        // set the name.
+        for (name, value) in [
+            ("app.window", "fullscreen"),
+            ("r.preset", "ultra"),
+            ("r.ao", "0"),
+        ] {
+            s.set_user_beneath(name, value).unwrap();
+        }
+        let preset = s.add(Spec::choice(
+            "r.preset",
+            &["custom", "low", "ultra"],
+            0,
+            "p",
+        ));
+        assert_eq!((s.get(window), s.source(window)), (0, Source::CommandLine));
+        assert_eq!((s.get(preset), s.source(preset)), (1, Source::File));
+        assert_eq!((s.get(ao), s.source(ao)), (false, Source::User));
+        assert_eq!(
+            s.user_lines(),
+            ["app.window fullscreen", "r.ao 0", "r.preset ultra"]
+        );
+        // Defaults takes the user's choices out, and leaves what `--set` gave.
+        assert!(s.forget_user("app.window") && s.forget_user("r.ao"));
+        assert_eq!((s.get(window), s.source(window)), (0, Source::CommandLine));
+        assert_eq!((s.get(ao), s.source(ao)), (true, Source::Default));
+        assert!(s.set_user_beneath("app.window", "sideways").is_err());
+    }
+
+    #[test]
     fn the_users_values_round_trip_through_their_file_and_rank_under_the_others() {
         let dir = std::env::temp_dir().join(format!("forge-user-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
@@ -1375,13 +1509,74 @@ mod user_file_tests {
         assert_eq!(fresh.get(preset2), 1);
         assert_eq!(fresh.source(preset2), Source::User);
         assert!(!fresh.take_user_changed());
-        // forge.cfg and the command line override the user's file.
+        // forge.cfg and the command line override the user's file for the run; the user's
+        // choice stays in it (#377: a write used to drop it).
         s.set_text("r.preset", "custom", Source::File).unwrap();
         assert_eq!(s.get(preset), 0);
         assert_eq!(s.source(preset), Source::File);
-        assert!(s.user_lines().is_empty());
+        assert_eq!(s.user_lines(), ["r.preset low"]);
         s.set_by(info, 2, Source::CommandLine);
         assert_eq!(s.source(info), Source::CommandLine);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_users_file_keeps_choices_this_run_does_not_register_until_forgotten() {
+        let dir = std::env::temp_dir().join(format!("forge-user-keep-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("user.cfg");
+        // Written by the asteroids, whose DLSS mode the village does not register.
+        std::fs::write(&path, "r.dlss.mode performance\nr.ao off\n").unwrap();
+        let mut s = Settings::new();
+        assert_eq!(s.load_file_as(&path, Source::User), Ok(2));
+        let ao = s.add(Spec::bool("r.ao", true, "ao"));
+        assert!(!s.get(ao));
+        // Registering canonicalised the user's text; the unregistered line is kept as it was.
+        assert_eq!(s.user_lines(), ["r.ao 0", "r.dlss.mode performance"]);
+        assert!(!s.take_user_changed());
+        // Chosen at its default, the line stays: another demo's default may differ.
+        s.set_text("r.ao", "1", Source::User).unwrap();
+        assert!(s.take_user_changed());
+        assert_eq!(s.user_lines(), ["r.ao 1", "r.dlss.mode performance"]);
+        // A program's change (Alt+Enter's window) is not the user's.
+        s.set(ao, false);
+        assert_eq!(s.user_lines(), ["r.ao 1", "r.dlss.mode performance"]);
+        // Forgotten (the menu's Defaults): the line goes and the default comes back.
+        assert!(s.forget_user("r.ao"));
+        assert!(s.get(ao));
+        assert_eq!(s.source(ao), Source::Default);
+        assert!(s.take_user_changed());
+        assert!(!s.forget_user("r.ao"));
+        assert!(!s.take_user_changed());
+        assert_eq!(s.user_lines(), ["r.dlss.mode performance"]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_setting_read_at_start_is_kept_for_the_next_run_and_its_value_stays() {
+        let mut s = Settings::new();
+        let gpu = s.add(Spec::choice("app.gpu", &["auto", "nvidia", "amd"], 0, "gpu").restart());
+        assert_eq!(
+            s.set_user_next_run("app.gpu", "AMD"),
+            Ok("app.gpu = amd after a restart".to_owned())
+        );
+        assert_eq!(s.get(gpu), 0);
+        assert_eq!(s.source(gpu), Source::Default);
+        assert_eq!(s.user_value("app.gpu"), Some("amd"));
+        assert_eq!(s.user_lines(), ["app.gpu amd"]);
+        assert!(s.take_user_changed());
+        // Forgotten, its value now stays as it is (read at start); a bad value or name changes
+        // nothing.
+        assert!(s.forget_user("app.gpu"));
+        assert!(s.user_lines().is_empty());
+        assert_eq!(s.source(gpu), Source::Default);
+        assert!(s.set_user_next_run("app.gpu", "intel").is_err());
+        assert!(s.set_user_next_run("app.nothing", "1").is_err());
+        // The menu compares values as they are written.
+        s.add(Spec::bool("r.ao", true, "ao"));
+        assert_eq!(s.canonical("r.ao", "on").as_deref(), Some("1"));
+        assert_eq!(s.canonical("app.gpu", "NVIDIA").as_deref(), Some("nvidia"));
+        assert_eq!(s.canonical("app.gpu", "intel"), None);
+        assert_eq!(s.default_text("app.gpu").as_deref(), Some("auto"));
     }
 }

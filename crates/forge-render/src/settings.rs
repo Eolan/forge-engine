@@ -184,6 +184,18 @@ pub fn exposure_compensation(default: f64) -> Spec<f64> {
     )
 }
 
+/// The player's brightness (#377, the menu's display page): stops added to the metered
+/// exposure's compensation, the scene's own kept; a fixed exposure stays as it is set.
+pub fn brightness() -> Spec<f64> {
+    Spec::float(
+        "r.brightness",
+        0.0,
+        -2.0..=2.0,
+        "The player's brightness in stops, added to the metered exposure's compensation: \
+         positive brighter.",
+    )
+}
+
 /// A night's exposure floor (`AutoExposure::night_floor`, research/home-lighting.md §8.2, D-080).
 pub fn exposure_night_floor(default: f64) -> Spec<f64> {
     Spec::float(

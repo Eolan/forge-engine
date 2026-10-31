@@ -22,6 +22,8 @@ pub(crate) struct BalladVars {
     bloom: Var<bool>,
     bloom_strength: Var<f64>,
     compensation: Var<f64>,
+    /// The player's brightness (#377), added to the compensation.
+    brightness: Var<f64>,
     ao: Var<bool>,
     ao_radius: Var<f64>,
     sun_disc: Var<bool>,
@@ -109,6 +111,7 @@ impl Ballad {
                 0.0,
                 self.exposure.compensation,
             ),
+            brightness: s.add(rs::brightness()),
             ao: s.add_from(rs::ao(true), true, self.ao_on),
             ao_radius: s.add_from_f32(rs::ao_radius(2.0), 2.0, self.args.ao_radius),
             sun_disc: s.add_from(
@@ -243,8 +246,8 @@ impl Ballad {
             self.taa.bloom_strength = strength;
             self.bloom_on = s.get(v.bloom) && strength > 0.0;
         }
-        if s.changed_since(v.compensation, seen) {
-            self.exposure.compensation = s.get(v.compensation) as f32;
+        if s.changed_since(v.compensation, seen) || s.changed_since(v.brightness, seen) {
+            self.exposure.compensation = (s.get(v.compensation) + s.get(v.brightness)) as f32;
         }
         if changed(v.ao) {
             self.ao_on = s.get(v.ao);

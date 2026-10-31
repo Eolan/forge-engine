@@ -151,6 +151,30 @@ impl Swapchain {
         modes.map_or(true, |m| self.present_mode_for(&m) != self.present_mode)
     }
 
+    /// Paces the presents by `pacing` from now on (the menu's VSync, #377). Takes effect at the
+    /// next [`Self::recreate`]; returns whether it changes the present mode, so that the caller
+    /// recreates the swapchain.
+    pub fn set_pacing(&mut self, pacing: Pacing) -> bool {
+        if self.pacing == pacing {
+            return false;
+        }
+        self.pacing = pacing;
+        let loader = self.device.instance().surface_loader();
+        // SAFETY: a surface query on a live surface and physical device.
+        let modes = unsafe {
+            loader.get_physical_device_surface_present_modes(
+                self.device.physical(),
+                self.surface.raw(),
+            )
+        };
+        modes.map_or(true, |m| self.present_mode_for(&m) != self.present_mode)
+    }
+
+    /// How its presents are paced.
+    pub fn pacing(&self) -> Pacing {
+        self.pacing
+    }
+
     /// The present mode its pacing takes of the surface's `modes`.
     fn present_mode_for(&self, modes: &[vk::PresentModeKHR]) -> vk::PresentModeKHR {
         // `FORGE_PRESENT_MODE=immediate|mailbox|fifo` overrides the choice (debugging aid).

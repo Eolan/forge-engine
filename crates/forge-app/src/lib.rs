@@ -14,6 +14,7 @@ mod calibration;
 mod camera;
 pub mod console;
 mod content_light;
+mod glass;
 mod hdr;
 pub mod hud;
 mod input;
@@ -151,6 +152,15 @@ impl Default for AppConfig {
             sound_record: None,
             sound_record_step: None,
         }
+    }
+}
+
+impl AppConfig {
+    /// Whether the run is scripted (a frame limit or a capture): it reads and writes no user file
+    /// (#377) and keeps no frame-rate limit. (A frame limit also keeps the window from taking
+    /// the focus and presents uncapped: [`pacing`].)
+    pub fn scripted(&self) -> bool {
+        self.frame_limit.is_some() || self.capture.is_some() || self.capture_every.is_some()
     }
 }
 
@@ -406,9 +416,11 @@ pub fn run_loading<D: Demo + Send + 'static>(
     let warm_up = loading::warm_up(shaders.clone())?;
     // Interactive runs draw the demo's first frames behind the loading screen (#342); scripted
     // ones show them, their frames counted from the first.
-    let scripted =
-        config.frame_limit.is_some() || config.capture.is_some() || config.capture_every.is_some();
-    let settle = if scripted { 0 } else { loading::SETTLE_FRAMES };
+    let settle = if config.scripted() {
+        0
+    } else {
+        loading::SETTLE_FRAMES
+    };
     run_with(config, Some(shaders), move |ctx| {
         loading::Stage::start(ctx, preparing, warm_up, settle)
     })
@@ -538,6 +550,136 @@ pub fn settings_dir(root: &std::path::Path) -> PathBuf {
     std::env::var_os("FORGE_SETTINGS_DIR")
         .filter(|v| !v.is_empty())
         .map_or_else(|| root.join("settings"), PathBuf::from)
+}
+
+/// How a run presents: runs with a frame limit measure their frames uncapped (unless the demo
+/// asked for VSync, `--vsync`), the others wait for the refresh with `vsync` (`app.vsync`, #377,
+/// whose default `--vsync` gives) and never tear.
+fn pacing(config: &AppConfig, vsync: bool) -> Pacing {
+    match (config.frame_limit.is_some(), vsync || config.vsync) {
+        (true, false) => Pacing::Uncapped,
+        (true, true) => Pacing::Vsync,
+        (false, _) if vsync => Pacing::Vsync,
+        (false, _) => Pacing::Smooth,
+    }
+}
+
+/// `app.hdr.mode`'s choices, [`HdrMode::name`]'s.
+const HDR_MODES: &[&str] = &["off", "hdr10", "scrgb", "offscreen"];
+
+/// `mode`'s index in [`HDR_MODES`].
+fn hdr_index(mode: HdrMode) -> usize {
+    HDR_MODES
+        .iter()
+        .position(|&n| n == mode.name())
+        .unwrap_or(0)
+}
+
+/// The settings read before the window opens (#377): the user's file (an interactive run's
+/// only, [`SettingsArgs::user_file`]), `forge.cfg` and `--set`, and the window's own settings,
+/// which place it: its mode, its size and its monitor.
+struct Start {
+    settings: Settings,
+    /// The user's file, `None` in a scripted run; its leading comments; whether it is the
+    /// first launch (an interactive run with no user file yet).
+    user_file: Option<PathBuf>,
+    user_header: String,
+    first_launch: bool,
+    window_mode: Var<usize>,
+    width: Var<i64>,
+    height: Var<i64>,
+    monitor: Var<i64>,
+}
+
+impl Start {
+    fn read(config: &AppConfig) -> Self {
+        let root = workspace_root_from(env!("CARGO_MANIFEST_DIR"));
+        let args = &config.settings;
+        let user_file = args.user_file(config.scripted(), &settings_dir(&root));
+        let first_launch = user_file.as_ref().is_some_and(|p| !p.exists());
+        let mut settings = Settings::new();
+        let user_header = args.load(
+            &mut settings,
+            user_file.as_deref(),
+            args.cfg_path().as_deref(),
+        );
+        let window_mode = settings.add(
+            Spec::choice(
+                "app.window",
+                &["windowed", "fullscreen"],
+                0,
+                "The window, or borderless fullscreen on its monitor at the monitor's own size \
+                 (Alt+Enter switches too). The first launch picks fullscreen.",
+            )
+            .release(),
+        );
+        let size = |name: &str, default: u32, help: &str| {
+            Spec::int(name, i64::from(default), 64..=16384, help).release()
+        };
+        let width = settings.add(size(
+            "app.window.width",
+            config.width,
+            "The window's width in pixels, windowed (the menu's resolution, #377).",
+        ));
+        let height = settings.add(size(
+            "app.window.height",
+            config.height,
+            "The window's height in pixels, windowed.",
+        ));
+        let monitor = settings.add(
+            Spec::int(
+                "app.monitor",
+                0,
+                0..=16,
+                "The monitor the window shows on: 1 the system's first, 2 its second...; 0 \
+                 automatic (FORGE_MONITOR's choice: the second monitor where there is one). An \
+                 explicit FORGE_MONITOR wins at start.",
+            )
+            .release(),
+        );
+        Self {
+            settings,
+            user_file,
+            user_header,
+            first_launch,
+            window_mode,
+            width,
+            height,
+            monitor,
+        }
+    }
+}
+
+/// The monitor a window opens on: `FORGE_MONITOR` when it is set (`secondary`, `primary` or an
+/// index into the system's list), else `chosen` (the user's `app.monitor`, 1 the first) when not
+/// 0, else the first monitor that is not the main one, so demos stay off the owner's working
+/// screen.
+fn pick_monitor(
+    env: Option<&str>,
+    chosen: i64,
+    primary: Option<&winit::monitor::MonitorHandle>,
+    monitors: &[winit::monitor::MonitorHandle],
+) -> Option<winit::monitor::MonitorHandle> {
+    let secondary = || {
+        monitors
+            .iter()
+            .find(|m| Some(*m) != primary)
+            .or(primary)
+            .cloned()
+    };
+    match env {
+        Some("primary") => primary.cloned(),
+        Some("secondary") => secondary(),
+        Some(index) => index
+            .parse::<usize>()
+            .ok()
+            .and_then(|i| monitors.get(i).cloned())
+            .or_else(|| primary.cloned()),
+        None => usize::try_from(chosen - 1)
+            .ok()
+            .and_then(|i| monitors.get(i).cloned())
+            .or_else(secondary),
+    }
 }
 
 /// The OS's name of the window's monitor (Windows' `\\.\DISPLAYn`), for [`DisplayCaps`].
@@ -725,6 +867,23 @@ struct State<D: Demo> {
     /// The settings' change count when the window last matched `app.window`: a later change of
     /// the setting moves the window, a window moved without one (Alt+Enter) moves the setting.
     window_followed: u64,
+    /// `app.window.width` and `app.window.height`: the window's size, windowed (#377).
+    window_width: Var<i64>,
+    window_height: Var<i64>,
+    /// `app.monitor`: the user's monitor, 0 automatic.
+    monitor_choice: Var<i64>,
+    /// `app.vsync`, `app.fps_max` and `app.hdr.mode` (#377).
+    vsync: Var<bool>,
+    fps_max: Var<i64>,
+    hdr_mode: Var<usize>,
+    /// The settings' change count when the display last followed them: its size, its monitor,
+    /// VSync and HDR.
+    display_seen: u64,
+    /// When the frame-rate limit lets the next frame start.
+    next_frame_at: Option<Instant>,
+    /// The frosted glass behind the menu ([`glass`]), made when it first opens: `Some(None)` when
+    /// it could not be (the menu then dims the game instead).
+    glass: Option<Option<glass::Glass>>,
     /// The user's settings file (`settings/user.cfg`): the menu's choices and the first
     /// launch's, written again whenever one changes; `None` in a scripted run. Its leading
     /// comment lines are kept.
@@ -821,6 +980,11 @@ impl<D: Demo> State<D> {
         if apply_hdr_mode(&mut self.ctx, &mut self.overlay, &mut self.hdr, mode)? {
             self.demo.resized(&mut self.ctx)?;
         }
+        // `app.hdr.mode` follows, for the run (#377).
+        let now = hdr_index(self.ctx.output.mode);
+        if now != self.ctx.settings.get(self.hdr_mode) {
+            self.ctx.settings.set(self.hdr_mode, now);
+        }
         Ok(())
     }
 
@@ -863,6 +1027,7 @@ impl<D: Demo> State<D> {
     /// let go, the cursor the system's.
     fn open_menu(&mut self) {
         self.ctx.make_glyphs();
+        self.refresh_menu_caps();
         self.menu.open();
         self.input.release_all();
         self.input.paused = true;
@@ -886,6 +1051,13 @@ impl<D: Demo> State<D> {
         match action {
             Some(menu::Action::Resume) => {
                 self.close_menu();
+                false
+            }
+            Some(menu::Action::Calibrate) => {
+                self.close_menu();
+                if let Err(e) = self.open_calibration(Page::Peak) {
+                    tracing::warn!("the HDR calibration: {e}");
+                }
                 false
             }
             Some(menu::Action::Quit) => true,
@@ -946,6 +1118,180 @@ impl<D: Demo> State<D> {
         self.window_followed = self.ctx.settings.changes();
     }
 
+    /// The display's settings followed (#377), each when it changed since the last look (the
+    /// menu, the console, a preset): the window's size (windowed), its monitor, VSync and the HDR
+    /// mode.
+    fn follow_display(&mut self) -> Result<()> {
+        let seen = self.display_seen;
+        let s = &self.ctx.settings;
+        let size =
+            s.changed_since(self.window_width, seen) || s.changed_since(self.window_height, seen);
+        let monitor = s.changed_since(self.monitor_choice, seen);
+        let vsync = s.changed_since(self.vsync, seen);
+        let hdr = s.changed_since(self.hdr_mode, seen);
+        if monitor {
+            self.move_to_monitor();
+        }
+        let window = &self.ctx.window;
+        let s = &self.ctx.settings;
+        let wanted = PhysicalSize::new(
+            s.get(self.window_width) as u32,
+            s.get(self.window_height) as u32,
+        );
+        // Not when the size followed the window (a resize by hand).
+        if size && window.fullscreen().is_none() && window.inner_size() != wanted {
+            if window.is_maximized() {
+                window.set_maximized(false);
+            }
+            let _ = window.request_inner_size(wanted);
+            tracing::info!(
+                width = wanted.width,
+                height = wanted.height,
+                "window resized"
+            );
+        }
+        if vsync {
+            let pacing = pacing(&self.config, self.ctx.settings.get(self.vsync));
+            if self.ctx.swapchain.set_pacing(pacing) {
+                self.recreate_swapchain()?;
+            }
+            tracing::info!(?pacing, "presents paced");
+        }
+        if hdr {
+            let mode: HdrMode = HDR_MODES[self.ctx.settings.get(self.hdr_mode)]
+                .parse()
+                .unwrap_or(HdrMode::Off);
+            if mode != self.ctx.output.mode {
+                let caps =
+                    monitor_name(&self.ctx.window).and_then(|name| DisplayCaps::query(&name));
+                if caps != self.ctx.output.caps {
+                    self.ctx.output.refresh(caps);
+                }
+                if apply_hdr_mode(&mut self.ctx, &mut self.overlay, &mut self.hdr, mode)? {
+                    self.demo.resized(&mut self.ctx)?;
+                }
+                if mode != HdrMode::Off {
+                    self.hdr_requested = mode;
+                }
+                // The mode the display took (SDR where Windows shows it so), for the run; the
+                // user's choice stays in their file.
+                let now = hdr_index(self.ctx.output.mode);
+                if now != self.ctx.settings.get(self.hdr_mode) {
+                    self.ctx.settings.set(self.hdr_mode, now);
+                }
+            }
+        }
+        if (size || monitor || hdr) && self.menu.is_open() {
+            self.refresh_menu_caps();
+        }
+        self.display_seen = self.ctx.settings.changes();
+        Ok(())
+    }
+
+    /// The window moved to the monitor `app.monitor` names (automatic: the first that is not the
+    /// main one), fullscreen or not.
+    fn move_to_monitor(&mut self) {
+        let window = &self.ctx.window;
+        let primary = window.primary_monitor();
+        let monitors: Vec<_> = window.available_monitors().collect();
+        let chosen = self.ctx.settings.get(self.monitor_choice);
+        let Some(target) = pick_monitor(None, chosen, primary.as_ref(), &monitors) else {
+            return;
+        };
+        if window.current_monitor().as_ref() == Some(&target) {
+            return;
+        }
+        if window.fullscreen().is_some() {
+            window.set_fullscreen(Some(winit::window::Fullscreen::Borderless(Some(
+                target.clone(),
+            ))));
+        } else {
+            let maximized = window.is_maximized();
+            if maximized {
+                window.set_maximized(false);
+            }
+            let origin = target.position();
+            window.set_outer_position(PhysicalPosition::new(origin.x + 40, origin.y + 60));
+            if maximized {
+                window.set_maximized(true);
+            }
+        }
+        tracing::info!(monitor = ?target.name(), "window moved");
+    }
+
+    /// The swapchain made again at its size (a new present mode), the device idle; when the
+    /// window's size is about to change, at the resize instead.
+    fn recreate_swapchain(&mut self) -> Result<()> {
+        if self.needs_resize.is_some() {
+            self.stale_swapchain = true;
+            return Ok(());
+        }
+        let before = self.ctx.swapchain.extent();
+        self.ctx.swapchain.recreate(before.width, before.height)?;
+        self.ctx
+            .frames
+            .resize_swapchain(self.ctx.swapchain.image_count())?;
+        // A new swapchain has no HDR10 metadata until it is given again.
+        self.ctx
+            .swapchain
+            .set_hdr_metadata(self.ctx.output.metadata());
+        if self.ctx.swapchain.extent() != before {
+            self.demo.resized(&mut self.ctx)?;
+        }
+        Ok(())
+    }
+
+    /// `app.fps_max` (#377): in an interactive run, the rest of the frame slept so that frames
+    /// start at most that many times a second; a frame late by more than a period starts the
+    /// count again rather than hurry the next ones.
+    fn hold_frame_rate(&mut self) {
+        let cap = self.ctx.settings.get(self.fps_max);
+        // Loading and the demo's preparation run as fast as they can (see `set_uncapped_for_now`).
+        if cap <= 0 || self.config.scripted() || self.ctx.loading || self.ctx.preparing {
+            self.next_frame_at = None;
+            return;
+        }
+        let period = Duration::from_secs_f64(1.0 / cap as f64);
+        let now = Instant::now();
+        let at = match self.next_frame_at {
+            Some(at) if at + period > now => at,
+            _ => now,
+        };
+        if at > now {
+            #[cfg(feature = "profiling")]
+            let _zone = tracy_client::span!("frame rate limit");
+            std::thread::sleep(at - now);
+        }
+        self.next_frame_at = Some(at + period);
+    }
+
+    /// What the menu's rows need of the machine (#377): DLSS, the monitors, the display's HDR,
+    /// the window's size.
+    fn refresh_menu_caps(&mut self) {
+        let window = &self.ctx.window;
+        let primary = window.primary_monitor();
+        let monitors: Vec<_> = window.available_monitors().collect();
+        let current = window.current_monitor();
+        let display = monitor_name(window).and_then(|name| DisplayCaps::query(&name));
+        let size = window.inner_size();
+        self.menu.set_caps(menu::items::Caps {
+            dlss: self.ctx.device.dlss().is_some(),
+            monitor: current
+                .as_ref()
+                .and_then(|c| monitors.iter().position(|m| m == c)),
+            monitors: monitors
+                .iter()
+                .map(|m| menu::items::Monitor {
+                    size: [m.size().width, m.size().height],
+                    primary: Some(m) == primary.as_ref(),
+                })
+                .collect(),
+            hdr_display: display.is_some_and(|c| c.hdr_on),
+            hdr_output: self.ctx.output.is_hdr(),
+            window: [size.width, size.height],
+        });
+    }
+
     /// `r.preset` followed ([`presets`]): a preset chosen sets its patch, as from where the
     /// preset came (the user's file, the menu, the console); a patched setting changed by hand
     /// since puts the preset back to custom.
@@ -973,8 +1319,8 @@ impl<D: Demo> State<D> {
         }
     }
 
-    /// Writes the user's file from the settings that are the user's ([`settings::Source::User`]),
-    /// under its comment lines.
+    /// Writes the user's file from the user's choices (`Settings::user_lines`: those this run
+    /// overrides or does not register too), under its comment lines.
     fn write_user_file(&self) {
         let Some(path) = &self.user_file else {
             return;
@@ -998,7 +1344,25 @@ impl<D: Demo> State<D> {
     fn run_command(&mut self, name: &str, args: &[String]) -> Result<bool> {
         match name {
             "app.quit" => return Ok(true),
-            "app.menu" => self.open_menu(),
+            "app.menu" => {
+                let tab = match args.first().map(String::as_str) {
+                    None => None,
+                    Some("graphics") => Some(menu::items::Tab::Graphics),
+                    Some("display") => Some(menu::items::Tab::Display),
+                    Some("sound" | "controls") => Some(menu::items::Tab::Game),
+                    Some(other) => {
+                        self.console.print(
+                            format!("app.menu {other}: graphics, display or sound"),
+                            Color::Red,
+                        );
+                        return Ok(false);
+                    }
+                };
+                self.open_menu();
+                if let Some(tab) = tab {
+                    self.menu.open_settings(tab);
+                }
+            }
             "app.fullscreen" => self.toggle_fullscreen(),
             "app.capture" => {
                 let path = PathBuf::from(args.first().map_or("capture.png", String::as_str));
@@ -1093,9 +1457,39 @@ impl<D: Demo> State<D> {
     fn new(
         window: Arc<Window>,
         config: AppConfig,
+        start: Start,
         shaders: Option<ShaderCompiler>,
         init: InitFn<D>,
     ) -> Result<Self> {
+        // The settings (D-069), read before the window opened ([`Start`]): the user's file (the
+        // menu's choices, the first launch's; never in a scripted run, #377), `forge.cfg`, then
+        // the command line, applied as each variable registers; the shell's own first.
+        let Start {
+            mut settings,
+            user_file,
+            mut user_header,
+            first_launch,
+            window_mode,
+            width: window_width,
+            height: window_height,
+            monitor: monitor_choice,
+        } = start;
+        // The frame's pace (#377): VSync and a frame-rate limit, in interactive runs; a scripted
+        // run keeps measuring its frames uncapped.
+        let vsync = settings.add(
+            Spec::bool(
+                "app.vsync",
+                config.vsync,
+                "Vertical sync: one frame a refresh of the display, never tearing. Off, frames \
+                 show as they come, without tearing (mailbox). Interactive runs only.",
+            )
+            .release(),
+        );
+        // `--vsync` ranks as the command line does, above the user's file; the menu still turns
+        // it off for the run.
+        if config.vsync {
+            settings.set_by(vsync, true, settings::Source::CommandLine);
+        }
         // In the load profile (#345): the device's creation, Streamline's start inside it, which
         // a loading demo's preparation runs beside.
         let device_task = forge_core::activity::begin(
@@ -1169,14 +1563,7 @@ impl<D: Demo> State<D> {
             Arc::clone(&surface),
             size.width,
             size.height,
-            // Scripted runs measure their frames uncapped; interactive ones never tear.
-            if config.vsync {
-                Pacing::Vsync
-            } else if config.frame_limit.is_some() {
-                Pacing::Uncapped
-            } else {
-                Pacing::Smooth
-            },
+            pacing(&config, settings.get(vsync)),
         )?;
         drop(device_task);
         // What the OS says of the window's display (issue #94), under the calibration saved for
@@ -1229,33 +1616,8 @@ impl<D: Demo> State<D> {
             _ => OverlayMode::Off,
         };
         let graph = RenderGraph::new(&device);
-        // The settings (D-069): the file, then the command line, applied as each variable
-        // registers; the shell's own first.
-        let mut settings = Settings::new();
-        // The user's file first (the menu's choices, the first launch's): `forge.cfg` and
-        // `--set` override it. Never in a scripted run (`FORGE_CFG=none`, `--no-cfg`), which
-        // reads no file at all.
-        let user_file = config
-            .settings
-            .cfg_path()
-            .is_some()
-            .then(|| settings_dir(&root).join("user.cfg"));
-        let mut user_header = String::new();
-        if let Some(path) = &user_file {
-            if path.exists() {
-                user_header = std::fs::read_to_string(path)
-                    .unwrap_or_default()
-                    .lines()
-                    .take_while(|l| l.starts_with('#'))
-                    .map(|l| format!("{l}\n"))
-                    .collect();
-                match settings.load_file_as(path, settings::Source::User) {
-                    Ok(n) => {
-                        tracing::info!(path = %path.display(), lines = n, "user settings read")
-                    }
-                    Err(e) => tracing::warn!("user settings: {e}"),
-                }
-            } else if config.frame_limit.is_none() && config.capture.is_none() {
+        {
+            if first_launch {
                 // The first launch on this machine: what the GPU and the monitor are, and the
                 // settings that fit them, written for the runs to come.
                 let machine = presets::Machine {
@@ -1273,8 +1635,9 @@ impl<D: Demo> State<D> {
                     "{}\n",
                     presets::first_launch_header(&machine, device.name())
                 );
+                // Under `forge.cfg` and `--set`, read already, as the user's file always is.
                 for (name, value) in presets::first_launch(&machine) {
-                    if let Err(e) = settings.set_text(&name, &value, settings::Source::User) {
+                    if let Err(e) = settings.set_user_beneath(&name, &value) {
                         tracing::warn!("first launch: {name}: {e}");
                     }
                 }
@@ -1285,23 +1648,16 @@ impl<D: Demo> State<D> {
                 );
             }
         }
-        if let Some(cfg) = config.settings.cfg_path() {
-            match settings.load_file(&cfg) {
-                Ok(0) => {}
-                Ok(n) => tracing::info!(path = %cfg.display(), lines = n, "settings file read"),
-                Err(e) => tracing::warn!("settings file: {e}"),
-            }
-        }
-        for assignment in &config.settings.set {
-            match settings::split_assignment(assignment) {
-                Some((name, value)) => {
-                    if let Err(e) = settings.set_text(name, value, settings::Source::CommandLine) {
-                        tracing::warn!("--set {assignment}: {e}");
-                    }
-                }
-                None => tracing::warn!("--set {assignment}: not NAME=VALUE"),
-            }
-        }
+        let fps_max = settings.add(
+            Spec::int(
+                "app.fps_max",
+                0,
+                0..=1000,
+                "The most frames a second, the rest of each frame slept (a cooler GPU); 0 none. \
+                 Interactive runs only.",
+            )
+            .release(),
+        );
         let display_info = settings.add(
             Spec::int(
                 "r.display_info",
@@ -1352,16 +1708,6 @@ impl<D: Demo> State<D> {
             )
             .release(),
         );
-        let window_mode = settings.add(
-            Spec::choice(
-                "app.window",
-                &["windowed", "fullscreen"],
-                0,
-                "The window, or borderless fullscreen on its monitor at the monitor's own size \
-                 (Alt+Enter switches too). The first launch picks fullscreen.",
-            )
-            .release(),
-        );
         let volume = settings.add(
             Spec::float(
                 "snd.volume",
@@ -1409,8 +1755,8 @@ impl<D: Demo> State<D> {
         settings.add_command("app.quit", "", "Closes the window.", true);
         settings.add_command(
             "app.menu",
-            "",
-            "Opens the game's menu, as Esc does (#352).",
+            "[graphics|display|sound]",
+            "Opens the game's menu, as Esc does (#352), or its settings on that page (#377).",
             true,
         );
         settings.add_command(
@@ -1471,12 +1817,34 @@ impl<D: Demo> State<D> {
             _surface: surface,
             _instance: instance,
         };
-        let requested = match std::env::var("FORGE_HDR") {
-            Ok(text) => text.parse().unwrap_or_else(|error| {
+        let forced = std::env::var("FORGE_HDR").ok().map(|text| {
+            text.parse().unwrap_or_else(|error| {
                 tracing::warn!("FORGE_HDR: {error}");
                 config.hdr
-            }),
-            Err(_) => config.hdr,
+            })
+        });
+        // The HDR output as a setting (the menu's, #377): the demo's own by default, the user's
+        // choice in an interactive run; an explicit FORGE_HDR wins.
+        let hdr_mode = ctx.settings.add(
+            Spec::choice(
+                "app.hdr.mode",
+                HDR_MODES,
+                hdr_index(config.hdr),
+                "The output: off, hdr10, scrgb, or offscreen (the HDR10 image previewed on an SDR \
+                 display). On the display, HDR needs Windows to show it in HDR; app.hdr switches \
+                 too.",
+            )
+            .release(),
+        );
+        let requested = match forced {
+            Some(mode) => {
+                ctx.settings
+                    .set_by(hdr_mode, hdr_index(mode), settings::Source::Code);
+                mode
+            }
+            None => HDR_MODES[ctx.settings.get(hdr_mode)]
+                .parse()
+                .unwrap_or(config.hdr),
         };
         let mut hdr = HdrPasses {
             preview: None,
@@ -1485,6 +1853,11 @@ impl<D: Demo> State<D> {
             ssaa: None,
         };
         apply_hdr_mode(&mut ctx, &mut overlay, &mut hdr, requested)?;
+        // The mode the display took (SDR where Windows shows it so), for the run, so that the
+        // menu shows it and choosing HDR10 again applies; the user's choice stays in their file.
+        if hdr_index(ctx.output.mode) != ctx.settings.get(hdr_mode) {
+            ctx.settings.set(hdr_mode, hdr_index(ctx.output.mode));
+        }
         if config.ssaa {
             if ctx.output.mode == HdrMode::Offscreen {
                 tracing::warn!("no supersampling in the off-screen HDR mode");
@@ -1552,6 +1925,17 @@ impl<D: Demo> State<D> {
             preset_applied: 0,
             window_mode,
             window_followed: 0,
+            window_width,
+            window_height,
+            monitor_choice,
+            vsync,
+            fps_max,
+            hdr_mode,
+            // What the start gave is in force already: the window was made at its size on its
+            // monitor, the swapchain with its pacing, the HDR mode applied.
+            display_seen: ctx.settings.changes(),
+            next_frame_at: None,
+            glass: None,
             user_file,
             user_header,
             menu: menu::Menu::default(),
@@ -1693,6 +2077,19 @@ impl<D: Demo> State<D> {
                 );
                 self.demo.resized(&mut self.ctx)?;
             }
+            // A window resized by hand (#377): the menu's resolution shows its size, for the run;
+            // the user's file keeps their choice.
+            if self.ctx.window.fullscreen().is_none() {
+                let s = &mut self.ctx.settings;
+                for (var, now) in [
+                    (self.window_width, size.width),
+                    (self.window_height, size.height),
+                ] {
+                    if s.get(var) != i64::from(now) {
+                        s.set(var, i64::from(now));
+                    }
+                }
+            }
         }
         let now = Instant::now();
         let frame_ms = (now - self.last_frame).as_secs_f64() * 1e3;
@@ -1726,6 +2123,7 @@ impl<D: Demo> State<D> {
         // preset chosen as the user's) changed a setting.
         self.apply_preset();
         self.follow_window_mode();
+        self.follow_display()?;
         if self.ctx.settings.take_user_changed() {
             self.write_user_file();
         }
@@ -2094,23 +2492,45 @@ impl<D: Demo> State<D> {
             }
             // The game's HUD (#328): over the picture, under the debug overlay; its lens first
             // (not in the HDR outputs yet), then its quads.
-            // The game's menu (#352) over them, shown with `app.hud 0` too.
+            // The game's menu (#352) instead, shown with `app.hud 0` too, on its frosted glass
+            // over the whole window (#377).
             let hud_shown = self.ctx.settings.get(self.hud_shown);
+            let menu = self.menu.is_open() && !self.ctx.loading;
             let lens = self
                 .ctx
                 .magnifier
                 .take()
-                .filter(|_| hud_shown && !self.ctx.output.is_hdr());
-            if !hud_shown {
+                .filter(|_| hud_shown && !menu && !self.ctx.output.is_hdr());
+            if !hud_shown || menu {
                 self.ctx.hud.clear();
             }
-            if self.menu.is_open()
-                && let Some(Some(font)) = &self.ctx.glyphs
-            {
+            let mut glass = false;
+            if menu {
+                let format = self.ctx.swapchain.format();
+                let made = self.glass.get_or_insert_with(|| {
+                    glass::Glass::new(&self.ctx.device, &self.ctx.shaders, format)
+                        .inspect_err(|e| tracing::warn!("the menu's glass: {e}"))
+                        .ok()
+                });
+                if let Some(made) = made {
+                    made.set_output(&self.ctx.shaders, format, self.ctx.output.ui_white)?;
+                }
+                if let Some(Some(made)) = &self.glass {
+                    made.draw(&mut frame.graph, swapchain_image, extent);
+                    glass = true;
+                }
+            }
+            if menu && let Some(Some(font)) = &self.ctx.glyphs {
                 let size = [extent.width as f32, extent.height as f32];
                 let paused = self.ctx.paused;
-                self.menu
-                    .draw(font, size, &self.ctx.settings, paused, &mut self.ctx.hud);
+                self.menu.draw(
+                    font,
+                    size,
+                    &self.ctx.settings,
+                    paused,
+                    glass,
+                    &mut self.ctx.hud,
+                );
             }
             if !self.ctx.loading && (!self.ctx.hud.is_empty() || lens.is_some()) {
                 self.hud.set_output(
@@ -2255,6 +2675,7 @@ impl<D: Demo> State<D> {
         if self.debug_stall_ms > 0 {
             std::thread::sleep(Duration::from_millis(self.debug_stall_ms));
         }
+        self.hold_frame_rate();
         if !self.debug_no_title && self.last_title.elapsed() >= Duration::from_millis(250) {
             self.last_title = Instant::now();
             if let Some(title) = self.demo.title(&self.ctx) {
@@ -2292,10 +2713,15 @@ fn save_capture(
             .save(path)?;
         return Ok(());
     }
-    if format == vk::Format::B8G8R8A8_SRGB || format == vk::Format::B8G8R8A8_UNORM {
-        for px in pixels.as_chunks_mut::<4>().0 {
+    // The window presents opaque (`CompositeAlphaFlagsKHR::OPAQUE`): a capture shows what the
+    // screen does, not the alpha the HUD's and the menu's blending leave in the image (#377: a
+    // translucent quad's pixels came out see-through).
+    let bgra = format == vk::Format::B8G8R8A8_SRGB || format == vk::Format::B8G8R8A8_UNORM;
+    for px in pixels.as_chunks_mut::<4>().0 {
+        if bgra {
             px.swap(0, 2);
         }
+        px[3] = 255;
     }
     image::save_buffer(
         path,
@@ -2336,31 +2762,25 @@ impl<D: Demo> ApplicationHandler for App<D> {
         if self.state.is_some() {
             return;
         }
+        // The settings first (#377): the user's saved size and monitor place the window.
+        let start = Start::read(&self.config);
+        let size = [start.width, start.height].map(|v| start.settings.get(v).max(64) as u32);
         // Hidden until its first frame is presented (#219): a new window shows the system's
         // white background until then, through the device's and swapchain's setup.
         let mut attributes = Window::default_attributes()
             .with_title(&self.config.title)
-            .with_inner_size(PhysicalSize::new(self.config.width, self.config.height))
+            .with_inner_size(PhysicalSize::new(size[0], size[1]))
             .with_visible(false);
-        // Which monitor: `FORGE_MONITOR` = `secondary` (default: the first non-primary monitor,
-        // so demos stay off the owner's working screen), `primary`, or an index into the
-        // monitor list. Scripted runs (a frame limit) do not take keyboard focus.
-        let preference = std::env::var("FORGE_MONITOR").unwrap_or_else(|_| "secondary".to_owned());
+        // Which monitor ([`pick_monitor`]): `FORGE_MONITOR`, else the user's, else the first that
+        // is not the main one. Scripted runs (a frame limit) do not take keyboard focus.
         let primary = event_loop.primary_monitor();
         let monitors: Vec<_> = event_loop.available_monitors().collect();
-        let chosen = match preference.as_str() {
-            "primary" => primary.clone(),
-            "secondary" => monitors
-                .iter()
-                .find(|m| Some(*m) != primary.as_ref())
-                .cloned()
-                .or_else(|| primary.clone()),
-            index => index
-                .parse::<usize>()
-                .ok()
-                .and_then(|i| monitors.get(i).cloned())
-                .or_else(|| primary.clone()),
-        };
+        let chosen = pick_monitor(
+            std::env::var("FORGE_MONITOR").ok().as_deref(),
+            start.settings.get(start.monitor),
+            primary.as_ref(),
+            &monitors,
+        );
         if let Some(monitor) = &chosen {
             let origin = monitor.position();
             attributes =
@@ -2378,6 +2798,7 @@ impl<D: Demo> ApplicationHandler for App<D> {
             Ok(window) => match State::new(
                 Arc::new(window),
                 self.config.clone(),
+                start,
                 self.shaders.take(),
                 init,
             ) {
@@ -2562,18 +2983,20 @@ impl<D: Demo> ApplicationHandler for App<D> {
             } => {
                 let down = pressed == ElementState::Pressed;
                 // The game's menu (#352) takes the buttons: a left click takes the entry under
-                // the cursor; the game gets none of them (their releases neither: none is held).
+                // the cursor, a right one steps a setting back (#377); the game gets none of
+                // them (their releases neither: none is held).
                 if state.menu.is_open() {
                     if down
-                        && button == MouseButton::Left
+                        && matches!(button, MouseButton::Left | MouseButton::Right)
                         && let Some(m) = state.ctx.glyph_metrics()
                     {
                         let e = state.ctx.swapchain.extent();
                         let size = [e.width as f32, e.height as f32];
+                        let back = button == MouseButton::Right;
                         let action =
                             state
                                 .menu
-                                .click(state.cursor, size, m, &mut state.ctx.settings);
+                                .click(state.cursor, size, m, &mut state.ctx.settings, back);
                         if state.menu_action(action) {
                             event_loop.exit();
                         }

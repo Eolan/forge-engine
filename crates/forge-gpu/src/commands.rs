@@ -336,6 +336,38 @@ impl<'a> Commands<'a> {
         }
     }
 
+    /// Copies a whole 2-D colour image (`TRANSFER_SRC_OPTIMAL`) onto another of the same size
+    /// and format (`TRANSFER_DST_OPTIMAL`): unlike a blit, any format, none of its features
+    /// needed.
+    pub fn copy_image(&self, src: vk::Image, dst: vk::Image, extent: vk::Extent2D) {
+        self.paranoid_barrier();
+        let layers = vk::ImageSubresourceLayers {
+            aspect_mask: vk::ImageAspectFlags::COLOR,
+            mip_level: 0,
+            base_array_layer: 0,
+            layer_count: 1,
+        };
+        let region = vk::ImageCopy::default()
+            .src_subresource(layers)
+            .dst_subresource(layers)
+            .extent(vk::Extent3D {
+                width: extent.width,
+                height: extent.height,
+                depth: 1,
+            });
+        // SAFETY: recording state; both images are in the transfer layouts documented above.
+        unsafe {
+            self.device.raw().cmd_copy_image(
+                self.cb,
+                src,
+                vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
+                dst,
+                vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                &[region],
+            );
+        }
+    }
+
     /// Clears the first mip of the colour image `image` to zero (`vkCmdClearColorImage`; the
     /// image needs `TRANSFER_DST` usage and the pass declares it `ImageAccess::TransferDst`).
     pub fn clear_color_image(&self, image: vk::Image) {

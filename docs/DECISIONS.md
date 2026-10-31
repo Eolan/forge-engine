@@ -8182,6 +8182,12 @@ owner's machine to try.
 **Not done:** a resolution scale apart from the upscalers' modes; presets fitted by a measured
 frame time rather than by memory; the menu's page for the sound and the keys.
 
+**Amended (2026-10-31, D-092):** the user's file keeps every choice until Defaults removes it
+(one `forge.cfg` or `--set` overrides, one the run does not register, one equal to the default:
+an override used to drop the line at the next write), and a scripted run (a frame limit or a
+capture) never reads or writes it, whatever `FORGE_CFG` says. The graphics page became a
+settings screen of three pages.
+
 ## D-082 — AMD's FSR DLLs wherever the system has them (FSR 4 on AMD's cards), Forge's FSR 3.1 elsewhere ✅ (the owner's go, 2026-10-29, #361)
 
 **The owner, the same morning:** "We should probably adopt the FSR dlls if available on the
@@ -9932,3 +9938,97 @@ leaves and enlarges the rest (Pixar's US 7,973,789 B2, D-075). The growth (Pału
 - The cost: the probes' and the bounce's rays through the twigs and cards, fewer card triangles,
   measured per pass; the triangles to a few times the lumps'.
 - The owner's walk among the village's trees.
+
+## D-092 — A settings screen as games have: live where the engine can, kept for the next start where it cannot ✅ (the owner's ask, 2026-10-31, #377)
+
+**The owner (2026-10-31):** "a game menu that looks more professional, with graphics settings:
+DLAA, DLSS upscaling, FSR upscaling and other parameters, like games often do; some display
+settings if needed. It would be great when it's applicable without restarting the engine; if
+not possible, do as game engines often do: 'it will be applied after you restart' or similar.
+But be careful that your tests always use the test parameters and not what the user persisted
+in their changes." Then, on a mock-up: "a glass gaussian transparency effect but almost opaque
+still to not get in the way of visibility and take the screen from top to bottom", "or full
+screen".
+
+**Built (2026-10-31):**
+- **The screen** (`forge_app::menu`, its rows in `menu::items`): Settings opens three pages,
+  Graphics, Display, and Sound and controls, in a column the window's full height. Each row
+  shows its value between arrows; the lines under the list say what the row does and how it
+  applies. A value the machine or the demo lacks is greyed with why (DLAA without DLSS: "DLSS
+  needs an NVIDIA RTX GPU and NVIDIA's Streamline, loaded at start"; HDR on a display Windows
+  shows in SDR); a setting the demo does not
+  register has no row.
+  - **Applying:** changes wait in a draft until Apply; Defaults puts the page back to its
+    defaults; Back with changes asks first: Apply, Discard or Cancel.
+  - **Input:** the keys by their place (D-069; AZERTY's Z, Q, S, D move and change, A and E turn
+    the pages), Tab, Enter, Space and Esc; the mouse hovers, clicks (a step forward) and
+    right-clicks (a step back).
+  - **The size:** the text's height is a 46th of the window's (13 to 64 px), so 1080p and 4K
+    read alike, and smaller when a page's rows need it.
+- **The glass** (`forge_app::glass`, `shaders/menu_glass.slang`): the frame copied, brought to a
+  quarter of its size by 4 × 4 means (no shimmer from a moving picture), blurred by a Gaussian
+  of σ 4 there (16 of the window's pixels) across and down, and drawn back over the whole
+  window, 80 % a dark tint mixed as the eye sees it (under a 2.2 gamma; PQ's codes as they
+  are); the game's HUD and its lens are hidden under it. Five passes (`app/menu glass *`), only
+  while the menu shows; a copy rather than a blit and quarter-size images in RGBA16F, so no
+  window format needs blits or filtering. Where it cannot be made, the old dimming.
+- **Graphics:** the preset (D-081), anti-aliasing and upscaling (off, DLAA where DLSS runs,
+  DLSS's and FSR's modes where the demo upscales, FSR's native AA, the render size in the
+  description), FSR's sharpening, the sun's shadows, the global illumination (probes, traced,
+  traced with SHaRC indoors: D-088, D-090), the ambient occlusion, the ray-traced reflections,
+  the local exposure, the bloom and the level of detail. Left out: frame generation (Forge has
+  none), a texture quality (no texture budget yet; a mip bias alone would shimmer).
+- **Display:** the window mode, its size when windowed (`app.window.width`, `.height`, up to the
+  monitor's), the monitor (`app.monitor`: automatic is the first that is not the main one, as
+  `FORGE_MONITOR=secondary`, which still wins), VSync (`app.vsync`: FIFO, or mailbox off), a
+  frame-rate limit (`app.fps_max`, interactive runs only), HDR (`app.hdr.mode`) and its
+  calibration, and a brightness (`r.brightness`: ±2 stops added to the metered exposure's
+  compensation, in the galleries, the asteroids and the planet). No exclusive fullscreen:
+  borderless presents through the flip model as directly, and a mode change would disturb the
+  other monitor.
+- **Live, or after a restart:** every row applies at once today; the shell follows the display's
+  settings each frame (`follow_display`: the window resized or moved, the swapchain made again
+  for a new present mode, the HDR mode switched). A setting read only at start (flagged
+  `restart`) is saved for the next one (`Settings::set_user_next_run`) and its row says
+  "Applies after you restart"; none of the screen's needs it yet, the path is tested on
+  `app.gpu`.
+- **The user's file** (amends D-081): the user's choices are kept apart from the values in
+  force. A choice stays in the file while `forge.cfg` or `--set` overrides it, while a demo
+  does not register it, and when it equals the default (the tone curve's default differs from
+  demo to demo); only Defaults removes it (`Settings::forget_user`), and leaves a value
+  `forge.cfg` or `--set` gave. Before, the next write dropped a choice `forge.cfg` overrode. The
+  first launch's choices rank under `forge.cfg` and `--set` as the file's do
+  (`Settings::set_user_beneath`), and `--vsync` as the command line does. A value in force that
+  is not the user's yet (Alt+Enter's, a window resized by hand, `--set`'s), chosen as it is,
+  stays in the draft for Apply to make it theirs.
+- **The tests' parameters** (the owner's warning): a scripted run (a frame limit or a capture,
+  `AppConfig::scripted`) never reads or writes `user.cfg`, whatever `FORGE_CFG` says;
+  `FORGE_CFG=none` and `--no-cfg` keep it out of any run. A scripted run also leaves
+  `app.fps_max` aside and presents uncapped as before.
+- **Captures are opaque:** the window presents opaque, but a translucent HUD quad left its
+  alpha in the captured PNG (the menu's column came out see-through, as #352's bar did); the
+  capture now writes alpha 255, as the screen shows it.
+
+**Checks:**
+- **Unit tests** (forge-core, forge-app): the rows each machine and demo gets, the draft and
+  Apply, Defaults, the dialog on leaving, the preset turning custom, the tabs, the keys and the
+  mouse, the layout from 900p to 4K, the user layer (kept choices, `forget_user`), the restart
+  path, and the scripted rule (a poisoned `user.cfg` changes nothing in a scripted run, five
+  settings in an interactive one).
+- **The guard on images:** city-blocks' frame 60 with a `user.cfg` setting `r.aa off`,
+  `r.preset low`, `r.ao 0`, `r.brightness 2`, `app.hdr.mode scrgb`, `app.window.width 800` and
+  fullscreen, in the settings folder the run reads and `FORGE_CFG` unset: 4 px of 1.44 M differ
+  from a clean run (max 5 of 255), as two clean runs differ (1 px, max 3), and the image keeps its
+  1600 × 900. The same values on the command line change 32.8 % of the pixels.
+- **The screen** captured over the village at 1080p and 4K (`docs/demos/images/game-menu.png`).
+  The glass costs 0.05 ms at 1080p and 0.13 ms at 4K (`docs/PROFILE.md`).
+- **A read-only review** before the push found the first launch overriding `forge.cfg` and
+  `--set`, a click on a section's title acting on the focused row, values in force the menu
+  could not save, the HDR row wrong at start and `--vsync` making VSync's row inert: fixed,
+  each but the last two with a test.
+
+**Open:** upscaling in the galleries (their DLSS and FSR modes render the scene smaller; only
+the asteroids has them, so the gallery offers off, DLAA and FSR's native AA); key rebinding in
+the menu (`bind` stays the console's); a resolution scale apart from the upscalers.
+
+*(issue #377; D-069, D-081; docs/demos/console.md, "The game's menu")*

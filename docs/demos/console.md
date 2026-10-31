@@ -87,17 +87,22 @@ commands, set from the console; `bind` puts one on a key.
   - the mouse's buttons: `mouse1` the left, `mouse2` the right, `mouse3` the middle, `mouse4` and `mouse5` the sides.
   - The key under Esc, Esc and F1 stay the shell's.
 - **The game's mouse look** (`app.mouse_look`, e.g. `bind m toggle app.mouse_look`): the cursor captured and hidden, the view turning with no button held, and the right button the game's (aiming). Esc opens the game's menu and lets the mouse go; closing the menu takes it back. Out of the window (Alt+Tab, another window clicked) the cursor is the system's again, free and shown, and the mouse's motion turns nothing; back in the window, the game takes it again.
-- **The game's menu** (#352, Esc or `app.menu`): Resume, Settings and Quit, over the picture as the HUD's quads, shown with `app.hud 0` too.
-  - **Keys:** Up and Down (or W and S) choose, Enter or Space takes, Left and Right (or A and D) change a setting, Esc goes back (on the first page: back to the game). The mouse chooses by hovering, a click takes.
-  - **Settings:** the volume (`snd.volume`), the ambience (`snd.ambience`, #357), the mouse look (`app.mouse_look`) and the frame info (`r.display_info`), those the demo registered, and the graphics page.
-  - **Graphics** (the owner, 2026-10-25): the quality preset (`r.preset`: custom, low, medium, high, ultra, a patch over how small DLSS and FSR render, the ambient occlusion, the mirror reflections, the local exposure and the detail error; changing one of those puts it back to custom), the display (`app.window`: windowed or borderless fullscreen), the anti-aliasing (`r.aa`), the upscalers' modes, and those settings one by one.
-  - **What the menu changes is the user's** (`Source::User`) and is written to `settings/user.cfg` (`FORGE_SETTINGS_DIR` moves it), read at the next start before `forge.cfg` and `--set`, which override it; a scripted run (`FORGE_CFG=none`, `--no-cfg`) reads neither.
+- **The game's menu** (#352, Esc or `app.menu`): Resume, Settings and Quit, on a frosted glass over the whole window (#377: the frame blurred and mostly a dark tint; the game's HUD hidden under it), shown with `app.hud 0` too. `app.menu graphics`, `app.menu display` and `app.menu sound` open its settings on that page.
+  - **Keys** (by their place on the keyboard; QWERTY's names, Z, Q, S, D and A, E on AZERTY): Up and Down (or W and S) choose, Left and Right (or A and D) change a setting, Enter or Space takes, Tab or E (PageDown) turns to the next page and Q (PageUp) to the previous one, Esc goes back (on the first page: back to the game).
+  - **The mouse:** hovering chooses; a click takes an entry, a page or a button and steps a setting forward, a right click steps it back.
+  - **The settings' pages** (#377, the owner, 2026-10-31): Graphics, Display, and Sound and controls. Each row shows its value between arrows; a value the machine or the demo lacks is greyed, with why. The lines under the list say what the row does and whether it applies at once or after a restart (a setting read at start: saved for the next one). Changes wait for Apply; Defaults puts the page back to its defaults; Back with changes asks first: Apply, Discard or Cancel.
+  - **Graphics:** the quality preset (`r.preset`: custom, low, medium, high, ultra, a patch over how small DLSS and FSR render, the ambient occlusion, the mirror reflections, the local exposure and the detail error; changing one of those puts it back to custom), anti-aliasing and upscaling (`r.aa`, `r.dlss.mode`, `r.fsr.mode`: off, DLAA where DLSS runs, DLSS's and FSR's modes in the demos that upscale (the asteroids), FSR's native AA), FSR's sharpening, the sun's shadows (`r.shadows`), the global illumination (`r.gi.trace`, `r.gi.cache`: probes, traced, traced with SHaRC indoors), the ambient occlusion, the ray-traced reflections, the local exposure, the bloom and the level of detail (`r.lod.error`), those the demo registered.
+  - **Display:** the window mode (`app.window`: windowed or borderless fullscreen), its size when windowed (`app.window.width`, `app.window.height`), the monitor (`app.monitor`: 0 automatic, the first that is not the main one; `FORGE_MONITOR` wins), VSync (`app.vsync`), the frame-rate limit (`app.fps_max`, 0 none; interactive runs only), HDR (`app.hdr.mode`, where Windows shows the display in HDR) and its calibration, and the brightness (`r.brightness`: up to two stops either way on the metered exposure).
+  - **Sound and controls:** the volume (`snd.volume`), the ambience (`snd.ambience`, #357), the mouse look (`app.mouse_look`) and the frame info (`r.display_info`).
+  - **What the menu changes is the user's** (`Source::User`) and is written to `settings/user.cfg` (`FORGE_SETTINGS_DIR` moves it), read at the next start before `forge.cfg` and `--set`, which override it. A choice stays in the file while `forge.cfg` or `--set` overrides it, or a demo does not have it; Defaults removes it. A scripted run (a frame limit or a capture) never reads or writes the file, whatever `FORGE_CFG` says; `FORGE_CFG=none` and `--no-cfg` keep it out of any run (#377).
   - **The first launch** on a machine (no `user.cfg` yet, an interactive run) looks at the GPU's memory, whether it runs DLSS and the monitor, picks the preset (12 GB and more ultra, 8 GB high, 5 GB medium, less low) and borderless fullscreen at the monitor's own size, writes them to the file with what it saw as its first lines, and logs it.
   - **A solo game holds behind it:** its update sees no time pass (`Context::paused`; the demos stepping at a fixed rate of their own skip their steps), so the simulation, the particles and the scene's clocks stop, and the sound fades out over a quarter of a second, and back in on resume. A networked game (`Demo::networked`: the physics lab with `--net`) runs on behind it.
 
-  ![The game's menu](images/game-menu.png)
+  ![The game's settings, graphics page](images/game-menu.png)
 
-  *The village paused behind the menu (`city-plan --village 600 --exec app.menu`).*
+  ![The game's settings, display page](images/game-menu-display.png)
+
+  *The village paused behind the settings, on its frosted glass, at 1080p (`city-plan --village 600 --exec "app.menu graphics"`, then `display`).*
 
 - **How long binds last:**
   - typed in the console, for the run, as every console change;
@@ -164,6 +169,13 @@ The shell's, in every demo:
 | `app.capture [PATH]` | command: saves the next frame as a PNG | | no |
 | `app.quit` | command: closes the window | | yes |
 | `app.fullscreen` | command: borderless fullscreen, and back to the window as it was (Alt+Enter) | | yes |
+| `app.menu [PAGE]` | command: the game's menu, or its settings on that page (#377) | graphics, display, sound | yes |
+| `app.window` | the window mode (D-081), followed live | windowed, fullscreen | yes |
+| `app.window.width`, `app.window.height` | the window's size when windowed (#377), followed live; a resize by hand sets them for the run | 64..16384 | the demo's |
+| `app.monitor` | the monitor the window opens and moves to (#377); `FORGE_MONITOR` wins at start | 0 automatic (the first that is not the main one), 1.. | 0 |
+| `app.vsync` | presents wait for the display's refresh (#377); off presents as fast as the display takes (mailbox); scripted runs present uncapped | 0, 1 | `--vsync`'s |
+| `app.fps_max` | the frame-rate limit of an interactive run (#377) | 0 none, 1..1000 | 0 |
+| `app.hdr.mode` | the output (#377; `app.hdr` switches too); HDR10 and scRGB where Windows shows the display in HDR; `FORGE_HDR` wins | off, hdr10, scrgb, offscreen | the demo's |
 | `snd.volume` | the sound's master level (#318), in runs that open the device (interactive ones only) | 0 to 1 (0 silent) | yes |
 | `snd.ambience` | the ambience's level under the master (#357): the beds and the perched birds | 0 to 1 | yes |
 | `app.hud` | the game's HUD (#328: the quads it pushes into `Context::hud`, drawn after the frame and under this overlay, pass `app/hud`); 0 for a capture without it | 0, 1 | yes |
@@ -183,6 +195,7 @@ command line": `--no-ao` and `--set r.ao=0` give the same image to the pixel.
 | `r.tonemap` | the tone curve | agx, agx-punchy, aces, neutral, aces2, aces2-analytic | agx-punchy |
 | `r.bloom`, `r.bloom.strength` | bloom, its share of the image | 0, 1; 0..1 | 1; 0.04 |
 | `r.exposure.local` | local exposure, D-067 | off, on, view | off |
+| `r.brightness` | the player's brightness (#377): stops added to the metered exposure's compensation (a fixed exposure stays as set); the asteroids and the planet have it too | -2..2 | 0 |
 | `r.exposure.speed_brighten`, `r.exposure.speed_darken` | how fast the automatic exposure follows a darker scene (into a dark room) and a brighter one (out into the sun), per second: most of the way in about 2 / speed seconds (#336) | 0.05..20 | 0.8; 1.5 |
 | `r.ao`, `r.ao.radius` | ambient occlusion, its reach | 0, 1; 0.05..16 m | 1; 1.5 m |
 | `r.ao.contact` | the ambient occlusion's reach under D-088's traced bounce: the contacts its denoiser blurs, the bounce's rays seeing the rest | 0.05..16 m | 0.6 m |

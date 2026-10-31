@@ -846,6 +846,10 @@ a dev console, as named variables changed at run time. While in development Forg
 techniques on, and new options stay flags and keys. The tone curves of D-045 are the first such
 setting.
 
+**Built:** the console and its settings (D-069), the presets and the first launch's choices
+(D-081), and the settings screen of graphics, display, sound and controls, applied live (D-092,
+#377). Open: presets fitted by a measured frame time, upscaling in the galleries.
+
 ## Phase 10 — The games again
 
 Rebuild `tropical-island` (#81), `world` and `shooter` (#82) on Forge, in that order,

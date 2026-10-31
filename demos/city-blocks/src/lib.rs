@@ -1003,6 +1003,8 @@ struct Gallery {
     night_now: Option<(forge_render::night::SkyAt, forge_render::night::NightLights)>,
     meter: LuminanceMeter,
     auto_exposure: AutoExposure,
+    /// The player's brightness (`r.brightness`, #377) in `auto_exposure`'s compensation, stops.
+    brightness: f32,
     /// Local exposure (D-067, #275): the grid's passes and their settings (X cycles them).
     local_exposure: LocalExposure,
     local_settings: LocalExposureSettings,
@@ -2222,6 +2224,7 @@ impl Gallery {
             camera,
             flags,
             wireframe: false,
+            brightness: 0.0,
             vars: None,
             vars_seen: 0,
             frame: 0,
