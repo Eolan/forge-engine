@@ -410,12 +410,16 @@ def texture_index(tname):
     return images[path]
 
 material_index = {}
+# Every emitter's colour over the scene's brightest emitter's light, that light its strength: so
+# emitters of different strengths stay different materials where an importer drops the strength
+# (Falcor's merges alike materials, and its glTF import reads no KHR_materials_emissive_strength;
+# tools/falcor-render.py's BISTRO_EMITTER_STRENGTH sets it back, one value for all).
+top = max((max(e) for *_, e in shapes if e), default=1.0)
 for _, _, _, _, mname, emission in shapes:
     key = (mname, tuple(emission) if emission else None)
     if key in material_index:
         continue
     if emission:
-        top = max(emission)
         m = {"name": f"emitter-{len(material_index)}", "doubleSided": False,
              "pbrMetallicRoughness": {"baseColorFactor": [0, 0, 0, 1], "metallicFactor": 0.0,
                                       "roughnessFactor": 1.0},

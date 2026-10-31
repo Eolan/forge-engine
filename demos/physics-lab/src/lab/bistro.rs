@@ -130,17 +130,24 @@ pub(crate) enum Authored {
     /// The Cornell box as Falcor's test scene builds it (`tools/cornell-box.py`), ten times its
     /// size: lit by the quad of light in its ceiling alone.
     Cornell,
+    /// "Bedroom" by SlykDrako (CC0), in Benedikt Bitterli's pbrt-v4 conversion: lit by its two
+    /// lamps' area lights alone.
+    Bedroom,
+    /// "Country Kitchen" by Jay-Artist (CC BY 3.0), in Benedikt Bitterli's pbrt-v4 conversion: lit
+    /// by its four area lights alone.
+    Kitchen,
 }
 
 /// A unit of Falcor's light in cd/m² for the scenes compared at the chart's scale (the chart, the
 /// classroom): their skies' sun of irradiance 10 is the sun's 128,000 lux.
 const FALCOR_UNIT: f32 = 12_800.0;
 
-/// The Cornell box's unit of Falcor's light, cd/m²: a room lit at night (its walls about
-/// 20 cd/m², its light about 1,900). At FALCOR_UNIT its lamp-lit floor stood at 160,000 of the
-/// shading's units (cd/m² × π over the moon's 0.17 lux at night), past the half floats the probes
-/// pack their rays in (60,000): they read it at a third and the light itself at nothing.
-const CORNELL_UNIT: f32 = 30.0;
+/// The unit of Falcor's light in cd/m² for the rooms lit by their own lights alone, run at night
+/// (the Cornell box, the bedroom, the kitchen): a room lit at night (the box's walls about
+/// 20 cd/m², its light about 1,900). At FALCOR_UNIT the box's lamp-lit floor stood at 160,000 of
+/// the shading's units (cd/m² × π over the moon's 0.17 lux at night), past the half floats the
+/// probes pack their rays in (60,000): they read it at a third and the light itself at nothing.
+const NIGHT_ROOM_UNIT: f32 = 30.0;
 
 impl Authored {
     /// The converted scene's folder, and the one its maps' paths are relative to.
@@ -155,6 +162,8 @@ impl Authored {
             Authored::Chart => (external.join("chart"), external.join("chart")),
             Authored::Classroom => (external.join("classroom"), external.join("classroom")),
             Authored::Cornell => (external.join("cornell"), external.join("cornell")),
+            Authored::Bedroom => (external.join("bedroom"), external.join("bedroom")),
+            Authored::Kitchen => (external.join("kitchen"), external.join("kitchen")),
         }
     }
 
@@ -165,6 +174,8 @@ impl Authored {
             Authored::Chart => "chart",
             Authored::Classroom => "classroom",
             Authored::Cornell => "cornell",
+            Authored::Bedroom => "bedroom",
+            Authored::Kitchen => "kitchen",
         }
     }
 
@@ -174,8 +185,17 @@ impl Authored {
         match self {
             Authored::Bistro => EMISSIVE_LUMINANCE,
             Authored::Chart | Authored::Classroom => FALCOR_UNIT,
-            Authored::Cornell => CORNELL_UNIT,
+            Authored::Cornell | Authored::Bedroom | Authored::Kitchen => NIGHT_ROOM_UNIT,
         }
+    }
+
+    /// Bitterli's pbrt-v4 scenes (`tools/pbrt-to-gltf.py`): their surfaces reflect on both sides
+    /// where the file says so, as pbrt's.
+    fn is_pbrt(self) -> bool {
+        matches!(
+            self,
+            Authored::Classroom | Authored::Bedroom | Authored::Kitchen
+        )
     }
 }
 
@@ -225,11 +245,15 @@ pub(super) fn scene(which: Authored) -> Option<&'static Bistro> {
     static CHART: OnceLock<Option<Bistro>> = OnceLock::new();
     static CLASSROOM: OnceLock<Option<Bistro>> = OnceLock::new();
     static CORNELL: OnceLock<Option<Bistro>> = OnceLock::new();
+    static BEDROOM: OnceLock<Option<Bistro>> = OnceLock::new();
+    static KITCHEN: OnceLock<Option<Bistro>> = OnceLock::new();
     let cell = match which {
         Authored::Bistro => &BISTRO,
         Authored::Chart => &CHART,
         Authored::Classroom => &CLASSROOM,
         Authored::Cornell => &CORNELL,
+        Authored::Bedroom => &BEDROOM,
+        Authored::Kitchen => &KITCHEN,
     };
     cell.get_or_init(|| match read(which) {
         Ok(b) => Some(b),
@@ -277,7 +301,11 @@ fn read(which: Authored) -> Result<Bistro> {
                 .context("BistroExterior.textures.json")?,
         )
         .context("BistroExterior.textures.json")?,
-        Authored::Chart | Authored::Classroom | Authored::Cornell => HashMap::new(),
+        Authored::Chart
+        | Authored::Classroom
+        | Authored::Cornell
+        | Authored::Bedroom
+        | Authored::Kitchen => HashMap::new(),
     };
     let camera = std::fs::read(converted.join(format!("{stem}.camera.json")))
         .ok()
@@ -351,6 +379,8 @@ pub(crate) fn environment(which: Authored) -> Option<Environment> {
         Authored::Classroom => archive.join("classroom.sky.hdr"),
         // Black (no infinite light): it runs at night (`--time-of-day 1.5`), the map left out.
         Authored::Cornell => archive.join("cornell.sky.hdr"),
+        Authored::Bedroom => archive.join("bedroom.sky.hdr"),
+        Authored::Kitchen => archive.join("kitchen.sky.hdr"),
     };
     if !path.exists() {
         tracing::warn!(path = %path.display(), "no sky photograph: lit by Forge's");
@@ -568,7 +598,11 @@ pub(super) fn rows(
                     m.base_color = [0.5, 0.5, 0.5, 1.0];
                     m.roughness = 1.0;
                     m.metallic = 0.0;
-                    m.emissive = [0.0; 3];
+                    // A room's lights (tools/pbrt-to-gltf.py's `emitter-`) stay lit, as in
+                    // Falcor's clay; any other glow goes.
+                    if !m.name.starts_with("emitter-") {
+                        m.emissive = [0.0; 3];
+                    }
                     ExternalMaps {
                         normal: maps.normal,
                         base_color: maps.base_color.filter(|_| maps.alpha_cutoff.is_some()),
@@ -578,8 +612,9 @@ pub(super) fn rows(
                 } else {
                     maps
                 };
-                // The classroom's as its file has them: pbrt's surfaces reflect on both sides.
-                m.double_sided = (which == Authored::Classroom && m.double_sided)
+                // Bitterli's scenes' as their files have them: pbrt's surfaces reflect on both
+                // sides.
+                m.double_sided = (which.is_pbrt() && m.double_sided)
                     || m.name.ends_with(".DoubleSided")
                     || maps.alpha_cutoff.is_some()
                     || SHEETS.iter().any(|s| m.name.contains(s))
@@ -997,9 +1032,13 @@ fn glow_lamp(g: &Glow) -> Option<Lamp> {
 pub(crate) fn lamps(which: Authored, on: bool) -> Vec<Lamp> {
     static BISTRO: OnceLock<Vec<Lamp>> = OnceLock::new();
     static CORNELL: OnceLock<Vec<Lamp>> = OnceLock::new();
+    static BEDROOM: OnceLock<Vec<Lamp>> = OnceLock::new();
+    static KITCHEN: OnceLock<Vec<Lamp>> = OnceLock::new();
     let cell = match which {
         Authored::Bistro => &BISTRO,
         Authored::Cornell => &CORNELL,
+        Authored::Bedroom => &BEDROOM,
+        Authored::Kitchen => &KITCHEN,
         Authored::Chart | Authored::Classroom => return Vec::new(),
     };
     if !on {

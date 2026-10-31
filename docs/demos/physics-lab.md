@@ -2632,6 +2632,34 @@ renders the `.pbrt` 0.055 from Falcor (×0.987): the three renderers agree.
 - **Left:** a flat piece's lamp gives the back wall and the tall block's front half of Falcor's
   direct light (11.4 against 21.8 cd/m²), the floor and the side walls within 20 %.
 
+## `bedroom` and `kitchen`: two rooms lit by their own lights at night (D-083)
+
+```
+blender -b --factory-startup --python tools/pbrt-to-gltf.py -- PATH/bedroom/scene-v4.pbrt assets/external/bedroom
+cargo run --release -p physics-lab -- --lab bedroom --view=3.4556,1.2124,3.2990,49.187,-0.973 --fov 39.4305 --time-of-day 1.5 --capture-linear bedroom.hdr
+```
+
+"Bedroom" by SlykDrako (CC0) and "Country Kitchen" by Jay-Artist (CC BY 3.0), in Benedikt
+Bitterli's pbrt-v4 conversions, fetched by hand outside the repository (`CREDITS.md`), converted
+as the classroom (the kitchen with `kitchen` for `bedroom`, its view in `tools/gi-compare.sh`).
+Lit at night by their area lights alone, as the Cornell box: each emitter a lamp (D-087), at
+30 cd/m² a unit of Falcor's light.
+- **The converter's emitters:** each emitter's colour is its light over the scene's brightest,
+  that light its strength, so emitters of different lights stay different materials where an
+  importer drops the strength (Falcor merges alike materials and reads no
+  `KHR_materials_emissive_strength`; `tools/falcor-render.sh` sets it back with
+  `BISTRO_EMITTER_STRENGTH`). Clay keeps the emitters, on both sides.
+
+**Measured (2026-10-31):** Forge's path (lamps off) 0.098 from Falcor in the bedroom's clay,
+0.110 in the kitchen's; textured 0.392 and 0.206 (the converter's materials, as the classroom's).
+The probes, the port and SHaRC are about ×6 over Falcor in the bedroom and a stop over it in the
+kitchen: both rooms' main lights are large panels behind fabric (the curtains, the blind), and a
+flat piece's lamp is a disc of its area centred half its radius in front of it, past the fabric
+(#370). Until then these rooms measure the lamps, not the techniques. The converter makes pbrt's
+`diffusetransmission` an opaque diffuse (Forge and Falcor alike); pbrt renders the fabric
+translucent (the curtains 0.45, the blind 0.3 to 0.2). The GPU's frame, one run each: 4.8 to
+5.1 ms with the probes, 4.7 to 5.0 with the port, 5.1 to 5.4 with SHaRC.
+
 ## `FORGE_DYNAMIC_SCENE`: the scene edited as it runs (issues #220, #338)
 
 The rain's scene built to take and free meshes and instances in place (`reserve_dynamic`), its

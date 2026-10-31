@@ -27,8 +27,8 @@
 # OUT_DIR (default captures/gi-compare) gets the captures and logs, sheets/, error.txt,
 # timings.txt and summary.md. Settings, as variables:
 # - FORGE_VIEWS: views to run, separated by spaces (default all): bistro-e1-clay bistro-e2-clay
-#   bistro-e1 bistro-e2 bistro-night classroom-clay classroom chart cornell village-landing
-#   village-room village-street.
+#   bistro-e1 bistro-e2 bistro-night classroom-clay classroom chart cornell bedroom-clay bedroom
+#   kitchen-clay kitchen village-landing village-room village-street.
 # - FORGE_TECHNIQUES: `r.gi.cache` values (default "off port sharc").
 # - FORGE_RUNS: timing runs per technique (default 3; 0 skips the timing and keeps the timings
 #   already in OUT_DIR: with FORGE_REUSE=1, the captures measured again).
@@ -37,13 +37,14 @@
 # - FORGE_REUSE=1: keep the captures already in OUT_DIR (the path tracer takes minutes a view).
 # - FALCOR_OUT: Falcor's renders, NAME.AccumulatePass.output.0.exr (default ../falcor/out beside
 #   the checkout), times 2,871 for the Bistro, 12,800 for the classroom and the chart, 30 for
-#   the Cornell box (a room lit at night):
+#   the rooms lit by their own lights at night (the Cornell box, the bedroom, the kitchen):
 #   - the Bistro's clay-ext1-lam16, clay-ext2-lam16, ext1-lam16 and ext2-lam16 (Lambert's
 #     diffuse, 16 bounces), and night1600 (the emissive surfaces alone);
 #   - the classroom's crl-clay and crl-tex;
 #   - the chart's lam16-side-30;
-#   - the Cornell box's cornell-lam16 (the emitter's strength set by hand: Falcor's glTF import
-#     leaves KHR_materials_emissive_strength out; no environment light).
+#   - the Cornell box's cornell-lam16, the bedroom's and the kitchen's bedroom-lam16,
+#     bedroom-clay-lam16, kitchen-lam16 and kitchen-clay-lam16 (`tools/falcor-render.sh` with
+#     BISTRO_EMITTER_STRENGTH, no environment light).
 # - BLENDER: Blender's executable (else found on the PATH or in its default Windows place).
 #
 # A technique that does not start (`sharc` without `sharc-sdk/` or 64-bit atomics, the port
@@ -61,7 +62,7 @@ set -uo pipefail
 root=$(cd "$(dirname "$0")/.." && pwd)
 cd "$root"
 out=${1:-$root/captures/gi-compare}
-views=${FORGE_VIEWS:-bistro-e1-clay bistro-e2-clay bistro-e1 bistro-e2 bistro-night classroom-clay classroom chart cornell village-landing village-room village-street}
+views=${FORGE_VIEWS:-bistro-e1-clay bistro-e2-clay bistro-e1 bistro-e2 bistro-night classroom-clay classroom chart cornell bedroom-clay bedroom kitchen-clay kitchen village-landing village-room village-street}
 techniques=${FORGE_TECHNIQUES:-off port sharc}
 runs=${FORGE_RUNS:-3}
 time_frames=${FORGE_TIME_FRAMES:-1200}
@@ -135,6 +136,8 @@ E1="--view=-23.700,6.855,-0.704,-93.13,-15.93 --fov 36.22"
 E2="--view=13.378,2.280,11.709,48.33,-0.50 --fov 38.90"
 CLASSROOM="--view=-1.6905,1.2716,5.8865,-8.705,1.622 --fov 35.9834"
 NIGHT="--view=-16.735,5.218,2.083,-80.44,-9.63 --fov 55.99"
+BEDROOM="--view=3.4556,1.2124,3.2990,49.187,-0.973 --fov 39.4305"
+KITCHEN="--view=1.2110,1.8047,3.8524,26.007,-2.388 --fov 35.9834"
 VILLAGE="--village 600 --time-of-day 0.75 --no-fauna"
 # describe VIEW: sets the view's demo, its flags, clay (1: every surface a grey diffuse), the
 # environment it runs with (sky), its fixed exposure and its Falcor reference (a file stem in
@@ -149,6 +152,11 @@ describe() {
     chart) demo=physics-lab flags="--lab chart --view=0,6,-4.5,180,-43 --fov 45" sky=sky-side-30.hdr ev=14 falcor_ref=lam16-side-30 falcor_scale=12800 ;;
     # Falcor's Cornell box (tools/cornell-box.py), lit by its ceiling's quad alone, at night.
     cornell) demo=physics-lab flags="--lab cornell --view=0,2.8,12,0,0 --fov 37.8493 --time-of-day 1.5" ev=7 falcor_ref=cornell-lam16 falcor_scale=30 ;;
+    # Bitterli's bedroom and kitchen (tools/pbrt-to-gltf.py), lit by their own lights, at night.
+    bedroom) demo=physics-lab flags="--lab bedroom $BEDROOM --time-of-day 1.5" ev=5 falcor_ref=bedroom-lam16 falcor_scale=30 ;;
+    bedroom-clay) demo=physics-lab flags="--lab bedroom $BEDROOM --time-of-day 1.5" clay=1 ev=5 falcor_ref=bedroom-clay-lam16 falcor_scale=30 ;;
+    kitchen) demo=physics-lab flags="--lab kitchen $KITCHEN --time-of-day 1.5" ev=8 falcor_ref=kitchen-lam16 falcor_scale=30 ;;
+    kitchen-clay) demo=physics-lab flags="--lab kitchen $KITCHEN --time-of-day 1.5" clay=1 ev=8 falcor_ref=kitchen-clay-lam16 falcor_scale=30 ;;
     bistro-e1-clay) demo=physics-lab flags="--lab bistro $E1" clay=1 ev=11.22 falcor_ref=clay-ext1-lam16 falcor_scale=2871 ;;
     bistro-e2-clay) demo=physics-lab flags="--lab bistro $E2" clay=1 ev=11.22 falcor_ref=clay-ext2-lam16 falcor_scale=2871 ;;
     bistro-e1) demo=physics-lab flags="--lab bistro $E1" ev=11.22 falcor_ref=ext1-lam16 falcor_scale=2871 ;;

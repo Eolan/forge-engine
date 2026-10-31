@@ -11,8 +11,9 @@
 #   BISTRO_LIGHTS    "env" (the scene's sky alone, as the Bistro's readme says for ray tracing),
 #                    "all" (with the scene's analytic lights) or "emissive" (its glow alone: no
 #                    sky; a black sky must be off, as Falcor's importance sampling of it is NaN)
-#   BISTRO_MATERIAL  "name:field=value,...;...": factors set by hand (a glTF emitter's strength:
-#                    Falcor's import leaves KHR_materials_emissive_strength out)
+#   BISTRO_MATERIAL  "name:field=value,...;...": factors set by hand
+#   BISTRO_EMITTER_STRENGTH  tools/pbrt-to-gltf.py's emitters' strength (Falcor's glTF import
+#                    leaves KHR_materials_emissive_strength out): the scene's brightest light
 #   BISTRO_CLAY, BISTRO_MATTE, BISTRO_DIFFUSE, BISTRO_NOEMIT: the surfaces simplified (below)
 #   BISTRO_OUT       output folder and BISTRO_NAME base file name
 import math
@@ -56,6 +57,11 @@ s.animated = False
 for spec in filter(None, env.get("BISTRO_MATERIAL", "").split(";")):
     name, fields = spec.split(":")
     mat = s.getMaterial(name)
+    # Falcor merges materials that are alike at load (the bedroom's two lamps' emitters): the
+    # first name stands for them all.
+    if mat is None:
+        print("MATERIAL", name, "not in the scene (merged into an alike one)")
+        continue
     mat.clearTexture(MaterialTextureSlot.Specular)
     for field in fields.split(","):
         key, value = field.split("=")
@@ -73,9 +79,19 @@ for mat in s.materials:
             print("EMISSIVE", mat.name, mat.emissiveColor, mat.emissiveFactor)
     except AttributeError:
         pass
-# BISTRO_CLAY: every material a 50 % grey diffuse (no maps, roughness 1, no emission).
+# BISTRO_EMITTER_STRENGTH: tools/pbrt-to-gltf.py's emitters' strength (their colour is their light
+# over it): Falcor's glTF import leaves KHR_materials_emissive_strength out.
+if "BISTRO_EMITTER_STRENGTH" in env:
+    for mat in s.materials:
+        if mat.name.startswith("emitter-"):
+            mat.emissiveFactor = float(env["BISTRO_EMITTER_STRENGTH"])
+            print("EMITTER", mat.name, mat.emissiveColor, mat.emissiveFactor)
+# BISTRO_CLAY: every material a 50 % grey diffuse (no maps, roughness 1, no emission), but
+# tools/pbrt-to-gltf.py's emitters (`emitter-`): a room's lights, kept.
 if env.get("BISTRO_CLAY"):
     for mat in s.materials:
+        if mat.name.startswith("emitter-"):
+            continue
         try:
             for slot in [MaterialTextureSlot.BaseColor, MaterialTextureSlot.Specular, MaterialTextureSlot.Emissive]:
                 mat.clearTexture(slot)

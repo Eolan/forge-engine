@@ -18,7 +18,7 @@
 # The Cornell box (tools/cornell-box.py, then tools/pbrt-to-gltf.py into assets/external/cornell):
 #   tools/falcor-render.sh cornell-lam16 BISTRO_SCENE='D:\...\assets\external\cornell\cornell.pyscene' \
 #     BISTRO_VIEW=0,2.8,12,0,0 BISTRO_FOV=37.8493 BISTRO_SIZE=1600,900 BISTRO_SPP=4096 \
-#     BISTRO_BOUNCES=16 BISTRO_LIGHTS=emissive BISTRO_DIFFUSE=1 BISTRO_MATERIAL=emitter-7:emissiveFactor=85
+#     BISTRO_BOUNCES=16 BISTRO_LIGHTS=emissive BISTRO_DIFFUSE=1 BISTRO_EMITTER_STRENGTH=85
 set -uo pipefail
 root=$(cd "$(dirname "$0")/.." && pwd)
 name=${1:?usage: tools/falcor-render.sh NAME [VAR=VALUE...]}

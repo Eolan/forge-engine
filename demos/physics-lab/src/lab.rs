@@ -153,6 +153,13 @@ pub(crate) enum LabScene {
     /// coloured walls lit by the quad of light in its ceiling, run at night (`--time-of-day
     /// 1.5`), to compare with Falcor's render and pbrt-v4's.
     Cornell,
+    /// Bitterli's bedroom ("Bedroom" by SlykDrako, CC0), turned into `assets/external/bedroom/` by
+    /// `tools/pbrt-to-gltf.py` (D-083): lit by its lamps' area lights alone, run at night.
+    Bedroom,
+    /// Bitterli's kitchen ("Country Kitchen" by Jay-Artist, CC BY 3.0), turned into
+    /// `assets/external/kitchen/` by `tools/pbrt-to-gltf.py` (D-083): lit by its four area lights
+    /// alone, run at night.
+    Kitchen,
 }
 
 impl LabScene {
@@ -163,6 +170,8 @@ impl LabScene {
             LabScene::Chart => Some(bistro::Authored::Chart),
             LabScene::Classroom => Some(bistro::Authored::Classroom),
             LabScene::Cornell => Some(bistro::Authored::Cornell),
+            LabScene::Bedroom => Some(bistro::Authored::Bedroom),
+            LabScene::Kitchen => Some(bistro::Authored::Kitchen),
             _ => None,
         }
     }
@@ -727,6 +736,8 @@ impl LabWorld {
             | LabScene::Chart
             | LabScene::Classroom
             | LabScene::Cornell
+            | LabScene::Bedroom
+            | LabScene::Kitchen
             | LabScene::Models => 0.0,
         };
         // The flight's is a field of grass, wide enough to fly over for a while.
@@ -748,6 +759,8 @@ impl LabWorld {
                 | LabScene::Chart
                 | LabScene::Classroom
                 | LabScene::Cornell
+                | LabScene::Bedroom
+                | LabScene::Kitchen
         ) {
             let floor_shape = Shape::cuboid(Vec3::new(floor_half, 0.5, floor_half), 0.05, 0.0)?;
             world.add_body(&BodyDesc::fixed(&floor_shape, floor_at.as_dvec3()))?;
@@ -1262,6 +1275,8 @@ impl LabWorld {
                 statics.extend(bistro::build(bistro::Authored::Classroom, MODELS));
             }
             LabScene::Cornell => statics.extend(bistro::build(bistro::Authored::Cornell, MODELS)),
+            LabScene::Bedroom => statics.extend(bistro::build(bistro::Authored::Bedroom, MODELS)),
+            LabScene::Kitchen => statics.extend(bistro::build(bistro::Authored::Kitchen, MODELS)),
         }
         // The balls to throw, asleep out of sight until thrown, after the scene's.
         let mut thrown = Vec::new();

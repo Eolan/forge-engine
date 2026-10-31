@@ -8119,6 +8119,13 @@ pbrt-v4, RTXGI, materiel test, etc.). Then update forge demos and test them."):
   - **Indoors** (the classroom, the landing, the room), SHaRC is three to five times nearer
     Forge's path than the probes, and 0.15 from Falcor in the classroom, where Forge's own path is
     0.09 to 0.15 from it.
+  - **pbrt-v4 as the third reference** (the classroom's own pbrt-v4 file, and its clay made by
+    turning every material into a 50 % grey diffuse; 1,024 samples a pixel, 14 minutes each on
+    the CPU). In clay, pbrt is 0.111 from Falcor (×0.944); Forge's path 0.066 from pbrt
+    (×1.040), between the two; SHaRC 0.081 (×0.977), the port 0.080, the probes 0.425 (×1.20).
+    SHaRC's few per cent under Forge's path are partly Forge's path a little over pbrt's.
+    Textured, pbrt's own materials (coated diffuse, conductors) are 0.236 from Falcor's glTF of
+    them (×0.861): the converter's materials, not the light.
   - **Outdoors by day,** the probes are as near or nearer (the textured Bistro), and SHaRC costs
     up to 1 ms more there.
   - **The textured Exterior_2:** Forge's path itself is 0.39 from Falcor: the materials' gap
@@ -8158,6 +8165,17 @@ pbrt-v4, RTXGI, materiel test, etc.). Then update forge demos and test them."):
     aim at a disc facing the surface, which rises into the ceiling (a 5 cm radius took the back
     wall from 11.4 to 16.8), and the profile near the horizon does the rest. Both are in the
     resolve (#355): to plan.
+  - **Two rooms by night (2026-10-31):** Bitterli's bedroom and country kitchen, their pbrt-v4
+    files through `tools/pbrt-to-gltf.py`, their area lights as lamps (D-087), at 30 cd/m² a
+    unit (`gi-compare.sh`'s `bedroom`, `kitchen` and their `-clay`). Forge's path is 0.098 and
+    0.110 from Falcor in clay, 0.392 and 0.206 textured (the converter's materials again). The
+    three techniques are far over it: about ×6 in the bedroom, a stop in the kitchen. Both
+    rooms' main lights are large panels behind fabric (the bedroom's curtains, the kitchen's
+    blind; opaque in Forge and Falcor, the converter leaving pbrt's `diffusetransmission` out),
+    and a flat piece's lamp is a disc of its area centred half its radius in front of it: 39 cm
+    and 53 cm into the rooms, past the fabric, unshadowed (#370, the root of #369's too). Until
+    then these rooms measure the lamps, not the techniques. The GPU's frame, one run: 4.8 to 5.1 ms with the
+    probes, 4.7 to 5.0 with the port, 5.1 to 5.4 with SHaRC.
 
 ## D-084 — An environment map as the sky, its sun taken out of it ✅ (the owner's go, 2026-10-29)
 
