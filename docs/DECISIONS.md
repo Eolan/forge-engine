@@ -8570,7 +8570,13 @@ found in a search, used by Blender's EEVEE and VTK), switchable for the comparis
 gold 0.65–1.17 across roughness (0.21–5.56 and 0.28–6.72 before D-086); with the compensation
 (the default) rough metals keep their light, silver 1.30–2.04 and gold 1.21–1.90 at roughness 0.8
 and 1, Falcor's lost energy; dielectrics 0.88–0.93, the tiles 0.95–1.00. Open: smooth metals at
-0.66–0.74. The Bistro's Exterior_1 against Falcor in Lambert: the sunlit street 1.01–1.06 (0.92–1.07
+0.66–0.74. **Found (2026-10-31, the owner: the two smooth gold balls had lost their gold):** a
+smooth row's mirror ray took its Fresnel's luminance alone (the request's one weight), so its
+traced share reflected grey: gold's red at 0.85 of Falcor's, its blue at 1.35, green over red
+0.85 and blue over red 0.57 where Falcor's are 0.77 and 0.36. The request image now carries the
+colour in a lower half (`g_reflection_tint`, the Fresnel over its luminance), and the mirror pass
+and the resolve's sky under it take it: green over red 0.76, blue over red 0.35, red 0.93 of
+Falcor's (the two balls' lit pixels, without anti-aliasing). The Bistro's Exterior_1 against Falcor in Lambert: the sunlit street 1.01–1.06 (0.92–1.07
 before D-086); a still camera 5,032 pixels (5,245 before D-086); the frame 4.61 ms, unchanged.
 
 **Step D, the lamps:** their highlights by GGX, each lobe widened by its lamp's sphere as seen from
@@ -8825,8 +8831,41 @@ brackets. At the Night view, Forge's light over Falcor's:
     directly, so #372's comparisons (lamps-on path against the lists) hold. `tools/gi-compare.sh`
     now captures without anti-aliasing (its timings keep DLAA); the night view again: the
     default (the lists, every lamp) 0.096 from Forge's path (×1.005) and 0.302 from Falcor's
-    (×1.002), where with DLAA the 64 nearest read 0.317 (×0.967) and 0.544 (×0.795). The other
-    views' tables above were measured with DLAA and are to measure again.
+    (×1.002), where with DLAA the 64 nearest read 0.317 (×0.967) and 0.544 (×0.795).
+  - **Every view again without anti-aliasing (2026-10-31, at 38d140fc):** the morning's DLAA
+    captures (the baseline's, the rooms' last, the night's every lamp) measured again against
+    today's references (Falcor's clay was rendered again at 05:37, its albedo 0.496), then
+    → the captures without it; the mean |log2| of the 144 tiles:
+
+    | View | from Forge's path: probes, port, SHaRC, auto | from Falcor: Forge's path, probes, port, SHaRC, auto |
+    |---|---|---|
+    | Bistro Exterior_1, clay | 0.028 → 0.026, 0.046 → 0.058, 0.049 → 0.058, 0.026 | 0.180 → 0.161, 0.188 → 0.158, 0.137 → 0.108, 0.134 → 0.105, 0.158 |
+    | Bistro Exterior_2, clay | 0.136 → 0.133, 0.087 → 0.093, 0.101 → 0.104, 0.133 | 0.216 → 0.206, 0.336 → 0.320, 0.170 → 0.153, 0.153 → 0.143, 0.320 |
+    | Bistro Exterior_1 | 0.047 → 0.051, 0.059 → 0.062, 0.058 → 0.064, 0.051 | 0.080 → 0.082, 0.089 → 0.092, 0.096 → 0.099, 0.096 → 0.099, 0.092 |
+    | Bistro Exterior_2 | 0.085 → 0.089, 0.117 → 0.116, 0.121 → 0.124, 0.089 | 0.387 → 0.378, 0.443 → 0.434, 0.480 → 0.466, 0.484 → 0.474, 0.434 |
+    | Bistro at night (every lamp) | 0.187 → 0.096, all four 0.096 | 0.317 → 0.305, 0.428 → 0.302, all four 0.302 |
+    | Classroom, clay | 0.368 → 0.360, 0.110 → 0.103, 0.110 → 0.117, 0.117 | 0.114 → 0.109, 0.454 → 0.437, 0.088 → 0.091, 0.091 → 0.096, 0.096 |
+    | Classroom | 0.320 → 0.307, 0.096 → 0.101, 0.089 → 0.101, 0.101 | 0.151 → 0.164, 0.405 → 0.411, 0.150 → 0.142, 0.149 → 0.148, 0.148 |
+    | Material chart | 0.031 → 0.033, 0.027 → 0.030, 0.028 → 0.030, 0.033 | 0.066 → 0.060, 0.088 → 0.083, 0.084 → 0.080, 0.085 → 0.081, 0.083 |
+    | Cornell box (night) | 0.167 → 0.226, 0.074 → 0.105, 0.078 → 0.113, 0.113 | 0.025 → 0.033, 0.207 → 0.216, 0.092 → 0.095, 0.096 → 0.103, 0.103 |
+    | Bedroom, clay (night) | 0.993 → 0.789, 0.712 → 0.281, 0.177 → 0.189, 0.189 | 0.194 → 0.110, 0.821 → 0.853, 0.865 → 0.344, 0.140 → 0.238, 0.238 |
+    | Bedroom (night) | 0.981 → 0.988, 0.414 → 0.308, 0.271 → 0.282, 0.282 | 0.392 → 0.384, 1.191 → 1.190, 0.596 → 0.441, 0.445 → 0.440, 0.440 |
+    | Kitchen, clay (night) | 0.220 → 0.136, 0.088 → 0.091, 0.080 → 0.083, 0.083 | 0.204 → 0.068, 0.112 → 0.132, 0.196 → 0.118, 0.161 → 0.097, 0.097 |
+    | Kitchen (night) | 0.262 → 0.265, 0.136 → 0.127, 0.128 → 0.131, 0.131 | 0.206 → 0.203, 0.354 → 0.351, 0.191 → 0.201, 0.232 → 0.231, 0.231 |
+    | Village landing | 0.507 → 0.486, 0.230 → 0.126, 0.110 → 0.122, 0.114 | |
+    | Village room | 0.147 → 0.142, 0.052 → 0.057, 0.052 → 0.057, 0.074 | |
+    | Village street | 0.116 → 0.112, 0.115 → 0.111, 0.116 → 0.111, 0.112 | |
+
+    - **By day DLAA moved little** (±0.03 at most; the same capture with and without it within
+      2 %, the chart 0.5 %). Forge's path over Falcor in the clay Bistro stands (×1.10, #373).
+    - **The nights moved:** the Bistro's path ×0.823 → ×0.997 of Falcor's; the clay bedroom and
+      kitchen 0.194 → 0.110 and 0.204 → 0.068 (×1.12 → ×0.96 and ×1.10 → ×1.00; the clay's
+      albedo changed in between too). The rooms' columns between the morning and now also hold
+      the day's lamp changes (the flat lamps, the port's), not DLAA alone.
+    - **D-090's choice holds:** indoors SHaRC (and `auto`) 2 to 4 times nearer Forge's path than
+      the probes (the kitchen 0.083 against 0.136, the landing 0.122 against 0.486), outdoors
+      `auto` the probes' (Exterior_1 0.026, SHaRC 0.058); the village's room under `auto` 0.074,
+      its hits past the door and windows the probes'.
 
 ## D-088 — The light in shade: a near field traced per pixel over the probes ✅ (proposed and decided 2026-10-30, the owner following the recommendations; after D-086; D-083)
 

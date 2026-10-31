@@ -3596,6 +3596,11 @@ float3 occlusion_bounce(float visibility, float3 albedo)
 // of what a mirror ray meets there in place of the sky (w; issue #52). The resolve stores it for
 // the smooth rows, and `reflections_main` traces it.
 static float4 g_reflection_request;
+// Its colour (`sky_reflection`): the Fresnel weight over its luminance, white but for a metal's
+// tint. The resolve stores it in the request image's lower half and `reflections_main` gives it to
+// the ray's light: with the luminance alone, the chart's smooth gold balls reflected grey, red
+// 0.74 of Falcor's and blue 1.24 (the owner, 2026-10-31).
+static float3 g_reflection_tint = float3(1.0);
 
 // Set by `lamps_at` for the pixel being shaded (D-065): the lamps' light on it in the resolve's
 // units (a white Lambertian surface facing the sun is 1), and their highlights; `sun_light` adds
@@ -4181,12 +4186,15 @@ float3 sky_reflection(float4* sky, float3 irradiance, float3 n, float3 view, flo
     // the light, and GTAO darkened it a second time (a smooth body's reflection by about its ao
     // at roughness 0.25; D-086, the Bistro's scooter). The rest keeps it.
     float traced_weight = (1.0 - blend) * traced_share;
-    // A metal's tint stays off its traced share: the request holds one weight (its luminance).
-    g_reflection_request = float4(r, dot(fresnel, float3(0.2126, 0.7152, 0.0722)) * traced_weight);
-    // The open sky the traced hit replaces at the request's own weight (its Fresnel's luminance):
-    // with a tinted F0 the hit's `request.w * (hit - open)` left a sky-coloured rest, negative in
-    // blue on gold over a dark wall (the review of 2026-10-30).
-    return fresnel * occlusion * (environment - traced_weight * open) + g_reflection_request.w * open;
+    // The request holds the weight's luminance, and its colour rides beside it (a metal's tint,
+    // `g_reflection_tint`).
+    float weight = dot(fresnel, float3(0.2126, 0.7152, 0.0722));
+    g_reflection_request = float4(r, weight * traced_weight);
+    g_reflection_tint = weight > 1e-6 ? fresnel / weight : float3(1.0);
+    // The open sky the traced hit replaces at the request's own weight and colour: the hit's
+    // `request.w * tint * (hit - open)` then leaves no sky-coloured rest (with a tinted F0 and the
+    // luminance alone, negative in blue on gold over a dark wall: the review of 2026-10-30).
+    return fresnel * occlusion * (environment - traced_weight * open) + g_reflection_request.w * g_reflection_tint * open;
 }
 
 // The rough end of the mirror rays (#306): roughness 0.30, Blinn-Phong about 245. Smoother rows
@@ -5137,8 +5145,10 @@ float3 standard_light(Frame* f, Material mat, Surface s, StandardInputs si)
         float ndl_white;
         // Its own `sky_reflection` would overwrite the pane's mirror ray's request.
         float4 request = g_reflection_request;
+        float3 request_tint = g_reflection_tint;
         float3 daylight = sun_light(f, float3(1.0, 1.0, 1.0), n, s.n, 1.0, 0.0, s.shadow, s.sky, s.ao, s.view, float3(0.0), s.world, s.probes, false, ndl_white);
         g_reflection_request = request;
+        g_reflection_tint = request_tint;
         float3 lamp = emission(f, mat) * (shop ? ROOM_SHOP_LAMP : ROOM_LAMP);
         float3 seen = lerp(room * (daylight * ROOM_DAYLIGHT + lamp), mat.color_b * (daylight + lamp), curtain);
         // Through the glass, less what it reflects (Schlick).
@@ -5699,7 +5709,7 @@ struct ResolvePush
     float4 background;   // written to empty pixels where its w ≥ 0 (else they are left for the sky)
     float4* sky;         // the sky's irradiance (sh.slang), or null: space's constant fill (issue #47)
     uint ao_image;       // sampled index of the ambient occlusion (gtao.slang, issue #48), or 0xFFFFFFFF; in `reflections_main`, the motion vectors' storage index (r.reflections.motion), or 0xFFFFFFFF
-    uint request_image;  // storage index of the mirror rays' requests (issue #52), or 0xFFFFFFFF
+    uint request_image;  // storage index of the mirror rays' requests (issue #52): direction and weight, their colour `height` rows below; or 0xFFFFFFFF
     ProbeField* probes;  // the diffuse light's probes (probes.slang, issue #53), or null
     ShoreGround* shore;  // the shore whose swash wets the sand (issue #105), or null
     float4 cloud_frame;  // the clouds' shadow map (#145): its first corner (world x, z), 1 / the metres it spans
@@ -6998,6 +7008,7 @@ float3 shade_jelly(Frame* f, Material mat, Surface s, uint instance, bool traced
     g_reflection_request = float4(0.0);
     float3 color = sun_light(f, albedo, s.n, s.n, mat.specular_power, mat.specular, s.shadow, s.sky, s.ao, s.view, float3(mat.reflectance), s.world, s.probes, traced, ndl);
     float4 mirror = g_reflection_request;
+    float3 mirror_tint = g_reflection_tint;
     if (traced && mirror.w > 0.0)
     {
         RayDesc ray;
@@ -7009,7 +7020,7 @@ float3 shade_jelly(Frame* f, Material mat, Surface s, uint instance, bool traced
         if (h.hit)
         {
             RayHit hit = ray_hit(f, h.instance, h.primitive, h.barycentrics, ray.Origin, mirror.xyz, h.t);
-            color += mirror.w * (hit_radiance_skipping(f, s.sky, s.probes, hit, mirror.xyz, instance) - sky_along(s.sky, mirror.xyz));
+            color += mirror.w * mirror_tint * (hit_radiance_skipping(f, s.sky, s.probes, hit, mirror.xyz, instance) - sky_along(s.sky, mirror.xyz));
         }
     }
     // The share the surface reflects, as `sky_reflection` weighs it.
@@ -7457,7 +7468,12 @@ uint shade_pixel<let SHADOWS : int>(uint class_index, uint2 pixel, uint vis)
     color *= f[0].sun_illuminance * f[0].exposure / 3.14159265;
     g_storage_images_rgba16f[NonUniformResourceIndex(resolve_push.color_image)][pixel] = float4(color, 1.0);
     if (s.traced)
-        g_storage_images_rgba16f[NonUniformResourceIndex(resolve_push.request_image)][pixel] = g_reflection_request;
+    {
+        RWTexture2D<float4> requests = g_storage_images_rgba16f[NonUniformResourceIndex(resolve_push.request_image)];
+        requests[pixel] = g_reflection_request;
+        // Its colour in the image's lower half (the image is twice the frame's height).
+        requests[pixel + uint2(0u, resolve_push.height)] = float4(g_reflection_tint, 0.0);
+    }
     return class_index | (mirror_ray ? REFLECT_BIT : 0u);
 }
 
@@ -7656,7 +7672,9 @@ void reflections_main(uint3 group : SV_GroupID, uint3 thread : SV_GroupThreadID)
     float3 reflected = hit.w > 0.0 ? hit.xyz : mirror + seen_clouds(f, sky, request.xyz, size);
     if (history != nullptr)
         reflected = steadied_reflection(history, f, pixel, size, mul(frame, object_position) + relative, record.x, reflected, hit.w > 0.0 ? distance : -1.0, mover);
-    float3 added = request.w * (reflected - mirror);
+    // At the request's weight and colour (`g_reflection_tint`, the image's lower half).
+    float3 tint = g_storage_images_rgba16f[NonUniformResourceIndex(resolve_push.request_image)][pixel + uint2(0u, resolve_push.height)].rgb;
+    float3 added = request.w * tint * (reflected - mirror);
     if (all(added == float3(0.0)))
         return;
     RWTexture2D<float4> color = g_storage_images_rgba16f[NonUniformResourceIndex(resolve_push.color_image)];

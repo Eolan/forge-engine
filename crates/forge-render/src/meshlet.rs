@@ -887,7 +887,8 @@ struct ResolvePush {
     /// index of the frame's motion vectors there instead, which it moves towards the reflections
     /// ([`crate::ReflectionHistoryFrame::motion`]), or `u32::MAX`.
     ao_image: u32,
-    /// Storage index of the mirror rays' requests (direction, weight; issue #52), or `u32::MAX`.
+    /// Storage index of the mirror rays' requests (direction, weight; issue #52), their colour
+    /// `height` rows below, or `u32::MAX`.
     request_image: u32,
     /// The probes' `ProbeField` (`probes.slang`, issue #53), or 0: the sky's irradiance.
     probes: u64,
@@ -6320,7 +6321,9 @@ impl MeshletRenderer {
         let tiles = graph.import_buffer(tiles_buffer);
         let args = graph.import_buffer(args_buffer);
         // The mirror rays' requests (issue #52): the resolve writes them for the smooth rows, the
-        // reflection pass reads them. Only under a sky, on devices with ray queries.
+        // reflection pass reads them. Only under a sky, on devices with ray queries. Twice the
+        // frame's height: each pixel's direction and weight, and below them their colour (a
+        // metal's tint, which a smooth gold ball's reflection lost).
         let reflections = self
             .pipeline_reflections
             .as_ref()
@@ -6329,7 +6332,7 @@ impl MeshletRenderer {
             graph.transient(TransientDesc {
                 name: "mirror ray requests",
                 width: extent.width,
-                height: extent.height,
+                height: 2 * extent.height,
                 format: vk::Format::R16G16B16A16_SFLOAT,
                 usage: vk::ImageUsageFlags::STORAGE,
                 aspect: vk::ImageAspectFlags::COLOR,

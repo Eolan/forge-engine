@@ -203,3 +203,20 @@ and a still camera's shimmer (frames 280 and 290, pixels differing by more than 
   - With DLAA and the 64 nearest it was 0.317 (×0.967) and 0.544 (×0.795).
 - **Next session:** measure the other views again without DLAA (about 1.5 h). The baseline
   tables in D-083 used it.
+
+## Every view again without anti-aliasing; the smooth gold (15:00)
+
+- **The views again:** 16 views, 4 techniques, with anti-aliasing off. The full table is in D-083.
+  Compared with the morning's DLAA captures, re-measured against today's references:
+  - **By day DLAA changed little,** ±0.03 at most. The clay Bistro's path stays ×1.10 over
+    Falcor (#373).
+  - **The nights changed:** the Bistro's path went from ×0.823 to ×0.997 of Falcor. The clay
+    bedroom went from 0.194 to 0.110 and the clay kitchen from 0.204 to 0.068.
+  - **D-090 holds:** indoors SHaRC and `auto` are 2–4 times nearer the path than the probes;
+    outdoors `auto` is the probes.
+- **The smooth gold (your question):** not AgX.
+  - **Cause:** the mirror pass reflected with the luminance of gold's colour, a single grey
+    weight, so the two smoothest gold balls looked like silver (green/red 0.85 and blue/red
+    0.57, where Falcor has 0.77 and 0.36).
+  - **Fix:** the mirror pass now gets the Fresnel colour. The balls read 0.76 and 0.35, and red
+    0.93 of Falcor's (it was 0.85). This was D-086's open "smooth metals at 0.66–0.74".
