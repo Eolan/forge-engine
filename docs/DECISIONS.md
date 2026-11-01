@@ -10497,3 +10497,37 @@ frame by default, `FORGE_CELLS_REALTIME=1` one edit a frame).
   consecutive slots, copy as a few regions. The flight at 40 m/s: p50 5.77 / p99 13.7–14.0 →
   5.79 / 7.65 (two runs: 7.65, 7.68), no frame's GPU over 8 ms; the worker's longest edit 47 →
   23 ms.
+
+## D-097 — A rasterised mode lit by precomputed transfer: relit probes in sparse bricks 🟡 (proposed 2026-11-01; waits for the owner on Imagination's patents; D-094, D-095, D-096)
+
+**Why:** D-094's amendment holds Forge to the shipped city game's benchmark mode for mode, its
+rasterised mode included (152.3 fps, 6.48 ms p50 under DLSS Quality at 2560 × 1440), and the owner
+asked for precomputed lighting ("a good technology to have, it avoids a lot of real-time
+computations") while the sun, the moon, the weather and the lamps still change. The shipped game
+does it: about 22,000 precomputed GI cells of 64 m (a sparse brick structure, ~12 GB), reflection
+probes with per-face depth and a sky flag, and a list of far lights. The research
+(`research/baked-gi-time-of-day.md`) compared precomputed radiance transfer, relit probes, keyed
+bakes, Enlighten-style form factors and probe volumes.
+
+**Proposed (the research's recommendation):**
+1. **Relit transfer probes in sparse bricks** (The Division's design, GDC 2016), one file per 64 m
+   cell in D-096's package: probes in 4 × 4 × 4 bricks at 1, 3 or 9 m, each with its sky visibility
+   (L1) and its factors to bricks of surfels; the surfels' position, normal, folded albedo
+   (D-095), a wet or snow weight; the cell's lamp list and a far-field record. About 0.6–0.85 MB a
+   cell (estimate).
+2. **Baked by Forge's own GPU path tracer** (no form factors in the bake: ARM's US 10,672,177;
+   rays, not depth buffers over directions: Microsoft's US 7,948,490).
+3. **Relit each frame:** the surfels lit by the live sun, moon, sky and lamps, averaged into
+   bricks, summed into the probes round the camera (3 × 3 cells, farther ones staggered); about
+   0.5–2 ms on the RTX 5070 Ti (an estimate from The Division's 0.47 ms on a GTX 760, to measure).
+   Nothing keyed by the hour: night, weather and lamps cost no data.
+4. **Relit reflection cubes** (albedo, normal, depth, sky bit), normalised by the volume, after.
+5. **Measured first on one cell** of the private district against Forge's path-traced reference at
+   a fixed exposure, at noon, dusk and night with its lamps.
+
+**The decision the owner takes:** Imagination's US 10,672,183, US 11,127,198 and GB 2571656 (live
+to 2036) update a probe "from a previous frame" with rays' lighting contributions; a relight that
+sums brick light by factors traced at bake time may read on them. Recomputing each probe from
+scratch every frame (no blending with the last) keeps further away; the fallback is Far Cry 3's
+pure transfer (2012, before their 2015 priority), which loses the lamps' bounce. Until the owner's
+word (or counsel's), nothing of the relight is built.
