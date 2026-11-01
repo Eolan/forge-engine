@@ -240,7 +240,74 @@ public struct ProbeField
     public uint4* far_table;      // the far rooms' light (#356, #363): (region, its share's bits, its lamps' bounce as three halves), region 0 an empty entry; null: none
     public float3 focus;          // world metres: where the finest cascade stands and fades round (`Probes::set_focus`), else `camera`
     public uint focus_pad;
+    public BakedHit* baked;       // D-097's first step (#388): per probe and ray, its hit as first traced; null: traced every frame
+    public uint2 baked_pad;
 };
+
+// A probe ray's hit as first traced (D-097's first step, #388), relit every frame without a ray:
+// where it met what (a miss at PROBE_MISS_DISTANCE, a back face at minus its distance), what that
+// was, and whether each of BAKED_SUN_DIRECTIONS directions of the sky was open from it. `key`
+// names the probe's place it was traced from (`baked_key`), never 0.
+public struct BakedHit
+{
+    public float3 position;
+    public float distance;
+    public float3 albedo;
+    public uint normal;      // `pack_unit`
+    public float3 emissive;
+    public uint lit_n;       // `pack_unit`
+    public uint2 sun;        // a bit per direction of `baked_sun_direction`: open
+    public float shadow_start;
+    public uint key;
+};
+
+// The directions a baked hit's sky is tested along: a Fibonacci lattice's from the zenith to
+// about 8 degrees under the horizon, so a low sun has closed directions under it to weigh too
+// (with the upper half alone, a street's floor took a third of a sun its skyline hides).
+public static const uint BAKED_SUN_DIRECTIONS = 64;
+public static const uint BAKED_SUN_LATTICE = 111; // the lattice the 64 are the first of: y down to -0.144
+
+public float3 baked_sun_direction(uint i)
+{
+    return fibonacci_direction(i, BAKED_SUN_LATTICE);
+}
+
+// The share of the light from `light` (a unit direction) a baked hit receives: its open
+// directions near it, weighed by how near; 0 under the horizon's lowest.
+public float baked_sun_visibility(uint2 bits, float3 light)
+{
+    float open = 0.0;
+    float total = 0.0;
+    for (uint i = 0u; i < BAKED_SUN_DIRECTIONS; i++)
+    {
+        float w = max(dot(baked_sun_direction(i), light) - 0.9, 0.0);
+        w *= w;
+        uint word = i < 32u ? bits.x : bits.y;
+        open += ((word >> (i & 31u)) & 1u) != 0u ? w : 0.0;
+        total += w;
+    }
+    return total > 0.0 ? open / total : 0.0;
+}
+
+// A unit vector in 32 bits (octahedral, two halves), and back.
+public uint pack_unit(float3 n)
+{
+    float2 o = oct_encode(n);
+    return f32tof16(o.x) | (f32tof16(o.y) << 16);
+}
+
+public float3 unpack_unit(uint u)
+{
+    return oct_decode(float2(f16tof32(u & 0xFFFFu), f16tof32(u >> 16)));
+}
+
+// A probe's place as a baked hit's key (#388): its cell's centre and its offset from it, never 0.
+public uint baked_key(float3 origin)
+{
+    uint3 b = asuint(origin);
+    uint h = b.x * 0x8DA6B343u ^ b.y * 0xD8163841u ^ b.z * 0xCB1AB31Fu;
+    return (h ^ (h >> 15)) | 1u;
+}
 
 // The coarse cell `key`'s first entry in a table of `mask + 1` (`top_hash` in regions.rs).
 uint top_hash(int2 key, uint mask)

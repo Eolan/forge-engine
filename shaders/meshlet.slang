@@ -544,6 +544,9 @@ public struct Frame
 // Whether this thread's rays meet the movers: every pass's but the probes' unless their scene asks
 // (`ProbeParams::movers`, #299), which `probe_trace_main` sets.
 static bool g_trace_movers = true;
+// Relighting a probe's baked hits (#388): the lamps' light without shadow rays, as a rasterised
+// mode's (and the shipped game's raster mode's lights).
+static bool g_lamps_unshadowed = false;
 
 // The world this thread's rays meet (#301): RAY_SHADOW unless its pass sets another, the probes'
 // RAY_PROBE and the mirror rays' RAY_MIRROR, so an instance left out of one is out of all that
@@ -6758,7 +6761,7 @@ float3 hit_lamp_through(Frame* f, RayHit hit, Lamp lamp, uint n, float total)
         h ^= h >> 13;
         offset = lamp_rect_target(lamp, hit.position, hit.n, float2(float(h & 0xFFFFu), float(h >> 16)) * (2.0 / 65536.0) - 1.0, hidden);
     }
-    if (hidden || (!lamp_shadowless(lamp) && ray_blocked(f, lamp_ray(lamp, hit.position, hit.n, hit.shadow_start, offset))))
+    if (hidden || (!lamp_shadowless(lamp) && !g_lamps_unshadowed && ray_blocked(f, lamp_ray(lamp, hit.position, hit.n, hit.shadow_start, offset))))
         return float3(0.0);
     // Its colour of luminance 1 times every lamp's light: its own over its chance, w / total.
     float3 colour = lamp.colour_reach.rgb / max(dot(lamp.colour_reach.rgb, float3(0.2126, 0.7152, 0.0722)), 1e-9);
@@ -9008,6 +9011,52 @@ void probe_trace_main(uint3 group : SV_GroupID, uint thread : SV_GroupThreadID)
     float4* sky = probe_push.sky;
     float3 origin = slot.position + data.xyz;
     float3 direction = probe_ray_direction(field, ray, rays);
+    // D-097's first step (#388): a settled probe's other rays keep their hits as first traced and
+    // relight them every frame, with no ray: the key light by its baked open directions, the sky,
+    // the probes' bounce, the lamps without shadows.
+    bool baking = field[0].baked != nullptr && !fixed && settled;
+    uint key = baked_key(origin);
+    uint at = probe * field[0].rays + ray;
+    if (baking && field[0].baked[at].key == key)
+    {
+        BakedHit b = field[0].baked[at];
+        float3 lit = float3(0.0);
+        if (b.distance >= PROBE_MISS_DISTANCE)
+        {
+            float4 up_table = sky[SH_COEFFICIENTS];
+            lit = sky_view_luminance(uint(up_table.w + 0.5), up_table.xyz, sky[SH_COEFFICIENTS + 1].xyz, direction) * 3.14159265;
+        }
+        else if (b.distance > 0.0)
+        {
+            RayHit hit;
+            hit.position = b.position;
+            hit.n = unpack_unit(b.normal);
+            hit.albedo = b.albedo;
+            hit.emissive = b.emissive;
+            hit.back = false;
+            hit.shadow_start = b.shadow_start;
+            hit.metal = 0.0;
+            hit.lit_n = unpack_unit(b.lit_n);
+            hit.bumps = 1.0;
+            hit.roughness = 1.0;
+            uint baked_region = field[0].region_count > 0u ? field[0].probe_region[probe] : REGION_NONE;
+            float3 sun = normalize(f[0].sun_dir);
+            float open = baked_sun_visibility(b.sun, sun);
+            lit = hit.albedo * max(dot(hit.lit_n, sun), 0.0) * open * f[0].sun_color.rgb + hit.emissive;
+            if (probe_push.first_update == 0)
+            {
+                float3 ambient = probe_irradiance_hit(field, hit.position, hit.n, -direction, sh_irradiance(sky, hit.n), baked_region == REGION_OUTSIDE);
+                lit += hit.albedo * ambient;
+            }
+            g_lamps_unshadowed = true;
+            lit += hit_lamps(f, hit, baked_region, probe * 0x9E3779B9u + ray, true);
+            g_lamps_unshadowed = false;
+        }
+        if (any(isnan(lit)) || any(isinf(lit)))
+            lit = float3(0.0);
+        field[0].ray_data[at] = pack_ray(lit, b.distance);
+        return;
+    }
     RayDesc desc;
     desc.Origin = origin;
     desc.Direction = direction;
@@ -9080,6 +9129,52 @@ void probe_trace_main(uint3 group : SV_GroupID, uint thread : SV_GroupThreadID)
     if (any(isnan(radiance)) || any(isinf(radiance)))
         radiance = float3(0.0); // one bad texel would spread through the blends for good
     field[0].ray_data[probe * field[0].rays + ray] = pack_ray(radiance, distance);
+    if (baking)
+    {
+        BakedHit b;
+        b.position = float3(0.0);
+        b.distance = distance;
+        b.albedo = float3(0.0);
+        b.normal = 0u;
+        b.emissive = float3(0.0);
+        b.lit_n = 0u;
+        b.sun = uint2(0u, 0u);
+        b.shadow_start = 0.0;
+        b.key = key;
+        if (c.hit && distance > 0.0)
+        {
+            RayHit hit = ray_hit(f, c.instance, c.primitive, c.barycentrics, origin, direction, c.t);
+            if ((candidate_row(f, c.instance, c.primitive).flags & MATERIAL_FLAG_LAMP) != 0)
+                hit.emissive = float3(0.0);
+            b.position = hit.position;
+            b.albedo = hit.albedo;
+            b.normal = pack_unit(hit.n);
+            b.emissive = hit.emissive;
+            b.lit_n = pack_unit(hit.lit_n);
+            b.shadow_start = hit.shadow_start;
+            // Its sky, open or not along each direction: the key light's shadow at any hour, in the
+            // probes' world as their hits' sun rays are (tree crowns as their proxies).
+            for (uint i = 0u; i < BAKED_SUN_DIRECTIONS; i++)
+            {
+                float3 d = baked_sun_direction(i);
+                if (dot(hit.n, d) <= 0.0)
+                    continue;
+                RayDesc shadow;
+                shadow.Origin = hit.position + hit.n * hit.shadow_start;
+                shadow.Direction = d;
+                shadow.TMin = 0.0;
+                shadow.TMax = PROBE_MISS_DISTANCE;
+                if (!ray_blocked(f, shadow))
+                {
+                    if (i < 32u)
+                        b.sun.x |= 1u << i;
+                    else
+                        b.sun.y |= 1u << (i - 32u);
+                }
+            }
+        }
+        field[0].baked[probe * field[0].rays + ray] = b;
+    }
 }
 
 // The resolve's entry points: without shadow rays, and with them (`_rt`, devices with ray

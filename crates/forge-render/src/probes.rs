@@ -134,9 +134,16 @@ struct GpuProbeField {
     /// Where the finest cascade stands ([`Probes::set_focus`]).
     focus: [f32; 3],
     focus_pad: u32,
+    /// D-097's first step (#388): each settled probe's rays' hits as first traced, relit every
+    /// frame without a ray (`BakedHit` in `probes.slang`); 0: the rays traced every frame.
+    baked: u64,
+    baked_pad: [u32; 2],
 }
 
-const _: () = assert!(std::mem::size_of::<GpuProbeField>() == 600);
+const _: () = assert!(std::mem::size_of::<GpuProbeField>() == 616);
+
+/// Bytes of a probe ray's baked hit (`BakedHit` in `probes.slang`).
+const BAKED_HIT_BYTES: u64 = 64;
 
 /// `REGION_NONE` in `probes.slang`: a probe in a recess or a doorway, no region's.
 const REGION_NONE: u32 = u32::MAX;
@@ -703,6 +710,9 @@ pub struct Probes {
     distance: GraphImage,
     rays: GraphBuffer,
     data: GraphBuffer,
+    /// D-097's first step (#388, `FORGE_GI_BAKED=1`): each ray's hit as first traced, relit every
+    /// frame without a ray; its rays' directions then never turn.
+    baked: Option<GraphBuffer>,
     /// Each probe's region (D-068), `REGION_NONE` until its first update with regions.
     region: GraphBuffer,
     /// The scene's region volumes in sets and the grids that find them, when it knows its rooms
@@ -782,6 +792,29 @@ impl Probes {
             category: MemoryCategory::Work,
             name: "probe rays",
         })?);
+        // D-097's first step (#388): the rays' hits kept and relit (a prototype behind a variable,
+        // to measure against Forge's path before the cells' baked format).
+        let baked = if std::env::var("FORGE_GI_BAKED").is_ok_and(|v| v == "1") {
+            let size = probes * u64::from(params.rays) * BAKED_HIT_BYTES;
+            let buffer = device.create_buffer(BufferDesc {
+                size,
+                usage: vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_DST,
+                location: MemoryLocation::GpuOnly,
+                category: MemoryCategory::Work,
+                name: "probe baked hits",
+            })?;
+            // Keys of zero: no hit kept yet (a probe's key is never zero).
+            device.execute_compute_once_on(QueueKind::Compute, |commands| {
+                commands.fill_buffer(&buffer, 0, size, 0);
+            })?;
+            tracing::info!(
+                mib = size >> 20,
+                "the probes' rays baked and relit (D-097, #388)"
+            );
+            Some(GraphBuffer::new(buffer))
+        } else {
+            None
+        };
         let data = device.create_buffer(BufferDesc {
             size: probes * 16,
             usage: vk::BufferUsageFlags::STORAGE_BUFFER
@@ -886,6 +919,7 @@ impl Probes {
             )?,
             distance: atlas(DISTANCE_TILE, vk::Format::R16G16_SFLOAT, "probe distance")?,
             rays,
+            baked,
             data: GraphBuffer::new(data),
             region: GraphBuffer::new(region),
             regions: None,
@@ -1162,7 +1196,12 @@ impl Probes {
         // The first update after a reset lights its rays' hits by the sun alone (#171).
         let first_update = std::mem::take(&mut self.reset);
         // One rotation per round of turns: each probe meets every rotation of the cycle.
-        let rotation = frame_rotation(noise_frame / u64::from(p.cadence));
+        // Baked (#388): the rays never turn, so each meets the hit it keeps.
+        let rotation = if self.baked.is_some() {
+            Mat3::IDENTITY
+        } else {
+            frame_rotation(noise_frame / u64::from(p.cadence))
+        };
         let row = |r: usize| {
             let v = rotation.row(r);
             [v.x, v.y, v.z, 0.0]
@@ -1276,6 +1315,8 @@ impl Probes {
             far_table: far.map_or(0, |f| f.3),
             focus: (camera + self.focus).to_array(),
             focus_pad: 0,
+            baked: self.baked.as_ref().map_or(0, |b| b.address()),
+            baked_pad: [0; 2],
         };
         self.fields[slot.index].write(0, &[field]);
 
@@ -1283,6 +1324,7 @@ impl Probes {
         let address = this.fields[slot.index].address();
         let compute = vk::PipelineStageFlags2::COMPUTE_SHADER;
         let rays = graph.import_buffer(&this.rays);
+        let baked = this.baked.as_ref().map(|b| graph.import_buffer(b));
         let data = graph.import_buffer(&this.data);
         let region = graph.import_buffer(&this.region);
         let irradiance = graph.import(&this.irradiance);
@@ -1408,6 +1450,10 @@ impl Probes {
                 .buffer(data, BufferAccess::ShaderRead(compute))
                 .buffer(region, BufferAccess::ShaderRead(compute))
                 .buffer(rays, BufferAccess::ShaderWrite(compute))
+                .with(|b| match baked {
+                    Some(h) => b.buffer(h, BufferAccess::ShaderWrite(compute)),
+                    None => b,
+                })
                 .with(|b| match far_table {
                     Some(t) => b.buffer(t, BufferAccess::ShaderRead(compute)),
                     None => b,

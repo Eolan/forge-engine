@@ -10568,3 +10568,27 @@ falls short. The vendors' kits were checked first: NVIDIA's SHaRC and NRC and AM
 Caching all trace every frame (AMD's is DirectX 12 only for now), so none is precomputed; AMD's
 Brixelizer GI (FidelityFX SDK 1.1.4, MIT, any GPU) becomes a column of the GI comparison for the
 traced modes.
+
+**Step 1 measured (2026-11-01, #388): relit precomputed hits on Forge's own probes.** A prototype
+behind `FORGE_GI_BAKED=1`: each settled probe's rays keep fixed directions; the first time, each
+ray's hit is kept (position, normal, albedo, emission, distance, and 64 bits of open sky along
+fixed upper-hemisphere directions, 64 B a ray, 280 MB for the private district's 34,560 probes);
+every later frame it is relit with no ray (the key light through the bits, the sky, the probes'
+bounce, the lamps without shadows) into the probes' blend as before. The cache holds no light, so a
+bake at any hour is the noon bake relit. On the benchmark district's street, 1280 × 720, against
+Forge's path (`r.gi.reference=4`), mean |log2| over 16 × 9 tiles, the per-pixel bounce off for the
+probes:
+  - noon: baked probes 0.056 (frame ×0.996), traced probes 0.043, the default (probes and the
+    per-pixel bounce) 0.034;
+  - dusk (19:30): 0.041 (×0.995), 0.033, 0.025;
+  - night: every technique 1 to 1.6 stops under the path (the lamps' known difference, #369, the
+    calibration's reason to run its path without them): no verdict.
+  The baked probes lose 0.01 against the traced ones, with no ray at run time. Their cost at dusk
+  with 1,591 lamps, DLSS Quality at 2560 × 1440, 3,000 frames, two runs each: `gi/probe rays`
+  1.94–2.06 → 1.34–1.38 ms, `gi/probe blend` 0.68–0.77 → 0.54–0.55, the frame 10.5–10.8 → 9.9–10.1;
+  the relight's own cost is the lamps' weighing and the bounce's lookups, which step 2's bricks
+  (about 24 a probe, not 96 rays) cut.
+  Its known gaps, left for step 2's format: jelly (the jelly pass's surfaces) is not in the kept
+  hits, and the cache is not cleared when the scene's geometry changes or the probes reset (a
+  probe's key is its place, so only a moved probe re-traces). Off, every capture of eight scenes is
+  unchanged (0 px).
