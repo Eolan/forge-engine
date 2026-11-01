@@ -10421,3 +10421,10 @@ frame by default, `FORGE_CELLS_REALTIME=1` one edit a frame).
   stream is a worse deal at this size: its tables reserved for the dynamic scene, a top-level
   structure rebuilt each edit, the second cull without instance cells. It pays where the world is
   larger than what is seen; next: those three, then a district larger than the square.
+- **The second cull, explained (the same night):** not the dynamic scene but instance occlusion's
+  auto mode (#38), which turns on from 65,536 hidden instances: the streamed square holds 200 k
+  instances and hides 47 k, so it stayed off and every visible instance's clusters reached the
+  second cull. Forced on (`--instance-occlusion on`): 8.3 k clusters left to it as resident, the
+  still frame 7.29 → 6.80 ms, the flight's 3.5 ms. The p99 stays near 14 ms along the paths
+  (13.7–14.0): the stream's edits, not the cull, set its worst frames; to profile next. The auto
+  threshold suits the static scenes it was measured on; a dynamic scene's is to measure.

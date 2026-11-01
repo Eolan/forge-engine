@@ -2808,7 +2808,9 @@ street 5.8 / 8.7. VRAM 3.9 GB (2.3 GB geometry: #387, pages about a tenth full).
   still weighing every lamp in reach (#386). With those hits sampling their lamps past 32 in reach
   (16 drawn, one kept by weight, the same night): **13.7 ms** (`gi/trace` 8.6 → 2.3, `gi/probe rays`
   9.4 → 1.8, `shading/reflections` 1.4 weighing every lamp as before). The Bistro's night against
-  Forge's path: the probes 0.097 → 0.096, the frame's light ×1.005 both: the same light.
+  Forge's path: the probes 0.097 → 0.096, the frame's light ×1.005 both: the same light. Its
+  shimmer, a still camera under DLAA (pixels moving over 2 codes between frames ten apart): 0.587
+  and 0.470 % before, 0.582 and 0.467 % after; its frame 21.8 → 18.8 ms.
 - **Packed pages** (#387): resident, VRAM 3.64 → 2.38 GB; streamed, 1,932 of the 1 GiB pool's 8,192
   pages resident (it was full), so a 256 MiB pool holds the view.
 
