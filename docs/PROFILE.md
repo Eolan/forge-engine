@@ -2813,6 +2813,10 @@ street 5.8 / 8.7. VRAM 3.9 GB (2.3 GB geometry: #387, pages about a tenth full).
   and 0.470 % before, 0.582 and 0.467 % after; its frame 21.8 → 18.8 ms.
 - **Packed pages** (#387): resident, VRAM 3.64 → 2.38 GB; streamed, 1,932 of the 1 GiB pool's 8,192
   pages resident (it was full), so a 256 MiB pool holds the view.
+- **Its turning meshes as movers** (fans, turning signs: 549 within 256 m, each with its own
+  material rows, `MeshletSceneBuilder::set_instance_material`): the street by day at 1600 × 900,
+  1,200 frames, two runs each, 5.22 → 5.35 ms (+0.13). Their structure's build (`movers/tlas`)
+  shows 0.38 ms, more than 549 records take: its zone counts the wait on the work before it.
 
 ## Instances scaled per axis: the 96-byte record (#380, 2026-11-01)
 

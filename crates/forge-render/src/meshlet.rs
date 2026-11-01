@@ -2088,6 +2088,13 @@ impl MeshletSceneBuilder {
         record.flags = (record.flags & !INSTANCE_VISIBILITY) | visibility.flags();
     }
 
+    /// Gives instance `instance` (in the order added) the material rows from `material`: a
+    /// mover's ([`Self::reserve_movers`] gives each its mesh's own) keeps it as it moves, an
+    /// authored scene's turning sign or fan its own colours.
+    pub fn set_instance_material(&mut self, instance: usize, material: MaterialId) {
+        self.instances[instance].material = material.0;
+    }
+
     /// Has the scene keep `item` alive until it is dropped: the textures its instances name
     /// ([`MeshletSceneBuilder::set_instance_texture`]) when several scenes in turn share them.
     pub fn keep(&mut self, item: impl std::any::Any + Send) {
@@ -7618,6 +7625,23 @@ mod tests {
                 .zip(1u32..)
                 .all(|(i, k)| i.id == k)
         );
+    }
+
+    /// A mover given its own material rows keeps them in its record, which its templates copy;
+    /// the others keep their mesh's.
+    #[test]
+    fn a_mover_keeps_the_material_it_is_given() {
+        let rock = forge_geom::procedural::asteroid(forge_core::Seed::new(7), 16, 1.0, 0.3);
+        let mut builder = MeshletSceneBuilder::new();
+        let mesh = builder.add_mesh(&MeshletMesh::build(&rock));
+        let first = builder.reserve_movers(&[(mesh, 3)]) as usize;
+        let own = builder.instances[first].material;
+        builder.set_instance_material(first + 1, MaterialId(own + 5));
+        let materials: Vec<u32> = builder.instances[first..]
+            .iter()
+            .map(|i| i.material)
+            .collect();
+        assert_eq!(materials, [own, own + 5, own]);
     }
 
     /// D-075 step 3: a tree's cards leave the far shadow rays' world to its shadow proxy, which no
