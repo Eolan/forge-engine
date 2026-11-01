@@ -4745,6 +4745,14 @@ impl Drop for Gallery {
         if frames.is_empty() {
             return;
         }
+        // `FORGE_FRAME_TIMES=FILE`: every frame's time in order, one a line (ms), to set beside
+        // another engine's per-frame log over the same path (D-094's comparison).
+        if let Some(path) = std::env::var_os("FORGE_FRAME_TIMES").filter(|p| !p.is_empty()) {
+            let text: String = frames.iter().map(|ms| format!("{ms:.3}\n")).collect();
+            if let Err(error) = std::fs::write(&path, text) {
+                tracing::warn!(%error, "the frame times not written");
+            }
+        }
         tracing::info!(
             frames = frames.len(),
             p50 = format!("{:.2}", percentile(&mut frames, 0.5)),

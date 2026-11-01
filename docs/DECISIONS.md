@@ -10382,6 +10382,23 @@ resolve, a runtime composited virtual-texture cache, and offline bakes.
 **Patents:** none found on blending layered materials per pixel; the cache's family meets the two
 AMD patents above (the table in the research), which stays the owner's call before any of it.
 
+**Amended before the build: the masks kept whole, the loop over each tile's present layers**
+(2026-11-01, the owner: "we certainly are missing textures and other elements [...] I think it's
+the layer materials"). Measured on the benchmark's district (1,236 layered materials): the median
+shows seven layers over 1 % of its surface and 62 % show five or more, so four layers a material
+drops most of them; and four (layer, weight) pairs a texel cannot be filtered (a bilinear sample
+mixes texels whose four differ: seams). So, in place of item 2:
+- **The masks stay each layer's own,** an array of block-compressed single-channel images per
+  material (BC4, mipped), sampled filtered: the front-to-back blend (each layer over those under
+  it by its mask times its opacity) stays exact.
+- **A presence map** per material: per 8 × 8 mask texels, the layers whose mask is over zero in the
+  block or the texel round it (one bit each, 32 at most), its levels the union of the four under
+  them. The resolve reads it at the mask's level of detail and loops, in order, over the layers
+  present in its tile (item 3's union), usually two to four; a layer absent from the tile costs
+  nothing.
+- Items 1, 3, 4 and 5 hold. Rays (the bounce, the probes, the reflections) take the material's
+  folded flat colour, as now; the microblends come after the layers.
+
 ## D-096 — Authored worlds cooked into packages and streamed by cell ✅ (proposed 2026-11-01 and followed under the owner's word of the night, "Follow recommendations until 10 am"; #214, #338, D-053, D-077, D-094)
 
 **Why:** the owner, 2026-11-01, on the private district (D-083 step 4): "Zomboid uses very old
