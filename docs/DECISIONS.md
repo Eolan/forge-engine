@@ -10422,7 +10422,7 @@ frame by default, `FORGE_CELLS_REALTIME=1` one edit a frame).
 - **The lamps, found on the way:** the district's 11,150 static lights as Forge's lamps (512 a frame
   at most, every one tracing shadow rays) cost about 35 ms by day: `shadow/lamp rays` 9.6 ms, the
   shading's lists 9.8, the probes' and the bounce's lamp-lit hits 9.5 and 8.6. The source casts
-  shadows from few of its lights (`enableLocalShadows` mostly 0): a lamp's shadow made optional, and
+  shadows from few of its lights (its raster mode's local shadows on a twelfth of them): a lamp's shadow made optional, and
   many lights sampled (RTXDI, D-065's amendment) rather than listed, before the night. Measured the
   same night at midnight (6,640 lamps): the lists 43.4 ms, ReSTIR 28.0, ReSTIR with the GI rays'
   hits sampling their lamps (#386) 13.7.
