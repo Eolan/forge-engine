@@ -304,9 +304,12 @@ pub(super) struct DynamicSeed<'a> {
     pub meshes: &'a [GpuMesh],
     pub mesh_finest: &'a [u32],
     pub mesh_sections: &'a [u32],
-    /// Per mesh, its first page; `page_count` pages in all.
+    /// Per mesh, its first page; `page_count` pages in all, the meshes' own the first
+    /// `owned_pages` (the last mesh's end), the small meshes' shared pages after them (#387),
+    /// which no mesh's removal frees.
     pub mesh_pages: &'a [u32],
     pub page_count: u32,
+    pub owned_pages: u32,
     /// Per mesh, its rays' vertices and triangles (first, count each); empty without rays.
     pub ray_ranges: &'a [(u32, u32, u32, u32)],
     pub instances: &'a [GpuInstance],
@@ -351,7 +354,7 @@ impl SceneDynamic {
                     .mesh_pages
                     .get(m + 1)
                     .copied()
-                    .unwrap_or(seed.page_count);
+                    .unwrap_or(seed.owned_pages);
                 let rays = seed.ray_ranges.get(m).copied().unwrap_or_default();
                 Some(LiveMesh {
                     record: *record,

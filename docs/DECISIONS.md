@@ -10407,4 +10407,17 @@ frame by default, `FORGE_CELLS_REALTIME=1` one edit a frame).
   at most, every one tracing shadow rays) cost about 35 ms by day: `shadow/lamp rays` 9.6 ms, the
   shading's lists 9.8, the probes' and the bounce's lamp-lit hits 9.5 and 8.6. The source casts
   shadows from few of its lights (`enableLocalShadows` mostly 0): a lamp's shadow made optional, and
-  many lights sampled (RTXDI, D-065's amendment) rather than listed, before the night.
+  many lights sampled (RTXDI, D-065's amendment) rather than listed, before the night. Measured the
+  same night at midnight (6,640 lamps): the lists 43.4 ms, ReSTIR 28.0, ReSTIR with the GI rays'
+  hits sampling their lamps (#386) 13.7.
+- **The pages packed (the same night, #387):** a static scene's small meshes (at most 64 KiB over
+  up to eight pages) now share pages: the district resident 12,539 pages → 2,436, VRAM 3.64 →
+  2.38 GB, the same frame. A dynamic scene packs too, its editor never freeing the shared pages
+  (`owned_pages`): the streamed district holds 1,932 pages for its view, a quarter of a 1 GiB pool.
+- **Streamed in real time** (one edit a frame, `FORGE_CELLS_REALTIME=1`, a 256 MiB pool, packed
+  pages, no lamps, DLSS Quality, 840 frames at a fixed step): still p50 6.96 / p99 15.0 ms, flying
+  40 m/s 5.89 / 14.3, driving 25 m/s 5.94 / 14.0; the pool full without wanting a page; loading
+  2.2 s; VRAM 2.97 GB. Against the same square resident (packed: 2.38 GB, p99 8.7–9.2 ms) the
+  stream is a worse deal at this size: its tables reserved for the dynamic scene, a top-level
+  structure rebuilt each edit, the second cull without instance cells. It pays where the world is
+  larger than what is seen; next: those three, then a district larger than the square.

@@ -2775,6 +2775,62 @@ pass shrinks only with the raster's work (with the error in drawn pixels, ultra 
 took 0.78 ms). The probes' rays (`gi/probe rays`) vary 0.9 to 1.6 ms between these runs, more
 than the modes move them. The menu open over DLSS quality: 4.55 ms.
 
+## An authored city district at 2560 × 1440 (D-094's first measure, D-083 step 4, 2026-11-01)
+
+The private district of D-083's step 4 (a shipped city game's own data, ±256 m round one street,
+drawn by a private city-blocks scenario; flat colours from its layered materials, D-095 not built):
+262,017 instances of 6,959 meshes within 256 m, 7.1 M unique and 156.5 M instanced triangles, 5.5 M
+clusters, everything resident (`Residency::All`). By day (the scenario's afternoon sun), the street's
+end, `--width 2560 --height 1440`, 600 frames:
+
+| | DLAA | DLSS Quality |
+|---|---|---|
+| GPU frame | 10.6 ms (p99 12.7) | 6.8 ms (p99 9.7) |
+| `gi/trace` | 2.8 | 1.3 |
+| `gi/probe rays` + `blend` | 1.9 | 1.9 |
+| REBLUR (six passes) | 1.1 | |
+| `shading/standard` | 1.5 | 0.7 |
+| `temporal/DLSS` | 0.8 | 0.8 |
+| `shadow/trace` | 0.7 | 0.3 |
+
+In motion under DLSS Quality (`--fixed-step`, 900 frames; the first frame ~100 ms each run): turning
+120°/s p50 6.8 / p99 8.0 ms, driving 25 m/s 5.7 / 9.2, flying at 40 m/s over the roofs into the
+street 5.8 / 8.7. VRAM 3.9 GB (2.3 GB geometry: #387, pages about a tenth full). Loading: the cook
+19.8 s cold on all cores (a 196 MB mesh cache), the scene 2.5 s, the BLAS 0.7 s; 16–20 s a warm run.
+
+- **Within D-094's 8.33 ms under DLSS Quality by day,** the global illumination half the frame. Not
+  under DLAA (10.6 ms).
+- **Streamed by cell** (D-096's first step): 7.0 ms against 6.65, the loading screen 1.2 s against
+  2.8; no memory saved yet (D-096).
+- **At night with its 11,150 lights as lamps** (6,640 within 256 m): 43.4 ms with the light lists
+  (`shading/standard` 9.9, `shadow/lamp rays` 9.6, `gi/probe rays` 9.5, `gi/trace` 8.6), 28.0 ms
+  with ReSTIR DI (`--lamp-restir`: the shading 0.7 + `shadow/lamp restir` 2.9), the GI rays' hits
+  still weighing every lamp in reach (#386). With those hits sampling their lamps past 32 in reach
+  (16 drawn, one kept by weight, the same night): **13.7 ms** (`gi/trace` 8.6 → 2.3, `gi/probe rays`
+  9.4 → 1.8, `shading/reflections` 1.4 weighing every lamp as before). The Bistro's night against
+  Forge's path: the probes 0.097 → 0.096, the frame's light ×1.005 both: the same light.
+- **Packed pages** (#387): resident, VRAM 3.64 → 2.38 GB; streamed, 1,932 of the 1 GiB pool's 8,192
+  pages resident (it was full), so a 256 MiB pool holds the view.
+
+## Instances scaled per axis: the 96-byte record (#380, 2026-11-01)
+
+`Instance` grew from 80 to 96 bytes (`stretch`, each axis's share of the scale). `tools/timings.sh`,
+the build before (1ea8b42c) against it, three runs each, medians (ms): city 5.226 → 5.231, its orbit
+5.194 → 5.231, its flight 4.544 → 4.574, resident 5.155 → 5.144, meshlets 0.299 → 0.299, its orbit
+0.177 → 0.177, side at 700 1.589 → 1.617, the ballad at 900p 2.187 → 2.199 and 1440p 3.760 → 3.773.
+At most +0.04 ms (the orbit's first cluster cull, which reads every instance's record: 0.564 →
+0.611), +1–2 % at most, under 1 % in most views. If it ever weighs, the stretch fits the 80 bytes
+as three half floats.
+
+## Small meshes' pages shared (#387, 2026-11-01)
+
+The scene builder packs every mesh whose pages hold at most 64 KiB together (up to eight pages)
+into shared pages, always resident (`pack_small_meshes`, static scenes; `FORGE_NO_PAGE_PACKING=1`
+for the A/B). The private district (D-083 step 4) resident, the street, 2560 × 1440 under DLSS
+Quality: 6,048 of its 6,959 meshes packed, its pages 12,539 → 2,436 (768 shared), geometry 2,337 →
+1,074 MB, VRAM 3.64 → 2.38 GB; the frame 6.66 → 6.62 ms. A first rule (one page each, half full at
+most) took 1,225 meshes and 151 MB: most props span two or three thin pages.
+
 ## Not measured yet
 
 - **Streaming**: residency pools, request queue depth, drive and decompression throughput.

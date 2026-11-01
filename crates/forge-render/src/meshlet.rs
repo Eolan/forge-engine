@@ -11,7 +11,7 @@
 //! hardware's pixel; a merge pass writes them into the visibility buffer and the depth.
 
 use std::cell::{Cell, RefCell};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
 use bytemuck::{Pod, Zeroable};
@@ -1477,6 +1477,9 @@ pub struct MeshletSceneBuilder {
     /// Instances [`MeshletSceneBuilder::add_instance_scaled`] took mirrored (a negative
     /// determinant) and drew unmirrored: logged when the scene is built.
     mirrored: u32,
+    /// The first of the pages small meshes share (#387, [`Self::pack_small_meshes`]): no mesh
+    /// owns them, so a dynamic scene's editor never frees them.
+    shared_pages: Option<u32>,
     /// What the scene keeps alive for one instance each ([`MeshletSceneBuilder::keep_for`]).
     instance_kept: Vec<(usize, Box<dyn std::any::Any + Send>)>,
     /// The view whose pages a streamed scene loads first
@@ -1525,6 +1528,177 @@ fn table_with_room<T: Pod>(
     })?;
     device.write_buffer_staged(&buffer, 0, bytemuck::cast_slice(data))?;
     Ok(buffer)
+}
+
+/// A mesh whose clusters fill at most this much over all its pages shares a page with other
+/// small meshes (#387): an authored scene's props (cans, signs, pipes) are each a fraction of a
+/// page, often over two or three pages (its roots' and its finer levels').
+const PACK_BYTES: usize = PAGE_SIZE / 2;
+
+impl MeshletSceneBuilder {
+    /// Packs the clusters of every mesh whose pages hold at most [`PACK_BYTES`] together into
+    /// shared pages after the others, always resident (#387): its pages' used bytes one after
+    /// the other, its clusters rebased onto them, the other meshes' pages renumbered in order.
+    /// Skinned meshes keep their own (the skin pass writes their vertices). Same geometry, same
+    /// draws: only where the bytes lie changes. `FORGE_NO_PAGE_PACKING=1` leaves every mesh its
+    /// pages (an A/B).
+    fn pack_small_meshes(&mut self) -> Result<()> {
+        if std::env::var("FORGE_NO_PAGE_PACKING").is_ok_and(|v| v != "0") || self.meshes.is_empty()
+        {
+            return Ok(());
+        }
+        let page_count = self.store.sources.len() as u32;
+        let skinned: HashSet<u32> = self.skins.iter().map(|s| s.mesh).collect();
+        let pages_of = |m: usize, mesh_pages: &[u32]| {
+            (
+                mesh_pages[m],
+                mesh_pages.get(m + 1).copied().unwrap_or(page_count),
+            )
+        };
+        // The meshes that pack: their pages' used bytes one after the other, and where each of
+        // their pages starts in them.
+        let mut packed: Vec<Option<(Vec<u8>, Vec<u32>)>> = vec![None; self.meshes.len()];
+        for (m, record) in self.meshes.iter().enumerate() {
+            let (first, end) = pages_of(m, &self.mesh_pages);
+            // A mesh of more than a few pages is not small: its pages are not read.
+            if end <= first || end - first > 8 || skinned.contains(&(m as u32)) {
+                continue;
+            }
+            let clusters =
+                &self.meshlets[record.meshlet_offset as usize..][..record.meshlet_count as usize];
+            if clusters.iter().any(|c| c.page < first || c.page >= end) {
+                continue;
+            }
+            // The last payload's start in each page is under its used bytes: too many already,
+            // the pages are not read (a file's are unpacked to read them, #215).
+            let mut starts_at = vec![0usize; (end - first) as usize];
+            for c in clusters {
+                let local = (c.page - first) as usize;
+                starts_at[local] = starts_at[local].max(c.payload as usize);
+            }
+            if starts_at.iter().sum::<usize>() > PACK_BYTES {
+                continue;
+            }
+            let pages = self
+                .store
+                .read_pages(first..end)
+                .map_err(|e| GpuError::Unsupported(format!("a small mesh's pages: {e}")))?;
+            let mut used = vec![0usize; (end - first) as usize];
+            for c in clusters {
+                let local = (c.page - first) as usize;
+                let at = local * PAGE_SIZE + c.payload as usize;
+                let header = (c.section & forge_geom::page::SECTION_PACKED != 0).then(|| {
+                    forge_geom::page::Packed::from_header(
+                        &pages[at..at + forge_geom::page::PACKED_HEADER_BYTES],
+                    )
+                });
+                let bytes = forge_geom::page::payload_bytes(
+                    c.vertex_count,
+                    c.triangle_count,
+                    record.uvs != 0,
+                    header,
+                );
+                used[local] = used[local].max(c.payload as usize + bytes);
+            }
+            let used: Vec<usize> = used
+                .iter()
+                .map(|u| u.next_multiple_of(forge_geom::page::PAYLOAD_ALIGN))
+                .collect();
+            if used.iter().sum::<usize>() > PACK_BYTES {
+                continue;
+            }
+            let mut bytes = Vec::new();
+            let mut starts = Vec::with_capacity(used.len());
+            for (local, u) in used.iter().enumerate() {
+                starts.push(bytes.len() as u32);
+                bytes.extend_from_slice(&pages[local * PAGE_SIZE..local * PAGE_SIZE + u]);
+            }
+            packed[m] = Some((bytes, starts));
+        }
+        let count = packed.iter().filter(|p| p.is_some()).count();
+        if count == 0 {
+            return Ok(());
+        }
+        // The kept pages in order, renumbered (their bytes where they are); then the shared
+        // pages, appended to the memory (the packed meshes' old pages stay in it unread).
+        let mut renumbered = vec![PAGE_NONE; page_count as usize];
+        let mut sources = Vec::with_capacity(page_count as usize);
+        let memory = Arc::make_mut(&mut self.store.memory);
+        let mut mesh_pages = Vec::with_capacity(self.meshes.len());
+        for (m, small) in packed.iter().enumerate() {
+            mesh_pages.push(sources.len() as u32);
+            if small.is_some() {
+                continue;
+            }
+            let (first, end) = pages_of(m, &self.mesh_pages);
+            for p in first..end {
+                renumbered[p as usize] = sources.len() as u32;
+                sources.push(self.store.sources[p as usize].clone());
+            }
+        }
+        // Each packed mesh's place: its shared page and its bytes' offset there.
+        let mut placed: Vec<Option<(u32, u32)>> = vec![None; self.meshes.len()];
+        let mut shared: Vec<u32> = Vec::new();
+        let mut cursor = PAGE_SIZE;
+        for (m, small) in packed.iter().enumerate() {
+            let Some((bytes, _)) = small else { continue };
+            if cursor + bytes.len() > PAGE_SIZE {
+                shared.push(sources.len() as u32);
+                sources.push(PageSource::Memory(memory.len()));
+                memory.resize(memory.len() + PAGE_SIZE, 0);
+                cursor = 0;
+            }
+            let page = *shared.last().expect("a shared page");
+            let PageSource::Memory(at) = sources[page as usize] else {
+                unreachable!("the shared pages are in memory")
+            };
+            memory[at + cursor..at + cursor + bytes.len()].copy_from_slice(bytes);
+            placed[m] = Some((page, cursor as u32));
+            cursor += bytes.len();
+        }
+        // The clusters rebased, the roots renumbered with the shared pages added.
+        for (m, record) in self.meshes.iter().enumerate() {
+            let first = self.mesh_pages[m];
+            let clusters = &mut self.meshlets[record.meshlet_offset as usize..]
+                [..record.meshlet_count as usize];
+            for c in clusters {
+                match (placed[m], &packed[m]) {
+                    (Some((page, offset)), Some((_, starts))) => {
+                        c.payload += offset + starts[(c.page - first) as usize];
+                        c.page = page;
+                        if c.child_page != PAGE_NONE {
+                            c.child_page = page;
+                        }
+                    }
+                    _ => {
+                        c.page = renumbered[c.page as usize];
+                        if c.child_page != PAGE_NONE {
+                            c.child_page = renumbered[c.child_page as usize];
+                        }
+                    }
+                }
+            }
+        }
+        let before = page_count;
+        self.root_pages = self
+            .root_pages
+            .iter()
+            .map(|&p| renumbered[p as usize])
+            .filter(|&p| p != PAGE_NONE)
+            .chain(shared.iter().copied())
+            .collect();
+        self.mesh_pages = mesh_pages;
+        self.shared_pages = shared.first().copied();
+        self.store.sources = sources;
+        tracing::info!(
+            meshes = count,
+            pages_before = before,
+            pages = self.store.sources.len(),
+            shared = shared.len(),
+            "small meshes' clusters packed into shared pages (#387)"
+        );
+        Ok(())
+    }
 }
 
 /// `meshlets` (one mesh's clusters) with their pages numbered from `page_base`, the scene's
@@ -2167,6 +2341,8 @@ impl MeshletSceneBuilder {
                 "instances given a mirrored matrix, drawn unmirrored (add_instance_scaled)"
             );
         }
+        // Small meshes share pages (#387); a dynamic scene's editor leaves the shared ones alone.
+        self.pack_small_meshes()?;
         let page_count = self.store.sources.len() as u32;
         if let Some(capacity) = self.dynamic {
             self.check_dynamic(capacity, residency)?;
@@ -2508,6 +2684,7 @@ impl MeshletSceneBuilder {
                 mesh_sections: &self.mesh_sections,
                 mesh_pages: &self.mesh_pages,
                 page_count,
+                owned_pages: self.shared_pages.unwrap_or(page_count),
                 ray_ranges: &ray_ranges,
                 instances: &self.instances,
                 kept: std::mem::take(&mut self.instance_kept),

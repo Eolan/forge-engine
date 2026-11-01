@@ -6647,53 +6647,11 @@ float lamp_weight(Lamp lamp, float3 world, float3 n, float near = 0.0)
     return luminance / max(dist2, least * least) * ndl * window * window * lamp_beam(lamp, d / max(dist, 1e-6));
 }
 
-// The lamps' light on a ray's hit (D-065: the probes lit by the lamps, and the mirror rays' hits),
-// in the resolve's units: one lamp of those that light region `region` (`lamp_lights`;
-// REGION_NONE: all) whose reach the hit is in, picked by its unshadowed light there, and one
-// shadow ray to its middle (a flat piece's to a point of its disc), the light over the chance it
-// had of being picked. A probe's
-// updates average the picks as they average its rays' directions; a room's walls send its lamps'
-// light back to its probes, one bounce a frame (#53). `seed`: the ray's own number, mixed with
-// the frame's. `probe`: a probe's ray, which leaves the street lamps out (`hit_lamp_weight`).
-float3 hit_lamps(Frame* f, RayHit hit, uint region, uint seed, bool probe)
+// The light at a ray's hit of `lamp`, chosen among the lamps in reach with the chance its weight's
+// share of `total` (`hit_lamps_weighed`), through one shadow ray: its colour of luminance 1 times
+// every lamp's light, w / (w / total). `n` the hit's random number (a flat piece's point on it).
+float3 hit_lamp_through(Frame* f, RayHit hit, Lamp lamp, uint n, float total)
 {
-    uint count = f[0].lamp_count;
-    if (count == 0u || f[0].lamps == nullptr || f[0].tlas == 0)
-        return float3(0.0);
-    LampRuns runs = lamp_runs(f, region, region);
-    float total = 0.0;
-    for (uint r = 0u; r < 2u; r++)
-    {
-        for (uint e = runs.run[r].x; e < runs.run[r].y; e++)
-            total += hit_lamp_weight(f[0].lamps[lamp_at(f, runs, e)], hit, region, probe);
-    }
-    if (total <= 0.0)
-        return float3(0.0);
-    uint n = (seed ^ (f[0].noise_frame * 0x9E3779B9u)) * 0x27D4EB2Fu;
-    n ^= n >> 15;
-    n *= 0x846CA68Bu;
-    n ^= n >> 16;
-    float pick = float(n >> 8) * (1.0 / 16777216.0) * total;
-    uint chosen = count;
-    for (uint r = 0u; r < 2u; r++)
-    {
-        if (chosen < count && pick <= 0.0)
-            break;
-        for (uint e = runs.run[r].x; e < runs.run[r].y; e++)
-        {
-            uint i = lamp_at(f, runs, e);
-            float w = hit_lamp_weight(f[0].lamps[i], hit, region, probe);
-            if (w <= 0.0)
-                continue;
-            chosen = i;
-            pick -= w;
-            if (pick <= 0.0)
-                break;
-        }
-    }
-    if (chosen >= count)
-        return float3(0.0);
-    Lamp lamp = f[0].lamps[chosen];
     // Aimed from where it starts (`lamp_ray`, #298): aimed from the hit and started SHADOW_BIAS
     // off it, the ray ran beside the line to the lamp and ended up to 15 cm from its middle, in
     // its globe or its fitting, and a room's light moved by up to an EV with the start. A flat
@@ -6713,6 +6671,114 @@ float3 hit_lamps(Frame* f, RayHit hit, uint region, uint seed, bool probe)
     // Its colour of luminance 1 times every lamp's light: its own over its chance, w / total.
     float3 colour = lamp.colour_reach.rgb / max(dot(lamp.colour_reach.rgb, float3(0.2126, 0.7152, 0.0722)), 1e-9);
     return hit.albedo * colour * (total / max(f[0].sun_illuminance, 1e-9));
+}
+
+
+// More lamps in reach of a ray's hit than this: `HIT_LAMP_DRAWS` of them drawn at random stand for
+// them all (#386, an authored city's hundreds of lamps in reach), each hit weighing a few lamps
+// rather than every one twice. At or under it every lamp is weighed (`hit_lamps`), as before.
+static const uint HIT_LAMPS_EXACT = 32u;
+static const uint HIT_LAMP_DRAWS = 16u;
+
+// `hit_lamps_weighed` over many lamps by resampled importance sampling: `HIT_LAMP_DRAWS` lamps
+// drawn uniformly from the `reach` in the hit's two runs (`first` in the first), one of them kept
+// with the chance of its weight among theirs (a reservoir), and every lamp's light estimated as
+// their weights' sum times `reach / HIT_LAMP_DRAWS`: unbiased, its noise the probes' and the
+// bounce's denoisers take. The pick (the lamp count for none), the estimate, and the hit's random
+// number advanced past the draws, so a flat piece's point on it owes nothing to the pick.
+uint hit_lamps_draw(Frame* f, RayHit hit, uint region, uint seed, bool probe, LampRuns runs, uint first, uint reach, out float total, out uint n)
+{
+    n = (seed ^ (f[0].noise_frame * 0x9E3779B9u)) * 0x27D4EB2Fu;
+    float sum = 0.0;
+    uint chosen = f[0].lamp_count;
+    for (uint k = 0u; k < HIT_LAMP_DRAWS; k++)
+    {
+        n ^= n >> 15;
+        n *= 0x846CA68Bu;
+        n ^= n >> 16;
+        uint e = min(uint(float(n >> 8) * (1.0 / 16777216.0) * float(reach)), reach - 1u);
+        uint entry = e < first ? runs.run[0].x + e : runs.run[1].x + (e - first);
+        uint i = lamp_at(f, runs, entry);
+        float w = hit_lamp_weight(f[0].lamps[i], hit, region, probe);
+        if (w <= 0.0)
+            continue;
+        sum += w;
+        uint m = n * 0x85EBCA6Bu;
+        m ^= m >> 13;
+        if (float(m >> 8) * (1.0 / 16777216.0) * sum < w)
+            chosen = i;
+    }
+    n ^= n >> 15;
+    n *= 0x846CA68Bu;
+    n ^= n >> 16;
+    n = n * 0xC2B2AE35u + 0x165667B1u;
+    total = sum * float(reach) / float(HIT_LAMP_DRAWS);
+    return chosen;
+}
+
+float3 hit_lamps_weighed(Frame* f, RayHit hit, uint region, uint seed, bool probe, bool sample)
+{
+    uint count = f[0].lamp_count;
+    if (count == 0u || f[0].lamps == nullptr || f[0].tlas == 0)
+        return float3(0.0);
+    LampRuns runs = lamp_runs(f, region, region);
+    uint first = runs.run[0].y - runs.run[0].x;
+    uint reach = first + (runs.run[1].y - runs.run[1].x);
+    float total = 0.0;
+    uint n = 0u;
+    uint chosen = count;
+    if (sample && reach > HIT_LAMPS_EXACT)
+        chosen = hit_lamps_draw(f, hit, region, seed, probe, runs, first, reach, total, n);
+    else
+    {
+        for (uint r = 0u; r < 2u; r++)
+        {
+            for (uint e = runs.run[r].x; e < runs.run[r].y; e++)
+                total += hit_lamp_weight(f[0].lamps[lamp_at(f, runs, e)], hit, region, probe);
+        }
+        if (total <= 0.0)
+            return float3(0.0);
+        n = (seed ^ (f[0].noise_frame * 0x9E3779B9u)) * 0x27D4EB2Fu;
+        n ^= n >> 15;
+        n *= 0x846CA68Bu;
+        n ^= n >> 16;
+        float pick = float(n >> 8) * (1.0 / 16777216.0) * total;
+        chosen = count;
+        for (uint r = 0u; r < 2u; r++)
+        {
+            if (chosen < count && pick <= 0.0)
+                break;
+            for (uint e = runs.run[r].x; e < runs.run[r].y; e++)
+            {
+                uint i = lamp_at(f, runs, e);
+                float w = hit_lamp_weight(f[0].lamps[i], hit, region, probe);
+                if (w <= 0.0)
+                    continue;
+                chosen = i;
+                pick -= w;
+                if (pick <= 0.0)
+                    break;
+            }
+        }
+    }
+    if (chosen >= count)
+        return float3(0.0);
+    return hit_lamp_through(f, hit, f[0].lamps[chosen], n, total);
+}
+
+// The lamps' light on a ray's hit (D-065: the probes lit by the lamps, and the mirror rays' hits),
+// in the resolve's units: one lamp of those that light region `region` (`lamp_lights`;
+// REGION_NONE: all) whose reach the hit is in, picked by its unshadowed light there, and one
+// shadow ray to its middle (a flat piece's to a point of its disc), the light over the chance it
+// had of being picked. A probe's updates average the picks as they average its rays' directions; a
+// room's walls send its lamps' light back to its probes, one bounce a frame (#53). `seed`: the
+// ray's own number, mixed with the frame's. `probe`: a probe's ray, which leaves the street lamps
+// out (`hit_lamp_weight`). For a ray whose light is accumulated or denoised (the probes', the
+// bounce's, the cache's, the path's): past `HIT_LAMPS_EXACT` lamps in reach it samples them
+// (`hit_lamps_draw`). A mirror's ray, seen as it is, weighs every lamp (`trace_reflection_seen`).
+float3 hit_lamps(Frame* f, RayHit hit, uint region, uint seed, bool probe)
+{
+    return hit_lamps_weighed(f, hit, region, seed, probe, true);
 }
 
 // Whether triangle `primitive` of instance `instance` is a leaf's (`MATERIAL_FLAG_FOLIAGE`).
@@ -6823,7 +6889,7 @@ float4 trace_reflection_seen(Frame* f, float4* sky, ProbeField* probes, float3 o
     float3 light = metal
         ? lerp(hit_sunlight(f, hit) + hit.albedo * ambient, hit_metal_light(f, sky, hit, direction, r, ambient) + hit.emissive, hit.metal)
         : hit_sunlight(f, hit) + hit.albedo * ambient;
-    return float4(light + (1.0 - (metal ? hit.metal : 0.0)) * hit_lamps(f, hit, REGION_NONE, seed, false), 1.0);
+    return float4(light + (1.0 - (metal ? hit.metal : 0.0)) * hit_lamps_weighed(f, hit, REGION_NONE, seed, false, false), 1.0);
 }
 
 // `trace_reflection_from` with REFLECTION_START: the water's and the glass's rays, which start on a
