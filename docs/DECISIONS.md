@@ -10428,3 +10428,13 @@ frame by default, `FORGE_CELLS_REALTIME=1` one edit a frame).
   still frame 7.29 → 6.80 ms, the flight's 3.5 ms. The p99 stays near 14 ms along the paths
   (13.7–14.0): the stream's edits, not the cull, set its worst frames; to profile next. The auto
   threshold suits the static scenes it was measured on; a dynamic scene's is to measure.
+- **The edits' worst frames, explained and fixed (the same night):** not the top-level structure
+  (without rays the flight's p50 and p99 stayed 8.4 ms apart, 2.16 / 10.6) nor the frame thread
+  (0.02 ms to apply an edit) but the edit's copies (`scene/edit`, on the copy engine, which the
+  culls wait for): one region per changed instance record, 3,500–36,700 when cells came in, about
+  0.5 µs each, 3–19 ms of GPU on the frames that published a loaded cell. A copy now folds into
+  the one before when it continues it at both ends (`forge_gpu::commands::push_copy`, and
+  `write_buffers_staged`, the worker's records for the structure): a cell's new instances, in
+  consecutive slots, copy as a few regions. The flight at 40 m/s: p50 5.77 / p99 13.7–14.0 →
+  5.79 / 7.65 (two runs: 7.65, 7.68), no frame's GPU over 8 ms; the worker's longest edit 47 →
+  23 ms.

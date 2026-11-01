@@ -9,6 +9,26 @@ use crate::error::{GpuError, Result};
 use crate::pipeline::Pipeline;
 use crate::timers::GpuTimerSlot;
 
+/// Adds a copy of `size` bytes from `src` to `dst` (offsets in their buffers) to `regions`,
+/// folded into the last one when it continues it at both ends. A copy engine pays for each
+/// region: a dynamic scene's edit copying 36,710 instance records one by one took 19 ms of the
+/// frame (0.5 µs a region on an RTX 5070 Ti, D-096), its new instances in consecutive slots.
+pub(crate) fn push_copy(regions: &mut Vec<vk::BufferCopy>, src: u64, dst: u64, size: u64) {
+    if let Some(last) = regions.last_mut()
+        && last.src_offset + last.size == src
+        && last.dst_offset + last.size == dst
+    {
+        last.size += size;
+        return;
+    }
+    regions.push(
+        vk::BufferCopy::default()
+            .src_offset(src)
+            .dst_offset(dst)
+            .size(size),
+    );
+}
+
 /// A command buffer in the recording state, tied to the device that owns it.
 pub struct Commands<'a> {
     device: &'a Device,
@@ -553,7 +573,8 @@ impl<'a> Commands<'a> {
     }
 
     /// Copies `regions` (source offset, destination offset, size) from `src` to `dst` in one
-    /// command (`TRANSFER_SRC` / `TRANSFER_DST` usage). Nothing is recorded for no region.
+    /// command (`TRANSFER_SRC` / `TRANSFER_DST` usage), each region that continues the one before
+    /// at both ends folded into it ([`push_copy`]). Nothing is recorded for no region.
     pub fn copy_buffer_regions(
         &self,
         src: &crate::Buffer,
@@ -563,15 +584,11 @@ impl<'a> Commands<'a> {
         if regions.is_empty() {
             return;
         }
-        let regions: Vec<vk::BufferCopy> = regions
-            .iter()
-            .map(|&(src_offset, dst_offset, size)| {
-                vk::BufferCopy::default()
-                    .src_offset(src_offset)
-                    .dst_offset(dst_offset)
-                    .size(size)
-            })
-            .collect();
+        let mut merged = Vec::with_capacity(regions.len().min(1024));
+        for &(src_offset, dst_offset, size) in regions {
+            push_copy(&mut merged, src_offset, dst_offset, size);
+        }
+        let regions = merged;
         // SAFETY: recording state; every region lies inside both buffers, the destination
         // regions do not overlap, and both buffers outlive the frame (the caller's
         // responsibility).
@@ -692,5 +709,35 @@ impl<'a> Commands<'a> {
         // complete indirect command at `offset` (the caller's responsibility).
         unsafe { loader.cmd_draw_mesh_tasks_indirect(self.cb, buffer.raw(), offset, 1, 12) };
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Records in consecutive slots, staged one after another, copy as one region; a gap at
+    /// either end starts another.
+    #[test]
+    fn copies_that_continue_each_other_fold() {
+        let mut regions = Vec::new();
+        for k in 0..1000u64 {
+            push_copy(&mut regions, k * 96, (500 + k) * 96, 96);
+        }
+        // A gap in the destination (a slot skipped), then one in the source.
+        push_copy(&mut regions, 1000 * 96, 2000 * 96, 96);
+        push_copy(&mut regions, 1002 * 96, 2001 * 96, 96);
+        let spans: Vec<(u64, u64, u64)> = regions
+            .iter()
+            .map(|r| (r.src_offset, r.dst_offset, r.size))
+            .collect();
+        assert_eq!(
+            spans,
+            [
+                (0, 500 * 96, 1000 * 96),
+                (1000 * 96, 2000 * 96, 96),
+                (1002 * 96, 2001 * 96, 96)
+            ]
+        );
     }
 }

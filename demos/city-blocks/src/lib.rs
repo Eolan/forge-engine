@@ -3397,6 +3397,7 @@ impl Demo for Gallery {
                 glass: None,
                 lamps: &mut table,
             };
+            let started = std::time::Instant::now();
             let took = if std::env::var_os("FORGE_CELLS_REALTIME").is_some() {
                 streamer.update(&ctx.device, &mut self.scene, &mut systems, 1, None)
             } else {
@@ -3408,6 +3409,7 @@ impl Demo for Gallery {
                     loaded = took.loaded,
                     unloaded = took.unloaded,
                     worker_ms = took.worker_s * 1e3,
+                    frame_ms = started.elapsed().as_secs_f64() * 1e3,
                     "cells streamed (D-096)"
                 ),
                 Ok(_) => {}

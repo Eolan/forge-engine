@@ -2801,7 +2801,10 @@ street 5.8 / 8.7. VRAM 3.9 GB (2.3 GB geometry: #387, pages about a tenth full).
 - **Within D-094's 8.33 ms under DLSS Quality by day,** the global illumination half the frame. Not
   under DLAA (10.6 ms).
 - **Streamed by cell** (D-096's first step): 7.0 ms against 6.65, the loading screen 1.2 s against
-  2.8; no memory saved yet (D-096).
+  2.8; no memory saved yet (D-096). In real time (one edit a frame, a 256 MiB pool, instance
+  occlusion on), flying at 40 m/s: p50 5.79 / p99 7.65 ms since an edit's instance records copy
+  as runs, not one region each (p99 13.7–14.0 before: `scene/edit` 3–19 ms on the frames that
+  published a loaded cell).
 - **At night with its 11,150 lights as lamps** (6,640 within 256 m): 43.4 ms with the light lists
   (`shading/standard` 9.9, `shadow/lamp rays` 9.6, `gi/probe rays` 9.5, `gi/trace` 8.6), 28.0 ms
   with ReSTIR DI (`--lamp-restir`: the shading 0.7 + `shadow/lamp restir` 2.9), the GI rays' hits

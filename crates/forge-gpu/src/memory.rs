@@ -673,13 +673,25 @@ impl Device {
                 }
                 let n = (STAGING_CHUNK - filled).min(data.len() - done);
                 staging.write(filled as u64, &data[done..done + n]);
-                regions.push((
-                    dst.raw(),
-                    vk::BufferCopy::default()
-                        .src_offset(filled as u64)
-                        .dst_offset(offset + done as u64)
-                        .size(n as u64),
-                ));
+                // A write continuing the last one into the same buffer joins its copy: the
+                // copy engine pays per region (`commands::push_copy`).
+                let (src, at) = (filled as u64, offset + done as u64);
+                match regions.last_mut() {
+                    Some((last_dst, last))
+                        if *last_dst == dst.raw()
+                            && last.src_offset + last.size == src
+                            && last.dst_offset + last.size == at =>
+                    {
+                        last.size += n as u64;
+                    }
+                    _ => regions.push((
+                        dst.raw(),
+                        vk::BufferCopy::default()
+                            .src_offset(src)
+                            .dst_offset(at)
+                            .size(n as u64),
+                    )),
+                }
                 filled += n;
                 done += n;
             }
