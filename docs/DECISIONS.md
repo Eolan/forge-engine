@@ -5697,6 +5697,22 @@ In the Bistro's night view the Moon is 0.4 % of the light (the tiles' mean ratio
 median 0.999): not what darkened the far street. `tools/gi-compare.sh`'s nights run moonless from
 now, as Falcor's references are lit.
 
+**A lamp's shadow optional** (2026-11-01, #386, under the owner's "Follow recommendations until 10
+am"): `Lamp::shadows`, true for every lamp but an authored scene's whose data marks it without (a
+shipped city's raster mode shadows 518 of its 6,426 static lights, its ray-traced modes all of
+them). A shadowless lamp's light takes no shadow ray: not in the light lists (`lamp_add`,
+`lamp_look`), at the rays' hits (`hit_lamp_through`: the bounce, the probes, the reflections) nor
+in ReSTIR DI (its sample seen without one, `RAB_GetConservativeVisibility`). The record grew 96 →
+112 bytes (`flags`): the Bistro's night 18.76 → 18.76 ms with the lists, 15.66 → 15.42 with ReSTIR
+(two runs each); with every lamp shadowed the images are unchanged (the lab's set and the Bistro's night with its
+lists, ReSTIR DI and the street lamps' ReSTIR: 0 px against the build before; a first run of the
+base's lists differed from its own second in 234 pixels, a flake of the base's). The private
+district's night under DLSS Quality at 2560 × 1440 with only the lights its source's raster mode
+shadows (465 of 6,640 within 256 m): 14.6 → 14.0 ms (two runs each). Its shadow rays are not where
+its night goes (the lamps' weighing is); the option stays for authored data, and whether the
+district matches the raster mode (its lights then reach through walls) or the ray-traced one is the
+owner's call.
+
 ## D-066 — Pieces with sockets: one connector schema for generation, the anomaly check and player building ✅ (proposed 2026-10-16 on the owner's walk of #266; the owner's go the same evening)
 
 **The question:** the owner, walking the village: "would using some kind of snap system with the

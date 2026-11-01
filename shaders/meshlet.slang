@@ -708,7 +708,17 @@ public struct Lamp
     public float4 beam_edge;       // x: the cosine beyond which a cone's light is none; yzw: a flat
                                    // piece's turn and half sizes (`lamp_flat`), else 0; a
                                    // lantern's (`lamp_prism`): its shares up and down, -1, 0
+    public uint4 flags;            // x: LAMP_SHADOWLESS when it casts no shadow; yzw 0
 };
+
+// `Lamp::flags.x` (lamps.rs, `LAMP_SHADOWLESS`): a lamp whose light casts no shadow (#386), an
+// authored scene's that its data marks without; no shadow ray is traced to it.
+static const uint LAMP_SHADOWLESS = 1u;
+
+bool lamp_shadowless(Lamp lamp)
+{
+    return (lamp.flags.x & LAMP_SHADOWLESS) != 0u;
+}
 
 // Whether `lamp` lights a surface in region `region` (or, across a doorway, `other`): a lamp
 // lights its room's region and those its doorways open into (lamps.rs, `Lamp::regions`). Every
@@ -3999,7 +4009,9 @@ void lamp_add<let SHADOWS : int>(Frame* f, Lamp lamp, uint i, float scale, float
             float r = radius * sqrt(u.x);
             offset = (t * cos(a) + b * sin(a)) * r;
         }
-        if (hidden || ray_blocked(f, lamp_ray(lamp, world, n, bias, offset)))
+        // A shadowless lamp (#386) skips the ray, not a flat piece's point behind the horizon,
+        // as at the rays' hits (`hit_lamp_through`).
+        if (hidden || (!lamp_shadowless(lamp) && ray_blocked(f, lamp_ray(lamp, world, n, bias, offset))))
             return;
     }
     // Let go between 80 % and all of its reach, so its edge does not show.
@@ -6666,7 +6678,7 @@ float3 hit_lamp_through(Frame* f, RayHit hit, Lamp lamp, uint n, float total)
         h ^= h >> 13;
         offset = lamp_rect_target(lamp, hit.position, hit.n, float2(float(h & 0xFFFFu), float(h >> 16)) * (2.0 / 65536.0) - 1.0, hidden);
     }
-    if (hidden || ray_blocked(f, lamp_ray(lamp, hit.position, hit.n, hit.shadow_start, offset)))
+    if (hidden || (!lamp_shadowless(lamp) && ray_blocked(f, lamp_ray(lamp, hit.position, hit.n, hit.shadow_start, offset))))
         return float3(0.0);
     // Its colour of luminance 1 times every lamp's light: its own over its chance, w / total.
     float3 colour = lamp.colour_reach.rgb / max(dot(lamp.colour_reach.rgb, float3(0.2126, 0.7152, 0.0722)), 1e-9);
@@ -8619,8 +8631,12 @@ float2 lamp_look(Frame* f, Lamp lamp, float3 world, float3 n, float bias, float2
         float3 offset = lamp_rect_point(lamp, disc_to_square(disc));
         if (lamp_rect_hidden(lamp, world, n, offset))
             return float2(0.0);
+        if (lamp_shadowless(lamp))
+            return float2(1.0);
         return float2(ray_blocked(f, lamp_ray(lamp, world, n, bias, offset)) ? 0.0 : 1.0, 1.0);
     }
+    if (lamp_shadowless(lamp))
+        return float2(1.0);
     float3 d = lamp.position_radius.xyz - world;
     float3 t;
     float3 b;

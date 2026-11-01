@@ -66,6 +66,11 @@ pub struct Lamp {
     /// Which way its light goes (#288): every way, in a cone, or from a flat face.
     /// [`Self::candela`] is the intensity at its brightest, along a cone's or a face's axis.
     pub emission: Emission,
+    /// Whether its light casts shadows (#386): every lamp's does but an authored scene's whose
+    /// data marks it without (a shipped city's raster mode shadows a twelfth of its lights).
+    /// Without, no shadow ray is traced to it: its light reaches every surface in its reach and
+    /// its regions, through what stands between.
+    pub shadows: bool,
 }
 
 impl Lamp {
@@ -296,9 +301,14 @@ pub struct GpuLamp {
     /// x: the cosine beyond which a cone's light is none; for a flat piece ([`Emission::Flat`]):
     /// y its turn, zw its half sizes (z over 0 marks it flat); else yzw 0.
     pub beam_edge: [f32; 4],
+    /// x: [`LAMP_SHADOWLESS`] when it casts no shadow ([`Lamp::shadows`]); yzw 0.
+    pub flags: [u32; 4],
 }
 
-const _: () = assert!(std::mem::size_of::<GpuLamp>() == 96);
+const _: () = assert!(std::mem::size_of::<GpuLamp>() == 112);
+
+/// [`GpuLamp::flags`]: a lamp without shadows (`LAMP_SHADOWLESS` in `meshlet.slang`).
+pub const LAMP_SHADOWLESS: u32 = 1;
 
 /// How far a lamp's light counts, metres: where it falls to [`LEAST_LUX`].
 pub fn reach(candela: f32) -> f32 {
@@ -410,6 +420,7 @@ pub fn street_lights(lamps: &[(Vec3, f32, f32, bool)]) -> Vec<Lamp> {
                 tint: Vec3::ONE,
                 regions,
                 emission: Emission::STREET,
+                shadows: true,
             });
         }
     }
@@ -554,6 +565,7 @@ pub(crate) fn gpu_lamp(l: &Lamp, share: f32) -> GpuLamp {
         regions: l.regions,
         beam,
         beam_edge,
+        flags: [if l.shadows { 0 } else { LAMP_SHADOWLESS }, 0, 0, 0],
     }
 }
 
@@ -567,6 +579,7 @@ pub const DARK: Lamp = Lamp {
     tint: Vec3::ONE,
     regions: EVERY_REGION,
     emission: Emission::Every,
+    shadows: true,
 };
 
 /// A set of lamps in a [`LampTable`].
@@ -903,6 +916,7 @@ mod tests {
             tint: Vec3::ONE,
             regions: EVERY_REGION,
             emission: Emission::Every,
+            shadows: true,
         };
         // 100 cd reaches about 45 m.
         assert!((reach(100.0) - 44.72).abs() < 0.01);
@@ -941,6 +955,7 @@ mod tests {
                 tint: Vec3::ONE,
                 regions,
                 emission: Emission::Every,
+                shadows: true,
             }
         };
         // Six hundred house lamps within 10 m (more than MAX_LAMPS), thirty street lamps 60 to
@@ -988,6 +1003,7 @@ mod tests {
                 tint: Vec3::ONE,
                 regions,
                 emission: Emission::STREET,
+                shadows: true,
             }
         };
         // A street of a hundred lamps 25 m apart and a house lamp; the camera at its start.
@@ -1040,6 +1056,7 @@ mod tests {
                 tint: Vec3::ONE,
                 regions: EVERY_REGION,
                 emission: Emission::Every,
+                shadows: true,
             })
             .collect();
         let light = |camera: Vec3| {

@@ -1178,6 +1178,7 @@ fn glow_lamp(g: &Glow) -> Option<Lamp> {
         tint: g.luminance / luminance,
         regions: EVERY_REGION,
         emission,
+        shadows: true,
     })
 }
 

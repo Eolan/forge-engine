@@ -221,6 +221,7 @@ struct RAB_LightSample
     float solid_angle_pdf; // of its direction: over the cone the sphere fills, or the rectangle's
     float3 radiance;      // cd/m² per channel, let go at the lamp's reach; 0 where it does not light the surface
     float short_of;       // how far before `position` its shadow ray ends, besides the 2 cm (`RAB_GetConservativeVisibility`)
+    bool shadowless;      // its lamp casts no shadow (`lamp_shadowless`): seen without a ray
 };
 
 RAB_LightInfo RAB_EmptyLightInfo()
@@ -232,6 +233,7 @@ RAB_LightInfo RAB_EmptyLightInfo()
     l.regions_b = uint4(REGION_NONE);
     l.beam = float4(0.0);
     l.beam_edge = float4(0.0);
+    l.flags = uint4(0u);
     return l;
 }
 
@@ -242,6 +244,7 @@ RAB_LightSample RAB_EmptyLightSample()
     s.solid_angle_pdf = 0.0;
     s.radiance = float3(0.0);
     s.short_of = 0.0;
+    s.shadowless = false;
     return s;
 }
 
@@ -305,6 +308,7 @@ bool restir_lights(Lamp lamp, float y, uint region, uint other)
 RAB_LightSample restir_flat_sample(Lamp lamp, RAB_Surface surface, float2 uv)
 {
     RAB_LightSample s = RAB_EmptyLightSample();
+    s.shadowless = lamp_shadowless(lamp);
     float3 d = lamp.position_radius.xyz - surface.world;
     float reach = lamp.colour_reach.w;
     float dist2 = dot(d, d);
@@ -333,6 +337,7 @@ RAB_LightSample RAB_SamplePolymorphicLight(RAB_LightInfo lamp, RAB_Surface surfa
     if (lamp_flat(lamp))
         return restir_flat_sample(lamp, surface, uv);
     RAB_LightSample s = RAB_EmptyLightSample();
+    s.shadowless = lamp_shadowless(lamp);
     float radius = lamp.position_radius.w;
     float3 d = lamp.position_radius.xyz - surface.world;
     float dist2 = dot(d, d);
@@ -416,11 +421,12 @@ float2 RAB_GetEnvironmentMapRandXYFromDir(float3 dir) { return float2(0.0); }
 float RAB_EvaluateEnvironmentMapSamplingPdf(float3 dir) { return 0.0; }
 
 // Whether the sample's light reaches the surface: one shadow ray, ending short of the bulb (where
-// its sphere is nearest) or 2 cm short of a flat piece's rectangle.
+// its sphere is nearest) or 2 cm short of a flat piece's rectangle; none to a lamp that casts no
+// shadow (#386).
 bool RAB_GetConservativeVisibility(RAB_Surface surface, RAB_LightSample s)
 {
     Frame* f = restir_push.frame;
-    if (f[0].tlas == 0)
+    if (f[0].tlas == 0 || s.shadowless)
         return true;
     RayDesc ray;
     ray.Origin = surface.world + surface.normal * surface.bias;

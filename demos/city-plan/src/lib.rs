@@ -3746,6 +3746,7 @@ fn home_lamps(
                     tint: Vec3::ONE,
                     regions: slots,
                     emission: forge_render::lamps::Emission::Every,
+                    shadows: true,
                 },
                 on,
                 kind: l.kind,

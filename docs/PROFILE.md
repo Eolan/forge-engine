@@ -2819,7 +2819,14 @@ street 5.8 / 8.7. VRAM 3.9 GB (2.3 GB geometry: #387, pages about a tenth full).
 - **Its turning meshes as movers** (fans, turning signs: 549 within 256 m, each with its own
   material rows, `MeshletSceneBuilder::set_instance_material`): the street by day at 1600 × 900,
   1,200 frames, two runs each, 5.22 → 5.35 ms (+0.13). Their structure's build (`movers/tlas`)
-  shows 0.38 ms, more than 549 records take: its zone counts the wait on the work before it.
+  shows 0.38 ms, more than 549 records take: its zone counts the wait on the work before it. At
+  night (ReSTIR DI, DLSS Quality at 2560 × 1440): 14.02 → 14.48 ms, every ray also walking the
+  movers' structure (`shadow/lamp restir` +0.19, `gi/trace` +0.2). Not their build: refitted
+  (`FORGE_TLAS_REFIT=1`) `movers/tlas` shows 0.03 ms and the frame is the same; nor their hits:
+  drawn but seen by no ray, 14.46 against 14.41. To try: turning meshes traced at rest in the static
+  structure, or the movers' walk skipped by the rays none of them is seen by.
+- **The night's lamps without most shadows** (D-065's amendment, #386): only the lights the source's
+  raster mode shadows (465 of 6,640), 14.6 → 14.0 ms; the shadow rays are a small part of the night.
 
 ## Instances scaled per axis: the 96-byte record (#380, 2026-11-01)
 
