@@ -35,9 +35,9 @@ tools/verify.sh --dry-run  # only says which tier and why
 exactly as CI:
 
 ```
-cargo build --release
+cargo build --release                    # the engine and its tools (the default members); demos: --workspace or -p NAME
 FORGE_GPU_TESTS=1 cargo test --release   # the GPU pass tests too; CI has no GPU and skips them
-cargo clippy --release --all-features --all-targets -- -D warnings
+cargo clippy --release --workspace --all-features --all-targets -- -D warnings   # the demos linted too
 cargo fmt --all -- --check
 cargo run --release -q -p credits -- --check
 bash tools/luau-check.sh   # the Luau game scripts (D-072), skipped without luau-lsp locally

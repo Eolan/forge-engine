@@ -20,6 +20,9 @@ set -uo pipefail
 root=$(cd "$(dirname "$0")/.." && pwd)
 base=${1:?usage: tools/timings.sh BASE_BIN [NEW_BIN] [ZONES]}
 new=${2:-$root/target/release}
+# The demos it runs, built when they are this tree's (a plain build leaves them out since 2026-11-01),
+# unless the caller built them (FORGE_BUILT=1, tools/verify.sh).
+[ -z "${FORGE_BUILT:-}" ] && [ "$new" = "$root/target/release" ] && { (cd "$root" && cargo build --release -q --workspace) || exit 1; }
 zones=${3:-}
 keep=${FORGE_KEEP_LOGS:-0}
 sets=" ${FORGE_SETS:-all} "

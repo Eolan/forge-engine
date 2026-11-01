@@ -47,6 +47,9 @@ dlss_dll() {
 root=$(cd "$(dirname "$0")/.." && pwd)
 out=${1:?usage: tools/captures.sh OUT [BIN]}
 bin=${2:-$root/target/release}
+# The demos it runs, built when they are this tree's (a plain build leaves them out since 2026-11-01),
+# unless the caller built them (FORGE_BUILT=1, tools/verify.sh).
+[ -z "${FORGE_BUILT:-}" ] && [ "$bin" = "$root/target/release" ] && { (cd "$root" && cargo build --release -q --workspace) || exit 1; }
 keep=${FORGE_KEEP_LOGS:-0}
 sets=" ${FORGE_SETS:-all} "
 sets=${sets//,/ }
@@ -82,7 +85,7 @@ lab=$bin/physics-lab$exe
 # The planet (#220), which a baseline from before it lacks: its captures are then skipped.
 planet=$bin/planet$exe
 for demo in "$meshlets" "$asteroids" "$city"; do
-  [ -f "$demo" ] || { echo "missing $demo: build with cargo build --release" >&2; exit 1; }
+  [ -f "$demo" ] || { echo "missing $demo: build with cargo build --release --workspace" >&2; exit 1; }
 done
 cd "$root"
 log=$(mktemp)

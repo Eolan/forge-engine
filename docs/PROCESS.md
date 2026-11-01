@@ -306,8 +306,9 @@ so its images differ from run to run. A scripted run (no settings file: `FORGE_C
 every script sets) keeps `off`, the probes, unless it sets `r.gi.cache` itself;
 `tools/gi-compare.sh` sets each technique and measures them by error.
 
-1. **Build the whole workspace first:** `cargo build --release`. Rebuilding only the demo you
-   changed leaves the other demos stale. A stale binary writes an older frame block, and every
+1. **Build the whole workspace first:** `cargo build --release --workspace` (a plain
+   `cargo build` builds the engine and its tools alone, the workspace's default members since
+   2026-11-01). Rebuilding only the demo you changed leaves the other demos stale. A stale binary writes an older frame block, and every
    capture then "differs" for the wrong reason.
 2. **The batch:** `tools/captures.sh OUT [BIN]`.
    - The whole batch writes 58 captures: meshlets, the ballad at fixed steps (and its HDR
@@ -317,8 +318,8 @@ every script sets) keeps `off`, the probes, unless it sets `r.gi.cache` itself;
      `compare.sh` compares to the code. `OUT/batch.txt` records the commit, the sets, the
      driver and the binaries' hashes.
    - To capture an older commit, build it in a tree of its own:
-     `git worktree add --detach ../forge-base <commit>`, then `cargo build --release` in that
-     tree, then `tools/captures.sh captures/base ../forge-base/target/release`.
+     `git worktree add --detach ../forge-base <commit>`, then `cargo build --release --workspace`
+     in that tree, then `tools/captures.sh captures/base ../forge-base/target/release`.
    - Each tree must be built in place, because the shaders' root and `cache/` (#213, one root:
      `forge_core::derived::ROOT`) are compiled into the binaries from `CARGO_MANIFEST_DIR`.
    - Remove the tree afterwards with `git worktree remove ../forge-base`.
@@ -346,8 +347,12 @@ every script sets) keeps `off`, the probes, unless it sets `r.gi.cache` itself;
 5. **Before pushing** (the gate, in every tier): `cargo fmt --all -- --check`,
    `cargo test --release`, `cargo run --release -q -p credits -- --check`,
    `bash tools/luau-check.sh` (the Luau game scripts against their definitions, D-072), and
-   `cargo clippy --release --all-features --all-targets -- -D warnings` exactly as CI runs it.
-   A plain clippy run hides a lint that CI then fails on.
+   `cargo clippy --release --workspace --all-features --all-targets -- -D warnings` exactly as CI
+   runs it (the demos linted too). A plain clippy run hides
+   a lint that CI then fails on. The gate builds and tests the engine and its tools (the default
+   members, as CI: the owner, 2026-11-01, "Just build the core engine and its modules, the rest
+   can be built when needed"), with the demos the change touches; a tier with captures builds and
+   tests every demo.
 6. **Leave a trace a cloud session can read, when one needs it.** With `FORGE_KEEP_LOGS=1`
    every script keeps its runs' full logs under `OUT/logs/` and what it printed in
    `OUT/summary.txt` (`validate.sh` and `timings.sh` under `captures/validate` and

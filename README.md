@@ -347,7 +347,7 @@ physics lab's sharpness room (`--lab room`) is built for it: see
 ### The verification batch
 
 ```
-tools/captures.sh captures/base          # before the change (after cargo build --release)
+tools/captures.sh captures/base          # before the change (after cargo build --release --workspace)
 tools/captures.sh captures/new           # after it
 tools/compare.sh captures/base captures/new
 tools/validate.sh

@@ -138,7 +138,7 @@ surface to the camera. *Found on the 5070 Ti (2026-09-26):* as first written it 
 the camera's world position, which moved every highlight with `--origin`; fixed on this branch.
 
 Test, in this order:
-1. `cargo build --release`, then `tools/captures.sh captures/cells` and `tools/compare.sh
+1. `cargo build --release --workspace`, then `tools/captures.sh captures/cells` and `tools/compare.sh
    captures/base captures/cells` against a baseline built from the commit before. **Expected:
    not 0 px.** The vertex transform rounds differently (a quaternion instead of a matrix,
    camera-relative instead of world), so a few hundred pixels move by 1–2 levels, like #38's

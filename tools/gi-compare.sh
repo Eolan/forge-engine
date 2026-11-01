@@ -84,10 +84,13 @@ pause=${FORGE_PAUSE:-35}
 falcor=${FALCOR_OUT:-$(dirname "$root")/falcor/out}
 pbrt=${PBRT_OUT:-$(dirname "$root")/pbrt-out}
 bin=$root/target/release
+# The demos it runs, built when they are this tree's (a plain build leaves them out since 2026-11-01),
+# unless the caller built them (FORGE_BUILT=1, tools/verify.sh).
+[ -z "${FORGE_BUILT:-}" ] && [ "$bin" = "$root/target/release" ] && { (cd "$root" && cargo build --release -q --workspace) || exit 1; }
 exe=""
 [ -f "$bin/physics-lab.exe" ] && exe=.exe
 [ -f "$bin/physics-lab$exe" ] && [ -f "$bin/city-plan$exe" ] && [ -f "$bin/contact-sheet$exe" ] ||
-  { echo "build first: cargo build --release" >&2; exit 2; }
+  { echo "build first: cargo build --release -p physics-lab -p city-plan -p contact-sheet" >&2; exit 2; }
 blender=${BLENDER:-}
 if [ -z "$blender" ]; then
   if command -v blender > /dev/null; then

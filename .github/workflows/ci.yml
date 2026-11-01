@@ -12,7 +12,8 @@ env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: 0
   # The demos are built and tested on the owner's machine (tools/verify.sh), not here: CI
-  # builds and tests the engine crates and the tools, and Clippy still checks the demos compile.
+  # builds and tests the engine crates and the tools (the workspace's default members), and
+  # Clippy, over the whole workspace, still checks the demos compile.
   NO_DEMOS: --exclude asteroids --exclude city-blocks --exclude city-plan --exclude island --exclude meshlets --exclude physics-lab --exclude planet --exclude task-bench
 
 jobs:
@@ -39,7 +40,7 @@ jobs:
       - name: Test
         run: cargo test --release --workspace ${{ env.NO_DEMOS }}
       - name: Clippy
-        run: cargo clippy --release --all-features --all-targets -- -D warnings
+        run: cargo clippy --release --workspace --all-features --all-targets -- -D warnings
       # The Luau game scripts against the game API's definitions (D-072, #319): luau-lsp's
       # release, pinned with its checksum, on Linux.
       - name: Luau scripts (luau-lsp analyze)

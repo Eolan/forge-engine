@@ -21,6 +21,9 @@ export FORGE_CFG=none
 set -uo pipefail
 root=$(cd "$(dirname "$0")/.." && pwd)
 bin=${1:-$root/target/release}
+# The demos it runs, built when they are this tree's (a plain build leaves them out since 2026-11-01),
+# unless the caller built them (FORGE_BUILT=1, tools/verify.sh).
+[ -z "${FORGE_BUILT:-}" ] && [ "$bin" = "$root/target/release" ] && { (cd "$root" && cargo build --release -q --workspace) || exit 1; }
 out=${2:-$root/captures/validate}
 keep=${FORGE_KEEP_LOGS:-0}
 sets=" ${FORGE_SETS:-all} "

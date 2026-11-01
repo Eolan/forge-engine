@@ -1,6 +1,9 @@
 [workspace]
 resolver = "3"
 members = ["crates/*", "demos/*", "tools/*"]
+# A plain `cargo build` or `cargo test` builds the engine and its tools, not the demos (the owner,
+# 2026-11-01): a demo builds with `-p NAME`, all of them with `--workspace`.
+default-members = ["crates/*", "tools/*"]
 # Vendored crates, patched below: built as dependencies, not linted or formatted as ours.
 exclude = ["third_party/gpu-allocator"]
 

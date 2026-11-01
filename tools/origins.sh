@@ -32,7 +32,7 @@ asteroids=$bin/asteroids$exe
 city=$bin/city-blocks$exe
 imgdiff=$root/target/release/imgdiff$exe
 for tool in "$asteroids" "$city" "$imgdiff"; do
-  [ -f "$tool" ] || { echo "missing $tool: build with cargo build --release" >&2; exit 1; }
+  [ -f "$tool" ] || { echo "missing $tool: build with cargo build --release --workspace" >&2; exit 1; }
 done
 cd "$root"
 log=$(mktemp)

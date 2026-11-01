@@ -332,6 +332,18 @@ mapfile -t changed < "${TMPDIR:-/tmp}/verify-paths.$$"
 rm -f "${TMPDIR:-/tmp}/verify-paths.$$"
 # The working tree's own changes, which the build includes whatever --committed says.
 mapfile -t dirty < <({ git diff --name-only --no-renames HEAD; git ls-files --others --exclude-standard; } | sort -u)
+# The demos the change touches (`-p NAME` each): the gate builds and tests them beside the engine,
+# which is all a plain build covers since the demos left the default members (2026-11-01).
+demo_packages=()
+for path in "${changed[@]}"; do
+  case $path in
+    demos/*/*)
+      name=${path#demos/}
+      name=${name%%/*}
+      [[ " ${demo_packages[*]} " == *" -p $name "* ]] || demo_packages+=(-p "$name")
+      ;;
+  esac
+done
 
 unmapped=() selected=" " recook=0 gpu=0 by_rule=() shared=0
 for path in "${changed[@]}"; do
@@ -521,10 +533,18 @@ step() { echo "== $1 ($((SECONDS - start)) s)"; }
 failed=()
 
 step "build"
-cargo build --release > "$run/build.txt" 2>&1
+# The gate builds the engine and its tools, as CI (the workspace's default members, the owner
+# 2026-11-01); a tier with captures needs the demos too.
+if [ "$tier" = gate ]; then
+  { cargo build --release && { [ ${#demo_packages[@]} = 0 ] || cargo build --release "${demo_packages[@]}"; }; } > "$run/build.txt" 2>&1
+else
+  cargo build --release --workspace > "$run/build.txt" 2>&1
+fi
 build_status=$?
 tail -n 2 "$run/build.txt"
 [ $build_status = 0 ] || { echo "the build failed"; echo "verdict: fail" >> "$run/state.txt"; exit 1; }
+# The scripts below take these binaries as they are (they build their own otherwise).
+export FORGE_BUILT=1
 step "fmt"
 cargo fmt --all -- --check > "$run/fmt.txt" 2>&1 || { failed+=(fmt); head -n 20 "$run/fmt.txt"; }
 # Clippy, the tests and the credits check in the background, beside the captures (never beside
@@ -532,10 +552,16 @@ cargo fmt --all -- --check > "$run/fmt.txt" 2>&1 || { failed+=(fmt); head -n 20 
 step "clippy, tests and credits (in the background, $run/gate.txt)"
 (
   status=0
-  cargo clippy --release --all-features --all-targets -- -D warnings || status=1
+  cargo clippy --release --workspace --all-features --all-targets -- -D warnings || status=1
   # The GPU pass tests too (docs/PROCESS.md, "The pass tests"): milliseconds on this machine,
-  # skipped where there is no GPU.
-  FORGE_GPU_TESTS=1 cargo test --release || status=1
+  # skipped where there is no GPU. The engine's and tools' as CI's at the gate, the demos' too (the
+  # village's property tests) where a tier captures.
+  if [ "$tier" = gate ]; then
+    FORGE_GPU_TESTS=1 cargo test --release || status=1
+    [ ${#demo_packages[@]} = 0 ] || FORGE_GPU_TESTS=1 cargo test --release "${demo_packages[@]}" || status=1
+  else
+    FORGE_GPU_TESTS=1 cargo test --release --workspace || status=1
+  fi
   cargo run --release -q -p credits -- --check || status=1
   bash tools/luau-check.sh || status=1
   exit $status

@@ -21,6 +21,9 @@ cd "$root"
 sha=$(git rev-parse --short HEAD 2>/dev/null || echo nogit)
 out=${1:-$root/captures/amd/$(date +%Y%m%d-%H%M%S)-$sha}
 bin=$root/target/release
+# The demos it runs, built when they are this tree's (a plain build leaves them out since 2026-11-01),
+# unless the caller built them (FORGE_BUILT=1, tools/verify.sh).
+[ -z "${FORGE_BUILT:-}" ] && [ "$bin" = "$root/target/release" ] && { (cd "$root" && cargo build --release -q --workspace) || exit 1; }
 if [ -n "${FORGE_GPU_LOCK:-}" ]; then
   lock=$FORGE_GPU_LOCK
 elif [ -n "${LOCALAPPDATA:-}" ] && command -v cygpath > /dev/null; then
