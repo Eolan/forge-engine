@@ -10325,6 +10325,32 @@ pass group, the CPU ms of each thread's work) at 2560 × 1440, under DLSS Qualit
 fixed path flown or driven at speed; the numbers in `docs/PROFILE.md`. The private district (D-083,
 step 4) is the first scene held to it, then the demos.
 
+**Amended: the shipped game's benchmark is the floor, with every system running** (the owner,
+2026-11-01 morning: "keep in mind that we need, in general, other game systems to run (like
+entities managements, network, physics and so on) so the real goal is above 120 fps"; "we will
+adapt our minimum fps goals, with all the systems active, to what the benchmark results are
+giving. 120 fps on dlss balanced would be nice"; "We have to do at least as good as the benchmark
+different modes and settings"):
+- **The floor, mode for mode and setting for setting:** Forge with its game systems active
+  (entities, physics, network, sound, scripts) runs at least as fast as the shipped city game's
+  built-in benchmark on the same machine, in each of its modes and at each upscaling setting. Its
+  runs (2026-11-01, RTX 5070 Ti, Ryzen 7 9800X3D, 2560 × 1440, frame generation off; mean / minimum
+  fps, then frame times p50 / p99):
+
+  | Mode | DLSS Balanced | DLSS Quality | DLAA |
+  |---|---|---|---|
+  | Rasterised (no ray tracing) | 169.3 / 125.5 fps; 5.69 / 9.08 ms | 152.3 / 121.2 fps; 6.48 / 9.44 ms | 84.8 / 74.0 fps; 12.12 / 14.10 ms |
+  | Ray traced (its "Ultra") | 107.7 / 93.5 fps; 9.16 / 11.84 ms | 95.0 / 84.0 fps; 10.50 / 12.39 ms | |
+  | Path traced, ray reconstruction | 76.4 / 67.1 fps; 12.87 / 15.51 ms | 65.0 / 56.7 fps; 15.14 / 18.50 ms | 35.8 / 29.7 fps; 27.35 / 36.03 ms |
+
+- **Forge's modes to match them:** a rasterised mode (no traced light: its lighting precomputed,
+  as the game's own baked data does), the traced mode Forge draws now (traced shadows and bounce
+  light, between the game's ray-traced and path-traced looks), and its path-traced reference; each
+  held to its row, as presets the settings screen offers (#377).
+- **The wish:** 120 fps under DLSS Balanced with every system running.
+- **The game's systems are measured in the same frame** as they come in (D-062's mission maps,
+  #266): their CPU ms per thread and the frame thread's wait on them, in `docs/PROFILE.md`.
+
 ## D-095 — Layered materials drawn in the resolve: tiled layers blended by masks, four a texel ✅ (proposed 2026-11-01, #384, and followed under the owner's word of the night, "Follow recommendations until 10 am"; D-094, D-083 step 4, D-074)
 
 **Why:** an authored city's surfaces come as stacks of tiled layers (a base and up to twenty more,
