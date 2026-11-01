@@ -10498,7 +10498,7 @@ frame by default, `FORGE_CELLS_REALTIME=1` one edit a frame).
   5.79 / 7.65 (two runs: 7.65, 7.68), no frame's GPU over 8 ms; the worker's longest edit 47 →
   23 ms.
 
-## D-097 — A rasterised mode lit by precomputed transfer: relit probes in sparse bricks 🟡 (proposed 2026-11-01; waits for the owner on Imagination's patents; D-094, D-095, D-096)
+## D-097 — A rasterised mode lit by precomputed transfer: relit probes in sparse bricks ✅ (proposed 2026-11-01; the owner's go the same day; D-094, D-095, D-096)
 
 **Why:** D-094's amendment holds Forge to the shipped city game's benchmark mode for mode, its
 rasterised mode included (152.3 fps, 6.48 ms p50 under DLSS Quality at 2560 × 1440), and the owner
@@ -10531,3 +10531,13 @@ sums brick light by factors traced at bake time may read on them. Recomputing ea
 scratch every frame (no blending with the last) keeps further away; the fallback is Far Cry 3's
 pure transfer (2012, before their 2015 priority), which loses the lamps' bounce. Until the owner's
 word (or counsel's), nothing of the relight is built.
+
+**Decided** (the owner, 2026-11-01: "Yes and can use or test division's design or improve upon it if
+needed"): the relight is built, under the owner's ruling of 2026-10-17 on the same Imagination
+family for Forge's ray-traced probes ("live with it for now"); each probe still recomputed from its
+bricks every frame, the farther from "from a previous frame". The Division's design is the start,
+to be measured and improved where Forge's own calibration (its path-traced reference) shows it
+falls short. The vendors' kits were checked first: NVIDIA's SHaRC and NRC and AMD's FSR Radiance
+Caching all trace every frame (AMD's is DirectX 12 only for now), so none is precomputed; AMD's
+Brixelizer GI (FidelityFX SDK 1.1.4, MIT, any GPU) becomes a column of the GI comparison for the
+traced modes.
