@@ -138,6 +138,16 @@ every offset against the origin's image, expected 0 px up to a few pixels from t
 0.1 mm rounding. The record before stays as the commit before, for `tools/timings.sh`'s A/B.
 The decision stays the owner's: keep the commit, change it (the cell size, the frame), or drop
 it.
+*Amended 2026-11-01 (#380, D-083's district):* the record holds a scale per axis: `scale` is the
+largest axis's, `stretch` each axis's share of it (96 bytes again). An authored city stretches a
+fifth of its instances along an axis (165,775 of the private district's 797,140, 30,107 distinct
+mesh and scale pairs, axes up to 3 to 1 in the top tenth), which the uniform scale drew wrong.
+Positions take the stretched frame everywhere (`instance_frame`, the TLAS's transforms), normals
+its inverse transpose (`instance_normal_frame`), the bounds and the cut's error the largest axis
+(conservative), and a stretched instance skips the normal-cone cull. A uniform scale keeps the
+exact expressions it had (its stretch is exactly 1), so every scene before draws the same:
+`add_instance_with_material` still keeps the x axis's scale for all three (city-plan's plants,
+#380's open choice), `add_instance_scaled` (and the editor's `add_instance_stretched`) the three.
 *Accepted (2026-09-26, on the 5070 Ti; the owner: keep it if it improves things with no
 issue).* `tools/origins.sh` (`reports/2026-09-27-93/`): offsets of whole cells (1 024 and
 10 240 m) give **0 px** in both demos, so nothing depends on the world position any more; at
@@ -8477,6 +8487,56 @@ pbrt-v4, RTXGI, materiel test, etc.). Then update forge demos and test them."):
     bounces in a 27 cm gap, which the probes a metre apart cannot hold: D-090's case for SHaRC
     indoors, at night too.
 
+**The pbrt-v4 pass (2026-11-01; the owner: "the pbrt-v4 simple pass with what we downloaded [...]
+(profiling stats are welcome)"):** pbrt-v4 as the third reference column of `tools/gi-compare.sh`
+(`PBRT_OUT`, the views' `pbrt_ref`), its renders made by `tools/pbrt-render.sh` through
+`tools/pbrt-variant.py`, which rewrites a scene as the converter's glTF gives it to Forge and Falcor:
+`--flat` (the meshes' shading normals dropped: the converter keeps each face's own) and `--opaque`
+(`diffusetransmission` made diffuse: the converter leaves the transmission out, so the bedroom's
+curtains and the kitchen's blind are opaque in both). Bitterli's bedroom in pbrt had let light
+through its curtains both ways (smooth normals on the folds in clay, 45 % transmission textured).
+1,024 samples a pixel at 1280 × 720 on 12 threads: 9–21 minutes a room on the CPU (classroom clay
+538 s, textured 1,064 s; bedroom clay 750 s, textured 1,253 s; kitchen clay 680 s, textured 900 s),
+against Forge's path's 300 frames. The mean |log2| of 16 × 9 tiles (frame ratio), Forge's captures
+of 407520d8:
+
+| View | pbrt-v4 from Falcor | Forge's path from pbrt-v4 | probes, SHaRC, NRC from pbrt-v4 | GPU ms: probes, SHaRC, NRC |
+|---|---|---|---|---|
+| Classroom, clay | 0.069 (×0.99) | 0.056 (×1.03) | 0.403, 0.093, 0.101 | 3.89, 4.23, 5.85 |
+| Cornell box, night | 0.055 (×1.01) | 0.071 (×1.02) | 0.181, 0.080, 0.072 | 2.99, 3.10, 4.34 |
+| Bedroom, clay, night | 0.048 (×1.02) | 0.079 (×0.98) | 0.808, 0.202, 0.235 | 5.04, 5.57, 6.66 |
+| Kitchen, clay, night | 0.054 (×1.00) | 0.049 (×1.01) | 0.107, 0.069, 0.075 | 5.19, 5.78, 6.90 |
+| Classroom | 0.234 (×1.17) | 0.326 (×1.24) | 0.600, 0.243, 0.293 | 4.14, 4.43, 5.97 |
+| Bedroom, night | 0.553 (×1.14) | 0.409 (×1.17) | 0.676, 0.257, 0.244 | 5.45, 5.98, 7.10 |
+| Kitchen, night | 0.340 (×1.04) | 0.280 (×1.04) | 0.216, 0.246, 0.236 | 5.59, 6.29, 7.39 |
+
+(The GPU ms: the frame at the views' size under DLAA, two runs of 1,200 frames, D-090's.)
+- **In clay the three renderers agree** within 0.05–0.07 in all four rooms, the bedroom included
+  now its geometry is the same in all three (pbrt's old render: 0.21 from Falcor), and Forge's path
+  lies within 0.05–0.08 of pbrt-v4: the calibration's diffuse light holds against a third, CPU,
+  renderer. The techniques rank as against Falcor and Forge's path: SHaRC and NRC within 0.07–0.24,
+  the probes 0.11–0.81.
+- **Textured, pbrt-v4 reads 4–19 % darker** than Falcor and Forge: its coated diffuse (a dielectric
+  coat over the base, reflecting and absorbing) and its conductors against the converter's
+  metal-roughness approximation of them. A gap of the converter's materials, not of the light;
+  closing it is `tools/pbrt-to-gltf.py`'s, when the materials are next calibrated.
+
+**Amended: after the calibration, the private district as a game in production** (the owner,
+2026-11-01: "We will work on the pbrt-v4 simple pass with what we downloaded for the moment unless
+there are big issues to fix (profiling stats are welcome). [...] Once pbrt-v4 done and before any
+other scene tests, we will start to work on the [...] private demo. The goal is will be to start
+working as if we were working on a proper game engine."):
+- **The order:** the pbrt-v4 pass over the scenes already downloaded (Bitterli's rooms and the
+  Cornell box as pbrt-v4's third reference column in `tools/gi-compare.sh`), then step 4, the
+  private district of a shipped open-world city game, before any other scene test.
+- **The district** is worked as a game in production: its own data through Forge's pipeline, held
+  to D-094's frame, and compared with the shipped game on the same machine. The owner captures
+  the game's pictures and its benchmark's frame rate from a shot list; nothing of it enters the
+  repository (ROADMAP, Phase 10).
+- **A forest reference for later:** a free scene of trees, grass and undergrowth that Falcor,
+  pbrt-v4 or Cycles path-traces and Forge loads, found now and downloaded on the owner's word
+  (the foliage work of D-075 and D-091 measured against it).
+
 ## D-084 — An environment map as the sky, its sun taken out of it ✅ (the owner's go, 2026-10-29)
 
 **Why:** D-083's first comparison, the Bistro's Exterior_1 beside NVIDIA's render, could not
@@ -10216,3 +10276,135 @@ second or two (the same frames 0.002 apart from frame 600); accepted.
 
 **Left as it is:** the daylight is read once a run, at frame 30 (a clock moving the sun far would
 leave it stale until the next run).
+
+## D-094 — The game's frame: 120 fps at 2560 × 1440 through DLSS or FSR, never under 30 ✅ (the owner, 2026-11-01; D-070, D-082, D-083)
+
+**The owner's words:** "The engine will have to have good performance, strongly desired is at
+least 120 fps in dlss or frs at my screen resolution (WQHD 2560x1440) for a very good rendering
+quality. My guess is that optimizing DLAA would always be useful for dlss or frs later. We have
+to stay fluid even when moving fast, and in complex scene moving around the game world. Going
+below 120 fps can happen but always above 30 ftp (60 fps minimum prefered) and would be for
+cinematics with very detailed scenes for example."
+
+**What it sets:**
+- **The target:** 120 fps, 8.33 ms a frame for the GPU and for the CPU's frame thread alike, at
+  2560 × 1440 (the owner's screen) through DLSS (NVIDIA's cards) or FSR (elsewhere, D-082), at a
+  very good image, on the RTX 5070 Ti.
+- **DLAA optimised too:** the native-resolution mode costs what the upscaled modes cost on more
+  pixels, so a pass made cheaper under DLAA is cheaper in every mode; DLAA stays the reference
+  image (D-070).
+- **The floor:** under 120 fps only where the image asks for it, a cinematic's very detailed
+  shot: 60 fps preferred (16.7 ms), never under 30 (33.3 ms).
+- **Fluid in motion:** the frame holds while the camera moves fast through complex scenes and
+  streams the world in. A still view's mean is not the measure: a fixed path at speed is, with
+  its mean, its 99th percentile and its worst frame, and its hitches (a frame over twice the
+  budget) counted.
+- **Techniques mixed to hold it:** "we can mix techniques for rendering, even using
+  rasterization if needed, it quite good in some cases after all" (the owner, the same night).
+  Each effect takes what holds the frame at a very good image: rasterized where that is good
+  enough, traced where tracing pays.
+
+**How it is measured,** as a game in production: a frame budget per system (the GPU ms of each
+pass group, the CPU ms of each thread's work) at 2560 × 1440, under DLSS Quality and DLAA, over a
+fixed path flown or driven at speed; the numbers in `docs/PROFILE.md`. The private district (D-083,
+step 4) is the first scene held to it, then the demos.
+
+## D-095 — Layered materials drawn in the resolve: tiled layers blended by masks, four a texel ✅ (proposed 2026-11-01, #384, and followed under the owner's word of the night, "Follow recommendations until 10 am"; D-094, D-083 step 4, D-074)
+
+**Why:** an authored city's surfaces come as stacks of tiled layers (a base and up to twenty more,
+each a tiling material template tinted from a palette, its roughness and metalness remapped, blended
+by its own mask with a microblend at the mask's edge). The private district of D-083's step 4 is made
+of them: about 90 % of its 73,000 mesh chunks' materials. Forge's materials are one row a section;
+flat colours folded from the layers lose the tiling detail and the edges the look lives in. The
+research (`research/layered-materials.md`) compared three families: the layers per pixel in the
+resolve, a runtime composited virtual-texture cache, and offline bakes.
+
+**Proposed (the research's recommendation):**
+1. **Layers evaluated in the resolve** (the visibility buffer's material pass), one function for a
+   layer: its template's maps sampled at its tile, its palette colour, its levels, its microblend
+   sharpening the mask's edge, folded front to back.
+2. **The masks compacted when the content is cooked:** each mask texel keeps its four strongest
+   (layer, weight) pairs, so a pixel samples at most four layers, never twenty masks to find the
+   zeros (Call of Duty's layer index); an early-out under a small weight.
+3. **Uniform loops:** per 8 × 8 tile, the loop runs over the union of its pixels' layers (no
+   assumption on the wave's width, CLAUDE.md's cross-vendor rule).
+4. **The reference image:** the same function over every layer and every mask, uncapped
+   (a switch), to measure the cap against.
+5. **Measured** on fixed paths through the district at 1707 × 960 (DLSS Quality at 2560 × 1440): the
+   resolve's time within about 1–1.5 ms, a heat map of active layers, ꟻLIP of the cap against the
+   reference at a fixed exposure.
+6. **Not now:** a composited mesh-UV cache (family b) only if (a) misses the budget, and only after
+   the owner has seen AMD's US9728002 and US12444121 (shading only uncached texels; gradient
+   chaining in decoupled shading); bakes (c) for the far levels of detail.
+
+**Patents:** none found on blending layered materials per pixel; the cache's family meets the two
+AMD patents above (the table in the research), which stays the owner's call before any of it.
+
+## D-096 — Authored worlds cooked into packages and streamed by cell ✅ (proposed 2026-11-01 and followed under the owner's word of the night, "Follow recommendations until 10 am"; #214, #338, D-053, D-077, D-094)
+
+**Why:** the owner, 2026-11-01, on the private district (D-083 step 4): "Zomboid uses very old
+material and currently have poor performances, we have to find a good loading techniques and
+optimizations, we might have to do our own package, streaming and all". The district's first
+viewer holds everything resident, cooked at load: within ±256 m, 262,017 instances of 6,959 meshes
+(7.1 M unique triangles, 156.5 M instanced), a cold start of 25 s (the cook 19.8 s on all cores, then
+the scene 2.5 s and the BLAS 0.7 s), 16–20 s warm, 3.9 GB of VRAM (2.3 GB geometry), for one square
+of a city. A game streams its world: the source game itself in 64 m sectors on seven levels, each
+level's objects streamed to their own distance. Forge has the parts: cluster pages streamed by need
+(#36, D-025), the cell streamer and its sources (#338: cells added and removed around the viewer on
+a worker, far proxies, D-077), `#214`'s package directory with a manifest (D-053), and the research's
+container (`research/memory-streaming.md` §5).
+
+**Proposed:**
+1. **A package of an authored world** (`#214`'s `packages/<name>/`, a manifest of entries with
+   their hashes, versions and dependencies):
+   - **meshes** as Forge cooks them (the cluster-page files of `forge_geom::cache`), content-addressed,
+     each stored once however many cells use it;
+   - **cells**: one record a cell of the source's grid (64 m × 2^level), holding its instances (mesh,
+     place, rotation, scale per axis, material block), its lamps and decals; an object stays in the
+     level its source gave it, so a tower streams from farther than a bin;
+   - **materials** (the rows; the layered materials of D-095 when decided) and **textures** (#385).
+2. **A source that reads it:** a `CellSource` loading a cell with one read of its record, its meshes
+   counted by the cells that use them (added with the first, removed after the last; their pages
+   streamed by need as #36's), its instances through the scene editor with their scale per axis
+   (`add_instance_stretched`, D-083's amendment of #93's record), its lamps as the cell's set.
+3. **The far cells** take the package's proxies (the source's own where it ships them, else
+   D-077's merge).
+4. **Reads:** plain files on the streamer's worker first, measured; the research's container (a table
+   of contents over block-compressed, dependency-ordered chunks, unbuffered IoRing reads, GPU
+   decompression) when the measure says the reads bind.
+5. **Measured against the resident baseline** at D-094's frame: time to the first frame, VRAM,
+   the worker's time per edit, and the 99th percentile and hitches (frames over twice the budget)
+   along the walking, driving and flying paths.
+
+**The private part** stays private: the converter from the source's data into the package's input.
+Built in the order above, each step measured and reported; the owner can stop or change it at any
+step.
+
+**The first step, measured (2026-11-01, the private viewer, no lamps, 2560 × 1440 under DLSS
+Quality, the street's end):** the source's instances bucketed by its own sector levels into the
+streamer's cells (64 m to 1 km: 86 cells over the ±256 m square), added through the editor
+(`add_instance_stretched`) as `CellStreamer` plans them; every mesh registered at the start, its
+pages streamed through a pool; the app driving the streamer (`Running::cells`, settled before the
+frame by default, `FORGE_CELLS_REALTIME=1` one edit a frame).
+
+| | resident | streamed |
+|---|---|---|
+| loading screen | 2.76 s | 1.18 s |
+| instances in the scene | 262,017 | 200,473 (the camera's reach) |
+| GPU frame | 6.65 ms | 7.03 ms |
+| clusters left to the second cull | 8.4 k | 279 k |
+| VRAM | 3.6 GB | 5.0 GB (a 2 GiB pool; 1 GiB filled with the meshes' root pages) |
+
+- **What it shows:** streaming the instances starts the district faster and draws it the same
+  (the capture alike), but saves no memory yet: every mesh's root pages stay resident (6,780 pages
+  of 128 KiB for 6,959 meshes), so the pool holds little else. Next: meshes counted by the cells
+  that use them and removed with the last (a source's unload), and the root pages of meshes no
+  loaded cell uses evicted.
+- **The second cull:** a dynamic scene has no instance cells (#38), so its first pass lists far
+  fewer clusters seen last frame; 279 k reach the second pass against 8.4 k: to fix before
+  streaming at a city's scale.
+- **The lamps, found on the way:** the district's 11,150 static lights as Forge's lamps (512 a frame
+  at most, every one tracing shadow rays) cost about 35 ms by day: `shadow/lamp rays` 9.6 ms, the
+  shading's lists 9.8, the probes' and the bounce's lamp-lit hits 9.5 and 8.6. The source casts
+  shadows from few of its lights (`enableLocalShadows` mostly 0): a lamp's shadow made optional, and
+  many lights sampled (RTXDI, D-065's amendment) rather than listed, before the night.

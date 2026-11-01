@@ -861,3 +861,10 @@ game's own maps and assets, from the owner's copy, loaded into Forge in a privat
 the private town of D-062's reference work): the target is at least its performance and its
 image. Nothing of it enters this repository or is published; the side session sends what the
 engine needs to the main session, in generic wording.
+
+**Pulled forward (the owner, 2026-11-01; D-083 amended, D-094):** it starts once the pbrt-v4
+pass of the calibration is done, before any other scene test, and is worked as a game in
+production: one district's own data through Forge's pipeline, held to D-094's frame (120 fps at
+2560 × 1440 through DLSS or FSR, 60 preferred and never under 30 in a cinematic's detailed shot,
+fluid at speed and while streaming), and compared with the shipped game on the same machine, the
+owner capturing the game's pictures and frame rate from a shot list.

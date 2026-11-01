@@ -13,8 +13,8 @@
 #   glowing pieces' lamps off (`FORGE_BISTRO_LAMPS=0`, D-087): its rays meet their glow itself,
 #   so the lamps' own faults (#369) stay out of the reference.
 # - **The error** of each technique (and of Forge's path against Falcor) against each reference
-#   the view has: Forge's path, and Falcor's render where FALCOR_OUT holds it, times its scale
-#   to Forge's units. Measured by tools/gi-measure.py: the mean |log2| of the luminance in
+#   the view has: Forge's path, pbrt-v4's render where PBRT_OUT holds it and Falcor's where
+#   FALCOR_OUT does, each times its scale to Forge's units. Measured by tools/gi-measure.py: the mean |log2| of the luminance in
 #   16 x 9 tiles, its signed mean (negative: darker) and the frame's light over the reference's;
 #   the tiles the reference leaves under a thousandth of its mean are left out (a black void or
 #   a night without a sky, against Forge's faint night sky).
@@ -52,6 +52,11 @@
 #   - the Cornell box's cornell-lam16, the bedroom's and the kitchen's bedroom-lam16,
 #     bedroom-clay-lam16, kitchen-lam16 and kitchen-clay-lam16 (`tools/falcor-render.sh` with
 #     BISTRO_EMITTER_STRENGTH, no environment light).
+# - PBRT_OUT: pbrt-v4's renders, NAME.exr (default ../pbrt-out beside the checkout), at Falcor's
+#   scales: Bitterli's rooms and the Cornell box as Forge draws them (`tools/pbrt-render.sh` with
+#   --flat --opaque: the faces' own normals, no diffuse transmission): classroom-flat,
+#   classroom-clay-flat, bedroom-flat, bedroom-clay-flat, kitchen-flat, kitchen-clay-flat and
+#   cornell-pbrt (`tools/cornell-box.py`'s scene).
 # - BLENDER: Blender's executable (else found on the PATH or in its default Windows place).
 #
 # A technique that does not start (`sharc` without `sharc-sdk/` or 64-bit atomics, `nrc` without its
@@ -77,6 +82,7 @@ time_frames=${FORGE_TIME_FRAMES:-1200}
 reuse=${FORGE_REUSE:-0}
 pause=${FORGE_PAUSE:-35}
 falcor=${FALCOR_OUT:-$(dirname "$root")/falcor/out}
+pbrt=${PBRT_OUT:-$(dirname "$root")/pbrt-out}
 bin=$root/target/release
 exe=""
 [ -f "$bin/physics-lab.exe" ] && exe=.exe
@@ -153,10 +159,10 @@ BEDROOM="--view=3.4556,1.2124,3.2990,49.187,-0.973 --fov 39.4305"
 KITCHEN="--view=1.2110,1.8047,3.8524,26.007,-2.388 --fov 35.9834"
 VILLAGE="--village 600 --time-of-day 0.75 --no-fauna"
 # describe VIEW: sets the view's demo, its flags, clay (1: every surface a grey diffuse), the
-# environment it runs with (sky), its fixed exposure and its Falcor reference (a file stem in
-# FALCOR_OUT and its scale), if any.
+# environment it runs with (sky), its fixed exposure, its Falcor reference (a file stem in
+# FALCOR_OUT and its scale) and its pbrt-v4 one (a stem in PBRT_OUT, at Falcor's scale), if any.
 describe() {
-  clay="" sky="" falcor_ref="" falcor_scale=1
+  clay="" sky="" falcor_ref="" falcor_scale=1 pbrt_ref=""
   case $1 in
     # The night: NVIDIA's Night camera, the emissive surfaces alone (D-087). The nights run
     # moonless, as Falcor's references are lit (#372; before 2026-10-31 the Moon's 0.17 lux too).
@@ -165,18 +171,18 @@ describe() {
     # Falcor with Lambert's diffuse and 16 bounces.
     chart) demo=physics-lab flags="--lab chart --view=0,6,-4.5,180,-43 --fov 45" sky=sky-side-30.hdr ev=14 falcor_ref=lam16-side-30 falcor_scale=12800 ;;
     # Falcor's Cornell box (tools/cornell-box.py), lit by its ceiling's quad alone, at night.
-    cornell) demo=physics-lab flags="--lab cornell --view=0,2.8,12,0,0 --fov 37.8493 --time-of-day 1.5 --moonless" ev=7 falcor_ref=cornell-lam16 falcor_scale=30 ;;
+    cornell) demo=physics-lab flags="--lab cornell --view=0,2.8,12,0,0 --fov 37.8493 --time-of-day 1.5 --moonless" ev=7 falcor_ref=cornell-lam16 falcor_scale=30 pbrt_ref=cornell-pbrt ;;
     # Bitterli's bedroom and kitchen (tools/pbrt-to-gltf.py), lit by their own lights, at night.
-    bedroom) demo=physics-lab flags="--lab bedroom $BEDROOM --time-of-day 1.5 --moonless" ev=5 falcor_ref=bedroom-lam16 falcor_scale=30 ;;
-    bedroom-clay) demo=physics-lab flags="--lab bedroom $BEDROOM --time-of-day 1.5 --moonless" clay=1 ev=5 falcor_ref=bedroom-clay-lam16 falcor_scale=30 ;;
-    kitchen) demo=physics-lab flags="--lab kitchen $KITCHEN --time-of-day 1.5 --moonless" ev=8 falcor_ref=kitchen-lam16 falcor_scale=30 ;;
-    kitchen-clay) demo=physics-lab flags="--lab kitchen $KITCHEN --time-of-day 1.5 --moonless" clay=1 ev=8 falcor_ref=kitchen-clay-lam16 falcor_scale=30 ;;
+    bedroom) demo=physics-lab flags="--lab bedroom $BEDROOM --time-of-day 1.5 --moonless" ev=5 falcor_ref=bedroom-lam16 falcor_scale=30 pbrt_ref=bedroom-flat ;;
+    bedroom-clay) demo=physics-lab flags="--lab bedroom $BEDROOM --time-of-day 1.5 --moonless" clay=1 ev=5 falcor_ref=bedroom-clay-lam16 falcor_scale=30 pbrt_ref=bedroom-clay-flat ;;
+    kitchen) demo=physics-lab flags="--lab kitchen $KITCHEN --time-of-day 1.5 --moonless" ev=8 falcor_ref=kitchen-lam16 falcor_scale=30 pbrt_ref=kitchen-flat ;;
+    kitchen-clay) demo=physics-lab flags="--lab kitchen $KITCHEN --time-of-day 1.5 --moonless" clay=1 ev=8 falcor_ref=kitchen-clay-lam16 falcor_scale=30 pbrt_ref=kitchen-clay-flat ;;
     bistro-e1-clay) demo=physics-lab flags="--lab bistro $E1" clay=1 ev=10.80 falcor_ref=clay-ext1-lam16 falcor_scale=2150 ;;
     bistro-e2-clay) demo=physics-lab flags="--lab bistro $E2" clay=1 ev=10.80 falcor_ref=clay-ext2-lam16 falcor_scale=2150 ;;
     bistro-e1) demo=physics-lab flags="--lab bistro $E1" ev=10.80 falcor_ref=ext1-lam16 falcor_scale=2150 ;;
     bistro-e2) demo=physics-lab flags="--lab bistro $E2" ev=10.80 falcor_ref=ext2-lam16 falcor_scale=2150 ;;
-    classroom-clay) demo=physics-lab flags="--lab classroom $CLASSROOM" clay=1 ev=9 falcor_ref=crl-clay falcor_scale=12800 ;;
-    classroom) demo=physics-lab flags="--lab classroom $CLASSROOM" ev=9 falcor_ref=crl-tex falcor_scale=12800 ;;
+    classroom-clay) demo=physics-lab flags="--lab classroom $CLASSROOM" clay=1 ev=9 falcor_ref=crl-clay falcor_scale=12800 pbrt_ref=classroom-clay-flat ;;
+    classroom) demo=physics-lab flags="--lab classroom $CLASSROOM" ev=9 falcor_ref=crl-tex falcor_scale=12800 pbrt_ref=classroom-flat ;;
     village-landing) demo=city-plan flags="$VILLAGE --view=75.2,5.2,-175.7,146.8,-25" ev=9 ;;
     village-room) demo=city-plan flags="$VILLAGE --view=71.5,1.6,-175.1,55.9,-12" ev=9 ;;
     village-street) demo=city-plan flags="$VILLAGE --view=-79.8,1.7,-272.0,-98.3,0" ev=9 ;;
@@ -269,8 +275,15 @@ for view in $views; do
     capture "$view" "$t" --set r.gi.cache="$t" && tests+=("$t")
   done
   let_others
-  # The references: Forge's path, then Falcor's render when there is one.
+  # The references: Forge's path, pbrt-v4's render, then Falcor's (the sheet's) when there are.
   refs=("Forge path=$out/$view/path.hdr*1")
+  if [ -n "$pbrt_ref" ]; then
+    if [ -f "$pbrt/$pbrt_ref.exr" ]; then
+      refs+=("pbrt-v4=$pbrt/$pbrt_ref.exr*$falcor_scale")
+    else
+      echo "   no pbrt-v4 render $pbrt/$pbrt_ref.exr"
+    fi
+  fi
   falcor_exr=$falcor/$falcor_ref.AccumulatePass.output.0.exr
   if [ -n "$falcor_ref" ]; then
     if [ -f "$falcor_exr" ]; then
@@ -293,7 +306,8 @@ for view in $views; do
       echo "   no error measured against $label"
     fi
   done
-  # The sheet: the first reference, the tests, each tone-mapped alike, their ratio maps under.
+  # The sheet: the last reference (Falcor's, else pbrt-v4's, else Forge's path), the tests, each
+  # tone-mapped alike, their ratio maps under.
   d=$out/sheets/$view
   mkdir -p "$d"
   rm -f "$d"/*.png "$out/sheets/$view.png"
