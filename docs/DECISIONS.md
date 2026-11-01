@@ -10399,6 +10399,33 @@ mixes texels whose four differ: seams). So, in place of item 2:
 - Items 1, 3, 4 and 5 hold. Rays (the bounce, the probes, the reflections) take the material's
   folded flat colour, as now; the microblends come after the layers.
 
+**Built (2026-11-01, the same day):**
+- **The rows:** a layered material is a standard row with `RenderLayer::multilayer` (its layer
+  count, where its layers' rows start, its masks' first texture, its presence map); its layers are
+  UV-mapped standard rows (each its template's colour and normal maps at its own tiling and
+  offset, its tint, its normal strength, its opacity as `UvMapping::alpha`), their roughness and
+  metalness from single-channel maps remapped to ranges (`UvMapping::levels`,
+  `metalness_texture`). The layered row keeps no map of its own in the standard slots: the rays,
+  the impostors and the debug views take its flat colour as before. `GpuMaterial` 176 → 240 bytes
+  (the levels, the layers' rows, the presence map and up to eight mask textures).
+- **The masks:** four layers' masks to an RGBA8 texture, box-filtered levels, each texture's index
+  in the row (`TextureSet::add_layer_masks`); the presence map `R32_UINT`, its levels halved as
+  Vulkan's (rounded down, an odd last texel kept) and OR-reduced (`layer_presence`,
+  `TextureSet::add_presence`), read one level coarser than the masks' footprint so a filtered
+  sample never reads a layer the bits leave out. A row whose layers fall outside the table is
+  drawn as its own colour. DDS reads BC4 (the templates' roughness and metalness). The first
+  review found the levels, the margin, an assumed run of bindless slots and the bounds; all
+  fixed before the push.
+- **The resolve:** `multilayer_light` reads the presence bits at the masks' level, joins them over
+  the wave, and lays the present layers' inputs (`uv_mapped_light`'s) front to back by mask times
+  opacity: colour, normal, the lobe (by its exponent's logarithm), Fresnel, emission.
+- **Measured** on the private district along the shipped game's benchmark path (DLSS Quality at
+  2560 × 1440, 16:21, 1,591 lamps): 979 layered setups and 831 maps (262 MB, the game's own blocks);
+  the frame 12.88 → 14.06 ms, `shading/standard` 0.79 → 1.63 ms. The walls, floors and signs take
+  their tiled textures, worn patches and painted markings.
+- **Next:** the microblends at the masks' edges, the masks block-compressed, texture streaming
+  (#385).
+
 ## D-096 — Authored worlds cooked into packages and streamed by cell ✅ (proposed 2026-11-01 and followed under the owner's word of the night, "Follow recommendations until 10 am"; #214, #338, D-053, D-077, D-094)
 
 **Why:** the owner, 2026-11-01, on the private district (D-083 step 4): "Zomboid uses very old

@@ -122,8 +122,37 @@ pub struct UvMapping {
     /// Where the surface is cut out: pixels whose base colour alpha (`alpha` times the base
     /// colour map's) falls under it are not drawn, and rays pass them (glTF's `MASK`, #171).
     pub alpha_cutoff: Option<f32>,
-    /// The base colour factor's alpha.
+    /// The base colour factor's alpha. A layered material's layer ([`Multilayer`]): its opacity,
+    /// the share of its mask it covers.
     pub alpha: f32,
+    /// A layered material's layer (D-095): its roughness and metalness each from its own
+    /// single-channel map (`metallic_roughness_texture`'s red, `metalness_texture`'s red),
+    /// remapped from 0–1 to these ranges: roughness `[0]` to `[1]`, metalness `[2]` to `[3]`
+    /// (without a map, the range's start). Its `occlusion_texture` is then unused.
+    pub levels: Option<[f32; 4]>,
+    /// With `levels`: the metalness map (red).
+    pub metalness_texture: Option<TextureId>,
+}
+
+/// A layered material (D-095, an authored city's surfaces): its layers are `layers` rows from
+/// `offset` rows after its own (a mesh's block lists its sections' rows first, their layers after
+/// them), UV-mapped standard rows (each its template's tiled maps, tint and levels,
+/// [`UvMapping::levels`]), laid front to back, each over those under it by its mask times its
+/// opacity ([`UvMapping::alpha`]). Layer 0 covers all; layer `k`'s mask is channel
+/// `(k - 1) % 4` of `masks[(k - 1) / 4]` (RGBA8, filtered, at the mesh's UVs). `presence`
+/// (`R32_UINT`, its levels the union of those under them) has a bit per layer present in each
+/// 8 × 8 block of mask texels or round it: the resolve weighs those alone. Rays and far views take
+/// the row's own colours.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Multilayer {
+    /// Its layers (at most 32).
+    pub layers: u32,
+    /// Its first layer's row, this many rows after its own (1: the next row).
+    pub offset: u32,
+    /// Its masks' textures, four layers' a texture (layers 1 to 4 the first): at most 32 layers.
+    pub masks: [Option<TextureId>; 8],
+    /// Its presence map.
+    pub presence: TextureId,
 }
 
 /// The most a metal's highlight lobe is normalised by ([`metal_highlight`]): Blinn-Phong's
@@ -153,6 +182,8 @@ impl Default for UvMapping {
             emissive_texture: None,
             alpha_cutoff: None,
             alpha: 1.0,
+            levels: None,
+            metalness_texture: None,
         }
     }
 }
@@ -275,6 +306,8 @@ pub struct RenderLayer {
     /// slope and the latitude on the frame's planet (#220), not read from a layer map: the
     /// standard rows after this one are the sea, sand, grass, rock and snow.
     pub planet_layers: bool,
+    /// Standard with `uv`: a layered material, its layers rows after it ([`Multilayer`], D-095).
+    pub multilayer: Option<Multilayer>,
 }
 
 /// A layer of a [`ShadingClass::Layered`] row drawn by the ground's height under each pixel: the
@@ -359,6 +392,7 @@ impl Default for RenderLayer {
             foliage: false,
             underside: 0.0,
             planet_layers: false,
+            multilayer: None,
         }
     }
 }

@@ -145,8 +145,15 @@ public struct Material
     public float roughness;
     public float occlusion_strength;
     public float alpha_cutoff; // MATERIAL_FLAG_MASKED: cut out under this base colour alpha (#171)
-    public float alpha;        // the base colour factor's alpha
+    public float alpha;        // the base colour factor's alpha; a layered material's layer: its opacity
     public uint pad;
+    public float4 levels;      // MATERIAL_FLAG_LEVELS: roughness from x to y, metalness from z to w (D-095)
+    public uint first_layer;   // MATERIAL_FLAG_MULTILAYER: its first layer's row,
+    public uint layer_count;   // its layers,
+    public uint presence_texture; // its presence map (R32_UINT, a bit per layer per 8 x 8 mask texels)
+    public uint pad_layers;
+    public uint4 mask_textures_a; // its masks' textures, four layers' masks each (layers 1 to 16),
+    public uint4 mask_textures_b; // then layers 17 to 32
 };
 
 static const uint MATERIAL_FLAG_HEX_TILING = 1; // Material::flags, forge_render::material
@@ -162,6 +169,8 @@ static const uint MATERIAL_FLAG_EMISSIVE_ABSOLUTE = 512; // `emissive` in cd/m²
 static const uint MATERIAL_FLAG_FOLIAGE = 1024; // with MASKED and DOUBLE_SIDED: leaf cards, their normals never turned, a mix of the two colours per instance (D-013)
 static const uint MATERIAL_FLAG_GLAZED = 2048;  // a window's glass a probe's ray from its room passes (D-068)
 static const uint MATERIAL_FLAG_LAMP = 4096;    // a lamp's glowing part: the probes' rays take none of its glow (D-065)
+static const uint MATERIAL_FLAG_LEVELS = 16384; // a layered material's layer: roughness and metalness from single-channel maps, remapped to `levels`
+static const uint MATERIAL_FLAG_MULTILAYER = 32768; // a layered material (D-095): its layers rows after it, from `first_layer`
 static const uint MATERIAL_FLAG_DRAWN_AFTER = 8192; // left out of the visibility pass, drawn after the resolve; the rays meet it (D-065's glass)
 static const uint CUTOUT_GROUND_WINDOW = 1u << 31; // `cluster_cutouts`: windowed ground reaching into the ground window (#197)
 static const uint CUTOUT_LADDER = 1u << 30;        // `describe_cluster`: a cluster of an instance crossing its ladder (D-075), dithered (`cutout_kept`)
@@ -4877,14 +4886,25 @@ LightInputs uv_mapped_light(Frame* f, Material mat, Surface s)
     apply_decals(f, s, base);
     float roughness = mat.roughness;
     float metal = mat.metallic;
-    if (mat.metal_rough_texture != TEXTURE_NONE)
+    bool levels = (mat.flags & MATERIAL_FLAG_LEVELS) != 0u;
+    if (levels)
+    {
+        // A layered material's layer (D-095): each map single-channel, remapped to its levels.
+        roughness = mat.levels.x;
+        metal = mat.levels.z;
+        if (mat.metal_rough_texture != TEXTURE_NONE)
+            roughness = lerp(mat.levels.x, mat.levels.y, sample_image_grad(mat.metal_rough_texture, mat.sampler, uv, gx, gy).r);
+        if (mat.occlusion_texture != TEXTURE_NONE)
+            metal = lerp(mat.levels.z, mat.levels.w, sample_image_grad(mat.occlusion_texture, mat.sampler, uv, gx, gy).r);
+    }
+    else if (mat.metal_rough_texture != TEXTURE_NONE)
     {
         float4 mr = sample_image_grad(mat.metal_rough_texture, mat.sampler, uv, gx, gy);
         roughness *= mr.g;
         metal *= mr.b;
     }
     float ao = s.ao;
-    if (mat.occlusion_texture != TEXTURE_NONE)
+    if (!levels && mat.occlusion_texture != TEXTURE_NONE)
     {
         float occlusion = 1.0 + mat.occlusion_strength * (sample_image_grad(mat.occlusion_texture, mat.sampler, uv, gx, gy).r - 1.0);
         ao = ao >= 0.0 ? ao * occlusion : occlusion;
@@ -4944,6 +4964,64 @@ LightInputs uv_mapped_light(Frame* f, Material mat, Surface s)
     li.metal = metal;
     li.variance = variance;
     li.bumps = bumps;
+    return li;
+}
+
+// A layered material's light (D-095): its layers, the rows after it, each read as a UV-mapped row
+// (its template's maps at its own tiling, its tint and levels), laid front to back, each over
+// those under it by its mask times its opacity. The presence map's bits, at the masks' level of
+// detail and joined over the wave so the loop runs alike in every lane, name the layers that can
+// show here: the others cost nothing.
+LightInputs multilayer_light(Frame* f, Material mat, Surface s)
+{
+    LightInputs li = uv_mapped_light(f, f[0].materials[mat.first_layer], s);
+    uint present = 0xFFFFFFFFu;
+    float2 gx = s.duvdx;
+    float2 gy = s.duvdy;
+    if (mat.presence_texture != TEXTURE_NONE && mat.mask_textures_a.x != TEXTURE_NONE)
+    {
+        Texture2D<uint> map = g_sampled_images_u32[NonUniformResourceIndex(mat.presence_texture)];
+        uint2 size;
+        uint levels;
+        map.GetDimensions(0, size.x, size.y, levels);
+        uint2 mask_size;
+        g_sampled_images[NonUniformResourceIndex(mat.mask_textures_a.x)].GetDimensions(mask_size.x, mask_size.y);
+        // The pixel's block of 8 x 8 mask texels, and the presence level whose texels (with the
+        // blocks round them) span what a filtered sample of the masks reads: the footprint's
+        // texels, up to twice that from the level it blends towards.
+        float footprint = max(length(gx * float2(mask_size)), length(gy * float2(mask_size)));
+        uint level = min(uint(max(ceil(log2(max(footprint, 1.0))) - 2.0, 0.0)), levels - 1u);
+        uint2 block = min(uint2(frac(s.uv) * float2(mask_size)) / 8u, size - 1u);
+        uint2 texel = min(block >> level, max(size >> level, 1u) - 1u);
+        present = map.Load(int3(texel, level));
+    }
+    present = WaveActiveBitOr(present);
+    for (uint k = 1u; k < mat.layer_count; k++)
+    {
+        if (((present >> k) & 1u) == 0u)
+            continue;
+        Material layer = f[0].materials[mat.first_layer + k];
+        uint m = k - 1u;
+        uint mask_image = m < 16u ? mat.mask_textures_a[m / 4u] : mat.mask_textures_b[m / 4u - 4u];
+        if (mask_image == TEXTURE_NONE)
+            continue;
+        float4 masks = sample_image_grad(mask_image, SAMPLER_ANISOTROPIC_WRAP, s.uv, gx, gy);
+        float w = masks[m % 4u] * layer.alpha;
+        if (w <= 0.0)
+            continue;
+        LightInputs l = uv_mapped_light(f, layer, s);
+        li.albedo = lerp(li.albedo, l.albedo, w);
+        li.n = normalize(lerp(li.n, l.n, w));
+        // The lobes blend by their exponents' logarithm, so a rough layer over a smooth one
+        // widens the highlight as its roughness does.
+        li.power = exp(lerp(log(max(li.power, 1e-3)), log(max(l.power, 1e-3)), w));
+        li.specular = lerp(li.specular, l.specular, w);
+        li.reflectance = lerp(li.reflectance, l.reflectance, w);
+        li.emissive = lerp(li.emissive, l.emissive, w);
+        li.metal = lerp(li.metal, l.metal, w);
+        li.variance = lerp(li.variance, l.variance, w);
+        li.bumps = lerp(li.bumps, l.bumps, w);
+    }
     return li;
 }
 
@@ -5162,7 +5240,7 @@ StandardInputs standard_inputs(Frame* f, Material mat, Surface s)
     {
         if ((mat.flags & MATERIAL_FLAG_UV) != 0 && s.has_uv)
         {
-            li = uv_mapped_light(f, mat, s);
+            li = (mat.flags & MATERIAL_FLAG_MULTILAYER) != 0u ? multilayer_light(f, mat, s) : uv_mapped_light(f, mat, s);
             uv = true;
         }
         else if ((mat.flags & MATERIAL_FLAG_INTERIOR) != 0)

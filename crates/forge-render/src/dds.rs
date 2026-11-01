@@ -1,6 +1,6 @@
-//! Block-compressed textures from DDS files (D-083 step 1, the Bistro): BC1, BC3, BC5 and BC7
+//! Block-compressed textures from DDS files (D-083 step 1, the Bistro): BC1, BC3, BC4, BC5 and BC7
 //! kept as their blocks with the file's mips, uploaded as they are ([`crate::material::TextureSet::add_compressed`]).
-//! The legacy header's four-character codes (DXT1, DXT5, ATI2, BC5U) and the DX10 header's DXGI
+//! The legacy header's four-character codes (DXT1, DXT5, ATI1, BC4U, ATI2, BC5U) and the DX10 header's DXGI
 //! formats are read; other formats are an error.
 //!
 //! A DirectX normal map points its green down the image: [`flip_green`] turns a BC5 map's green
@@ -26,6 +26,9 @@ pub enum BlockFormat {
     Bc3,
     /// Two channels, red and green, 16 bytes a block (ATI2): normal maps.
     Bc5,
+    /// One channel, red, 8 bytes a block (ATI1): a layered material's roughness, metalness and
+    /// masks (D-095).
+    Bc4,
     /// Colour with alpha, 16 bytes a block.
     Bc7,
 }
@@ -34,12 +37,12 @@ impl BlockFormat {
     /// Bytes a 4 × 4 block.
     pub fn block_bytes(self) -> usize {
         match self {
-            BlockFormat::Bc1 => 8,
+            BlockFormat::Bc1 | BlockFormat::Bc4 => 8,
             BlockFormat::Bc3 | BlockFormat::Bc5 | BlockFormat::Bc7 => 16,
         }
     }
 
-    /// The Vulkan format, sRGB-encoded colour when `srgb` (BC5 is always linear).
+    /// The Vulkan format, sRGB-encoded colour when `srgb` (BC4 and BC5 are always linear).
     pub fn vk_format(self, srgb: bool) -> vk::Format {
         match (self, srgb) {
             (BlockFormat::Bc1, true) => vk::Format::BC1_RGBA_SRGB_BLOCK,
@@ -47,6 +50,7 @@ impl BlockFormat {
             (BlockFormat::Bc3, true) => vk::Format::BC3_SRGB_BLOCK,
             (BlockFormat::Bc3, false) => vk::Format::BC3_UNORM_BLOCK,
             (BlockFormat::Bc5, _) => vk::Format::BC5_UNORM_BLOCK,
+            (BlockFormat::Bc4, _) => vk::Format::BC4_UNORM_BLOCK,
             (BlockFormat::Bc7, true) => vk::Format::BC7_SRGB_BLOCK,
             (BlockFormat::Bc7, false) => vk::Format::BC7_UNORM_BLOCK,
         }
@@ -139,12 +143,14 @@ pub fn read_dds(name: &str, bytes: &[u8], srgb: bool) -> Result<CompressedTextur
         b"DXT1" => (BlockFormat::Bc1, 128),
         b"DXT5" => (BlockFormat::Bc3, 128),
         b"ATI2" | b"BC5U" => (BlockFormat::Bc5, 128),
+        b"ATI1" | b"BC4U" => (BlockFormat::Bc4, 128),
         b"DX10" => {
             let dxgi = word(bytes, 128)?;
             let format = match dxgi {
                 71 | 72 => BlockFormat::Bc1,
                 77 | 78 => BlockFormat::Bc3,
                 83 => BlockFormat::Bc5,
+                80 => BlockFormat::Bc4,
                 98 | 99 => BlockFormat::Bc7,
                 other => return Err(error(format!("DXGI format {other} is not read"))),
             };
@@ -189,7 +195,7 @@ pub fn read_dds(name: &str, bytes: &[u8], srgb: bool) -> Result<CompressedTextur
         width,
         height,
         format,
-        srgb: srgb && format != BlockFormat::Bc5,
+        srgb: srgb && !matches!(format, BlockFormat::Bc4 | BlockFormat::Bc5),
         levels,
     })
 }
@@ -295,7 +301,7 @@ pub fn alpha_plane(texture: &CompressedTexture) -> Option<Vec<u8>> {
                 put(i % blocks_x, i / blocks_x, values);
             }
         }
-        BlockFormat::Bc5 | BlockFormat::Bc7 => return None,
+        BlockFormat::Bc4 | BlockFormat::Bc5 | BlockFormat::Bc7 => return None,
     }
     Some(alpha)
 }
@@ -338,7 +344,7 @@ pub fn grey_keeping_alpha(texture: &mut CompressedTexture, rgb565: u16) -> bool 
                 }
             }
         }
-        BlockFormat::Bc5 | BlockFormat::Bc7 => return false,
+        BlockFormat::Bc4 | BlockFormat::Bc5 | BlockFormat::Bc7 => return false,
     }
     true
 }
@@ -377,7 +383,7 @@ pub fn color_plane(texture: &CompressedTexture) -> Option<Vec<[u8; 3]>> {
     let (size, at) = match texture.format {
         BlockFormat::Bc1 => (8, 0),
         BlockFormat::Bc3 => (16, 8),
-        BlockFormat::Bc5 | BlockFormat::Bc7 => return None,
+        BlockFormat::Bc4 | BlockFormat::Bc5 | BlockFormat::Bc7 => return None,
     };
     let level = texture.levels.first()?;
     let (w, h) = (texture.width as usize, texture.height as usize);
@@ -405,7 +411,7 @@ pub fn uniform_color(texture: &CompressedTexture) -> Option<[u8; 3]> {
     let (size, at) = match texture.format {
         BlockFormat::Bc1 => (8, 0),
         BlockFormat::Bc3 => (16, 8),
-        BlockFormat::Bc5 | BlockFormat::Bc7 => return None,
+        BlockFormat::Bc4 | BlockFormat::Bc5 | BlockFormat::Bc7 => return None,
     };
     let mut seen = None;
     for block in texture.levels.first()?.chunks_exact(size) {
@@ -526,7 +532,7 @@ pub fn bc5_normals_to_bc7(texture: &CompressedTexture) -> Option<CompressedTextu
     })
 }
 
-/// `texture` as a DDS file [`read_dds`] reads back: the DX10 header's DXGI format (BC1, BC3, BC5 or
+/// `texture` as a DDS file [`read_dds`] reads back: the DX10 header's DXGI format (BC1, BC3, BC4, BC5 or
 /// BC7, sRGB where it is) and every level.
 pub fn write_dds(texture: &CompressedTexture) -> Vec<u8> {
     let dxgi: u32 = match (texture.format, texture.srgb) {
@@ -535,6 +541,7 @@ pub fn write_dds(texture: &CompressedTexture) -> Vec<u8> {
         (BlockFormat::Bc3, false) => 77,
         (BlockFormat::Bc3, true) => 78,
         (BlockFormat::Bc5, _) => 83,
+        (BlockFormat::Bc4, _) => 80,
         (BlockFormat::Bc7, false) => 98,
         (BlockFormat::Bc7, true) => 99,
     };

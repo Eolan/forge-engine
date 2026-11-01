@@ -17,10 +17,107 @@ use forge_gpu::{Device, Image, ImageDesc, Result, SampledImageId, vk};
 use crate::dds::CompressedTexture;
 use crate::textures::{ImageUse, TextureData, decode_image};
 
+/// The mask texels a layered material's presence map gathers per texel (D-095): 8 × 8.
+pub const PRESENCE_BLOCK: u32 = 8;
+
+/// A layered material's presence map (D-095, [`forge_core::material::Multilayer`]) from its
+/// `masks` (layers 1 on, `width × height` bytes each): per block of [`PRESENCE_BLOCK`] mask
+/// texels, bit `k` set where layer `k` (0, the base, always) is over zero in the block, then
+/// the bits of the blocks round each (a filtered sample reads across a block's edge); each next
+/// level, half the size rounded down as Vulkan's levels are, the union of the texels under it
+/// (the last row and column of an odd size kept in the last), down to one texel. Its size at
+/// level 0 and its levels.
+pub fn layer_presence(masks: &[&[u8]], width: u32, height: u32) -> (u32, u32, Vec<Vec<u32>>) {
+    assert!(masks.len() < 32, "at most 32 layers");
+    let (bw, bh) = (
+        width.div_ceil(PRESENCE_BLOCK),
+        height.div_ceil(PRESENCE_BLOCK),
+    );
+    let mut blocks = vec![1u32; (bw * bh) as usize];
+    for (k, mask) in masks.iter().enumerate() {
+        let bit = 1u32 << (k + 1);
+        for y in 0..height {
+            for x in 0..width {
+                if mask[(y * width + x) as usize] != 0 {
+                    let (bx, by) = (x / PRESENCE_BLOCK, y / PRESENCE_BLOCK);
+                    blocks[(by * bw + bx) as usize] |= bit;
+                }
+            }
+        }
+    }
+    // The blocks round each: a texel at a block's edge filters with its neighbour's.
+    let mut level: Vec<u32> = (0..bh)
+        .flat_map(|y| (0..bw).map(move |x| (x, y)))
+        .map(|(x, y)| {
+            let mut bits = 0;
+            for ny in y.saturating_sub(1)..=(y + 1).min(bh - 1) {
+                for nx in x.saturating_sub(1)..=(x + 1).min(bw - 1) {
+                    bits |= blocks[(ny * bw + nx) as usize];
+                }
+            }
+            bits
+        })
+        .collect();
+    let mut levels: Vec<Vec<u32>> = Vec::new();
+    let (mut w, mut h) = (bw, bh);
+    loop {
+        levels.push(level.clone());
+        if w == 1 && h == 1 {
+            break;
+        }
+        let (nw, nh) = ((w / 2).max(1), (h / 2).max(1));
+        let below = &levels[levels.len() - 1];
+        // Texel x of the next level gathers 2x and 2x + 1, the last one up to the end.
+        let span = |x: u32, n: u32, size: u32| {
+            (2 * x).min(size - 1)..if x + 1 == n { size } else { 2 * x + 2 }
+        };
+        level = (0..nh)
+            .flat_map(|y| (0..nw).map(move |x| (x, y)))
+            .map(|(x, y)| {
+                let mut bits = 0;
+                for sy in span(y, nh, h) {
+                    for sx in span(x, nw, w) {
+                        bits |= below[(sy * w + sx) as usize];
+                    }
+                }
+                bits
+            })
+            .collect();
+        (w, h) = (nw, nh);
+    }
+    (bw, bh, levels)
+}
+
+/// `level` (RGBA8, `width × height`) and its box-filtered levels down to one texel.
+fn box_levels(level: Vec<u8>, width: u32, height: u32) -> Vec<Vec<u8>> {
+    let mut levels = vec![level];
+    let (mut w, mut h) = (width, height);
+    while w > 1 || h > 1 {
+        let (nw, nh) = ((w / 2).max(1), (h / 2).max(1));
+        let src = &levels[levels.len() - 1];
+        let mut next = vec![0u8; (nw * nh * 4) as usize];
+        for y in 0..nh {
+            for x in 0..nw {
+                for c in 0..4 {
+                    let mut sum = 0u32;
+                    for (dx, dy) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
+                        let (sx, sy) = ((2 * x + dx).min(w - 1), (2 * y + dy).min(h - 1));
+                        sum += u32::from(src[((sy * w + sx) * 4 + c) as usize]);
+                    }
+                    next[((y * nw + x) * 4 + c) as usize] = sum.div_ceil(4) as u8;
+                }
+            }
+        }
+        levels.push(next);
+        (w, h) = (nw, nh);
+    }
+    levels
+}
+
 /// No texture (`TEXTURE_NONE` in `meshlet.slang`).
 pub const TEXTURE_NONE: u32 = u32::MAX;
 
-/// Mirrors `Material` in `meshlet.slang` (176 bytes).
+/// Mirrors `Material` in `meshlet.slang` (240 bytes).
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Pod, Zeroable)]
 pub struct GpuMaterial {
@@ -68,9 +165,18 @@ pub struct GpuMaterial {
     alpha_cutoff: f32,
     alpha: f32,
     pad: u32,
+    /// A layered material's layer: roughness from `[0]` to `[1]`, metalness from `[2]` to `[3]`.
+    levels: [f32; 4],
+    /// A layered material: its first layer's row, its layers, its presence map's bindless index,
+    /// then its masks' (a texture per four layers).
+    first_layer: u32,
+    layer_count: u32,
+    presence_texture: u32,
+    pad_layers: u32,
+    mask_textures: [u32; 8],
 }
 
-const _: () = assert!(std::mem::size_of::<GpuMaterial>() == 176);
+const _: () = assert!(std::mem::size_of::<GpuMaterial>() == 240);
 
 impl GpuMaterial {
     /// What a far impostor drawn with this row keeps of its look (D-075 step 4): the share of the
@@ -280,6 +386,13 @@ pub const MATERIAL_LAMP: u32 = 4096;
 /// cut-outs' raster, which drops every fragment of it.
 pub const MATERIAL_DRAWN_AFTER: u32 = 8192;
 
+/// [`GpuMaterial`]'s flags: a layered material's layer, its roughness and metalness from
+/// single-channel maps remapped to its levels ([`forge_core::material::UvMapping::levels`]).
+pub const MATERIAL_LEVELS: u32 = 16384;
+
+/// [`GpuMaterial`]'s flags: a layered material (D-095), its layers rows after it.
+pub const MATERIAL_MULTILAYER: u32 = 32768;
+
 /// The textures a world's materials sample, uploaded with their mips and visible to every
 /// shader through the bindless set. Released when dropped.
 pub struct TextureSet {
@@ -334,6 +447,72 @@ impl TextureSet {
         self.bytes += levels.iter().map(|l| l.len() as u64).sum::<u64>();
         self.textures.push((image, sampled));
         self.alpha.push(texture_alpha(data));
+        Ok(TextureId(self.textures.len() as u32 - 1))
+    }
+
+    /// Uploads a layered material's masks ([`forge_core::material::Multilayer`], D-095): `masks`
+    /// of `width × height` texels each (one byte, rows top to bottom), four to an RGBA8 texture
+    /// (mask `k` in channel `k % 4` of texture `k / 4`), each with its box-filtered levels. Their
+    /// ids, a texture per four masks (none for none).
+    pub fn add_layer_masks(
+        &mut self,
+        name: &str,
+        width: u32,
+        height: u32,
+        masks: &[&[u8]],
+    ) -> Result<Vec<TextureId>> {
+        let texels = (width * height) as usize;
+        assert!(
+            masks.iter().all(|m| m.len() == texels),
+            "masks of {width} × {height}"
+        );
+        let mut ids = Vec::new();
+        for (k, group) in masks.chunks(4).enumerate() {
+            let mut level = vec![0u8; texels * 4];
+            for (c, mask) in group.iter().enumerate() {
+                for (t, &v) in mask.iter().enumerate() {
+                    level[t * 4 + c] = v;
+                }
+            }
+            ids.push(self.add(&TextureData {
+                name: format!("{name} masks {k}").into(),
+                size: width,
+                height,
+                srgb: false,
+                levels: box_levels(level, width, height),
+            })?);
+        }
+        Ok(ids)
+    }
+
+    /// Uploads a layered material's presence map ([`layer_presence`]'s levels, `width × height`
+    /// at level 0), `R32_UINT`, read by texel.
+    pub fn add_presence(
+        &mut self,
+        name: &str,
+        width: u32,
+        height: u32,
+        levels: &[Vec<u32>],
+    ) -> Result<TextureId> {
+        let bytes: Vec<&[u8]> = levels.iter().map(|l| bytemuck::cast_slice(l)).collect();
+        let image = self.device.create_image_with_mips(
+            ImageDesc {
+                width,
+                height,
+                format: vk::Format::R32_UINT,
+                usage: vk::ImageUsageFlags::SAMPLED,
+                aspect: vk::ImageAspectFlags::COLOR,
+                mip_levels: bytes.len() as u32,
+                name,
+            },
+            &bytes,
+        )?;
+        let sampled = self
+            .device
+            .register_sampled_image(image.view(), vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL);
+        self.bytes += bytes.iter().map(|l| l.len() as u64).sum::<u64>();
+        self.textures.push((image, sampled));
+        self.alpha.push(TextureAlpha::Unknown);
         Ok(TextureId(self.textures.len() as u32 - 1))
     }
 
@@ -690,6 +869,7 @@ impl<'a> ModelTextures<'a> {
             emissive_texture: texture(m.emissive_texture, ImageUse::Color),
             alpha_cutoff: m.alpha_cutoff,
             alpha: m.base_color[3],
+            ..UvMapping::default()
         });
         layer
     }
@@ -753,9 +933,18 @@ pub fn gpu_rows(table: &MaterialTable, textures: Option<&TextureSet>) -> Vec<Gpu
     table
         .rows()
         .iter()
-        .map(|m| {
+        .enumerate()
+        .map(|(row, m)| {
             let r = &m.render;
             let uv = r.uv.unwrap_or_default();
+            // A layered material whose layers lie inside the table (else drawn as its own colours).
+            let rows = table.rows().len();
+            let multilayer = r.multilayer.filter(|m| {
+                r.uv.is_some()
+                    && m.layers >= 1
+                    && m.layers <= 32
+                    && row + m.offset.max(1) as usize + m.layers as usize <= rows
+            });
             GpuMaterial {
                 color_a: r.color_a,
                 class_index: r.class.index(),
@@ -825,6 +1014,16 @@ pub fn gpu_rows(table: &MaterialTable, textures: Option<&TextureSet>) -> Vec<Gpu
                         MATERIAL_FOLIAGE | MATERIAL_DOUBLE_SIDED
                     } else {
                         0
+                    }
+                    | if uv.levels.is_some() {
+                        MATERIAL_LEVELS
+                    } else {
+                        0
+                    }
+                    | if multilayer.is_some() {
+                        MATERIAL_MULTILAYER
+                    } else {
+                        0
                     },
                 contour: r.contour.map_or(0, |c| u32::from(c.below) + 1),
                 contour_above: r.contour.map_or(0, |c| c.above),
@@ -832,7 +1031,12 @@ pub fn gpu_rows(table: &MaterialTable, textures: Option<&TextureSet>) -> Vec<Gpu
                 contour_wander: r.contour.map_or(0.0, |c| c.wander),
                 contour_below: r.contour.map_or(0, |c| c.others),
                 metal_rough_texture: texture(uv.metallic_roughness_texture),
-                occlusion_texture: texture(uv.occlusion_texture),
+                // A layered material's layer reads its metalness map in the occlusion's place.
+                occlusion_texture: texture(if uv.levels.is_some() {
+                    uv.metalness_texture
+                } else {
+                    uv.occlusion_texture
+                }),
                 emissive_texture: texture(uv.emissive_texture),
                 sampler: forge_gpu::SamplerKind::AnisotropicWrap as u32
                     + 3 * uv.wrap[0].index()
@@ -845,6 +1049,14 @@ pub fn gpu_rows(table: &MaterialTable, textures: Option<&TextureSet>) -> Vec<Gpu
                 alpha_cutoff: uv.alpha_cutoff.unwrap_or(0.0),
                 alpha: r.grating.unwrap_or(uv.alpha),
                 pad: 0,
+                levels: uv.levels.unwrap_or([0.0, 1.0, 0.0, 1.0]),
+                first_layer: multilayer.map_or(0, |m| row as u32 + m.offset.max(1)),
+                layer_count: multilayer.map_or(0, |m| m.layers),
+                presence_texture: texture(multilayer.map(|m| m.presence)),
+                pad_layers: 0,
+                mask_textures: std::array::from_fn(|k| {
+                    texture(multilayer.and_then(|m| m.masks[k]))
+                }),
             }
         })
         .collect()
@@ -975,5 +1187,40 @@ mod tests {
         let rows = gpu_rows(&table, None);
         assert_eq!(rows[1].scattering, 0.0);
         assert!((rows[2].scattering - 4.5).abs() < 1e-5);
+    }
+    /// A layer's mask over zero in one block marks that block and the blocks round it, a layer
+    /// nowhere over zero marks none, the base layer is everywhere, and each coarser level holds
+    /// the union of the four under it.
+    #[test]
+    fn a_layers_presence_covers_its_block_and_the_blocks_round_it() {
+        let (w, h) = (32u32, 32u32);
+        let mut one = vec![0u8; (w * h) as usize];
+        one[(9 * w + 9) as usize] = 255; // in block (1, 1)
+        let none = vec![0u8; (w * h) as usize];
+        let (bw, bh, levels) = layer_presence(&[&one, &none], w, h);
+        assert_eq!((bw, bh), (4, 4));
+        let bit = |x: u32, y: u32| levels[0][(y * bw + x) as usize];
+        // Layer 1 in block (1, 1) and the blocks round it, not two blocks away.
+        assert_eq!(bit(0, 0), 0b011);
+        assert_eq!(bit(2, 2), 0b011);
+        assert_eq!(bit(3, 3), 0b001);
+        // Layer 2 nowhere; the base everywhere.
+        assert!(levels[0].iter().all(|&b| b & 0b100 == 0 && b & 1 == 1));
+        // The coarser levels: the union of the four under them, down to one texel.
+        assert_eq!(levels.len(), 3);
+        assert_eq!(levels[1][3], 0b011, "the far corner's 2 x 2 holds (2, 2)");
+        assert_eq!(levels[2], vec![0b011]);
+        // An odd size halves rounding down, as Vulkan's levels, the last block in the last texel:
+        // 40 x 40 texels are 5 x 5 blocks, then 2 x 2, then 1 x 1.
+        let mut corner = vec![0u8; 40 * 40];
+        corner[39 * 40 + 39] = 255; // block (4, 4) only
+        let (bw, _, levels) = layer_presence(&[&corner], 40, 40);
+        assert_eq!(bw, 5);
+        assert_eq!(levels.iter().map(Vec::len).collect::<Vec<_>>(), [25, 4, 1]);
+        assert_eq!(
+            levels[1][3], 0b11,
+            "the last texel keeps the odd last block"
+        );
+        assert_eq!(levels[1][0], 0b01);
     }
 }

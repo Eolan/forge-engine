@@ -2827,6 +2827,10 @@ street 5.8 / 8.7. VRAM 3.9 GB (2.3 GB geometry: #387, pages about a tenth full).
   no mover is met by them (`Frame::movers_rays`), the district traces its turning meshes at rest (a
   static copy no pass draws) and draws them turning (movers no ray meets): 14.18 ms against 14.45
   (two runs each), `shadow/lamp restir` back to its 2.79 without them; 14.01 with none.
+- **Its layered materials** (D-095, built 2026-11-01), along the shipped game's benchmark path in
+  the private district's second square (DLSS Quality, 16:21, 1,591 lamps): flat colours 12.88 ms →
+  layered 14.06 ms; `shading/standard` 0.79 → 1.63 ms (979 setups, usually two to four layers
+  weighed a pixel); 831 maps, 262 MB in the game's own block formats.
 - **The night's lamps without most shadows** (D-065's amendment, #386): only the lights the source's
   raster mode shadows (465 of 6,640), 14.6 → 14.0 ms; the shadow rays are a small part of the night.
 
