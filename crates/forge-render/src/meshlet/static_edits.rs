@@ -89,7 +89,9 @@ impl StaticEdits {
         let record = &mut records[instance as usize];
         let bounds = self.bounds[record.mesh as usize];
         let position = origin.offset(transform.position);
-        let center = transform.rotation * (bounds.truncate() * transform.scale) + position.local;
+        let center = transform.rotation
+            * (bounds.truncate() * transform.scale * Vec3::from(record.stretch))
+            + position.local;
         record.cell = position.cell.to_array();
         record.local = position.local.to_array();
         record.scale = transform.scale;

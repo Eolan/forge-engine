@@ -540,8 +540,9 @@ impl GpuMesh {
 const MAX_SHORTCUT_ROOTS: usize = 4;
 const _: () = assert!(std::mem::size_of::<GpuMesh>() == 416);
 
-/// Mirrors `Instance` in `meshlet.slang` (80 bytes): an integer cell and an `f32` offset for
-/// the position, a quaternion and a uniform scale for the transform (issue #93).
+/// Mirrors `Instance` in `meshlet.slang` (96 bytes): an integer cell and an `f32` offset for
+/// the position, a quaternion and a scale for the transform (issue #93): the largest axis's scale
+/// and each axis's share of it (`stretch`, 1 for a uniform scale).
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
 struct GpuInstance {
@@ -550,7 +551,7 @@ struct GpuInstance {
     mesh: u32,
     /// Metres from the cell's corner.
     local: [f32; 3],
-    /// Uniform scale.
+    /// The largest of the three axes' scales.
     scale: f32,
     /// Unit quaternion, xyz w.
     rotation: [f32; 4],
@@ -565,9 +566,36 @@ struct GpuInstance {
     /// Its own texture's sampled index plus one, 0 for none: a planet's tile's normal map
     /// ([`MeshletSceneBuilder::set_instance_texture`], #220).
     texture: u32,
+    /// Each axis's scale over `scale`, at most 1: `[1, 1, 1]` for a uniform scale (an authored
+    /// scene's instances are often stretched along one axis, [`MeshletSceneBuilder::add_instance_scaled`]).
+    stretch: [f32; 3],
+    pad: u32,
 }
 
-const _: () = assert!(std::mem::size_of::<GpuInstance>() == 80);
+const _: () = assert!(std::mem::size_of::<GpuInstance>() == 96);
+
+/// A scale's largest axis and each axis's share of it ([`GpuInstance::stretch`]); a uniform
+/// scale is kept as it is, its shares exactly 1, and one whose axes differ by under a hundred
+/// thousandth (a turned uniform matrix's decomposition, an ulp apart) is taken as uniform. A
+/// stretched one's axes are taken as their magnitudes (no mirroring), each share at least 1e-4
+/// (a flattened axis's normals stay finite).
+fn split_scale(scale: Vec3) -> (f32, [f32; 3]) {
+    if scale.x == scale.y && scale.y == scale.z {
+        return (scale.x, [1.0; 3]);
+    }
+    let magnitude = scale.abs();
+    let largest = magnitude.max_element();
+    if largest <= 0.0 {
+        return (0.0, [1.0; 3]);
+    }
+    if largest - magnitude.min_element() <= 1e-5 * largest {
+        return (largest, [1.0; 3]);
+    }
+    (
+        largest,
+        (magnitude / largest).max(Vec3::splat(1e-4)).to_array(),
+    )
+}
 
 /// Mirrors `Frame` in `meshlet.slang`.
 #[repr(C)]
@@ -1446,6 +1474,9 @@ pub struct MeshletSceneBuilder {
     /// The static instances change at run time ([`MeshletSceneBuilder::allow_static_edits`],
     /// #323).
     static_edits: bool,
+    /// Instances [`MeshletSceneBuilder::add_instance_scaled`] took mirrored (a negative
+    /// determinant) and drew unmirrored: logged when the scene is built.
+    mirrored: u32,
     /// What the scene keeps alive for one instance each ([`MeshletSceneBuilder::keep_for`]).
     instance_kept: Vec<(usize, Box<dyn std::any::Any + Send>)>,
     /// The view whose pages a streamed scene loads first
@@ -1810,13 +1841,41 @@ impl MeshletSceneBuilder {
         scale: f32,
         material: MaterialId,
     ) {
+        self.add_instance_stretched(mesh, position, rotation, scale, [1.0; 3], material);
+    }
+
+    /// Adds an instance of `mesh` at `model` (a rotation, a scale per axis, a translation from the
+    /// scene's origin) in `material`: an authored scene's instances, often stretched along an
+    /// axis (D-083's district). [`Self::add_instance_with_material`] keeps the x axis's scale for
+    /// all three (#380).
+    pub fn add_instance_scaled(&mut self, mesh: MeshId, model: Mat4, material: MaterialId) {
+        if model.determinant() < 0.0 {
+            self.mirrored += 1;
+        }
+        let (scale, rotation, translation) = model.to_scale_rotation_translation();
+        let position = self.origin.offset(translation);
+        let (largest, stretch) = split_scale(scale);
+        self.add_instance_stretched(mesh, position, rotation, largest, stretch, material);
+    }
+
+    /// [`Self::add_instance_at`] with each axis's share of `scale` (`stretch`, at most 1).
+    fn add_instance_stretched(
+        &mut self,
+        mesh: MeshId,
+        position: CellPos,
+        rotation: Quat,
+        scale: f32,
+        stretch: [f32; 3],
+        material: MaterialId,
+    ) {
         assert!(
             self.movers.is_none(),
             "the movers are the table's last instances"
         );
         let info = self.meshes[mesh.0 as usize];
         let position = position.normalized();
-        let center = rotation * (Vec3::from(info.center) * scale) + position.local;
+        let center =
+            rotation * (Vec3::from(info.center) * scale * Vec3::from(stretch)) + position.local;
         self.total_triangles += u64::from(info.triangle_count);
         self.finest_clusters += u64::from(self.mesh_finest[mesh.0 as usize]);
         self.work_bound += u64::from(self.ladder_work_bound(&info));
@@ -1833,6 +1892,8 @@ impl MeshletSceneBuilder {
             material: material.0,
             flags: 0,
             texture: 0,
+            stretch,
+            pad: 0,
         });
     }
 
@@ -2018,6 +2079,8 @@ impl MeshletSceneBuilder {
                     material: info.material,
                     flags: 0,
                     texture: 0,
+                    stretch: [1.0; 3],
+                    pad: 0,
                 },
                 count as usize,
             ));
@@ -2098,6 +2161,12 @@ impl MeshletSceneBuilder {
                 self.instances.len()
             ),
         );
+        if self.mirrored > 0 {
+            tracing::warn!(
+                mirrored = self.mirrored,
+                "instances given a mirrored matrix, drawn unmirrored (add_instance_scaled)"
+            );
+        }
         let page_count = self.store.sources.len() as u32;
         if let Some(capacity) = self.dynamic {
             self.check_dynamic(capacity, residency)?;
@@ -2758,6 +2827,7 @@ fn mesh_start_needs(
         let instance = instances[i];
         let rotation = DQuat::from_array(instance.rotation.map(f64::from));
         let scale = f64::from(instance.scale);
+        let stretch = DVec3::from(instance.stretch.map(f64::from));
         let origin = relative(instance.cell, instance.local);
         for level in 0..levels {
             // A level whose largest parent error cannot show at the instance's least
@@ -2776,8 +2846,9 @@ fn mesh_start_needs(
                 .iter()
                 .filter(|c| c.parent_error.is_finite())
             {
-                let centre =
-                    rotation * (DVec3::from(c.parent_center.map(f64::from)) * scale) + origin;
+                let centre = rotation
+                    * (DVec3::from(c.parent_center.map(f64::from)) * scale * stretch)
+                    + origin;
                 let d = (centre.length() - f64::from(c.parent_radius) * scale).max(near);
                 let px = f64::from(c.parent_error) * scale * k / d;
                 if px > threshold {
@@ -3264,7 +3335,8 @@ impl MeshletScene {
         });
         let scale = if shown { t.scale } else { 0.0 };
         let position = self.origin.offset(t.position);
-        let center = t.rotation * (bounds.truncate() * scale) + position.local;
+        let center = t.rotation * (bounds.truncate() * scale * Vec3::from(template.stretch))
+            + position.local;
         GpuInstance {
             cell: position.cell.to_array(),
             local: position.local.to_array(),
@@ -3719,7 +3791,7 @@ impl MeshletScene {
         self.instance_meshlets
     }
 
-    /// The instance table (`Instance` in `meshlet.slang`, 80 bytes each).
+    /// The instance table (`Instance` in `meshlet.slang`, 96 bytes each).
     pub(crate) fn instance_buffer(&self) -> &Buffer {
         &self.instances
     }

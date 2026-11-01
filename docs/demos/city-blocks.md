@@ -285,8 +285,10 @@ the A/B harness should still be 0 px at each offset. This session ran in the clo
 GPU: the captures are still to take, and the numbers above are the model's, not the card's.
 
 **Built (2026-09-26, the same cloud session; `docs/HANDOVER.md`):** the record the model
-predicted. `Instance` (80 bytes, from 96) holds an `int3 cell`, a `float3 local`, a unit
-quaternion, a uniform scale, the bounding sphere's centre from the same cell and its radius;
+predicted. `Instance` (80 bytes, from 96; 96 again since 2026-11-01 with a scale per axis, D-083's
+district) holds an `int3 cell`, a `float3 local`, a unit quaternion, a scale (the largest axis's,
+and since 2026-11-01 each axis's share of it), the bounding sphere's centre from the same cell and
+its radius;
 the frame block carries the culling camera's cell and offset, and every matrix is
 camera-relative (`FlyCamera::view_rotation`): a shader gets a position as
 `float3(cell − camera_cell) × 1024 + (local − camera_local)`, exact near the camera wherever

@@ -393,7 +393,7 @@ void probe_blend_main(uint3 group : SV_GroupID, uint thread : SV_GroupIndex)
 // it, where the points it lights are. A mover standing over a probe leaves it alone, so a
 // parked one does not wake it every frame.
 
-// Mirrors `Instance` in meshlet.slang (80 bytes): the fields the wake reads.
+// Mirrors `Instance` in meshlet.slang (96 bytes): the fields the wake reads.
 struct MoverRecord
 {
     int3 cell;
@@ -407,6 +407,8 @@ struct MoverRecord
     uint material;
     uint flags;   // `Instance::flags`: MOVER_NO_PROBE_RAYS
     uint texture;
+    float3 stretch;
+    uint pad;
 };
 
 // `INSTANCE_NO_PROBE_RAYS` in meshlet.slang: a mover the probes' rays never meet.

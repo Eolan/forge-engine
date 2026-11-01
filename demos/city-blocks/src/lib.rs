@@ -3385,6 +3385,35 @@ impl Demo for Gallery {
         if let Some(running) = &mut self.running {
             running.movers(&mut self.scene);
         }
+        // Its cells streamed round the camera (D-096): the camera (the scene frame) to the
+        // streamer's worker, its edits into the scene (`Running::cells`). The cells' sets go to an
+        // empty table: their rooms, panes and lamps are not taken yet.
+        if let Some(streamer) = self.running.as_mut().and_then(|r| r.cells()) {
+            let at = self.camera.position.as_dvec3();
+            let seq = streamer.view_facing(at, Some(self.camera.forward().as_dvec3()));
+            let mut table = forge_render::lamps::LampTable::new(0);
+            let mut systems = forge_render::CellSystems {
+                probes: None,
+                glass: None,
+                lamps: &mut table,
+            };
+            let took = if std::env::var_os("FORGE_CELLS_REALTIME").is_some() {
+                streamer.update(&ctx.device, &mut self.scene, &mut systems, 1, None)
+            } else {
+                streamer.update_settled(seq, &ctx.device, &mut self.scene, &mut systems)
+            };
+            match took {
+                Ok(took) if took.edits > 0 => tracing::debug!(
+                    frame = ctx.frames_rendered,
+                    loaded = took.loaded,
+                    unloaded = took.unloaded,
+                    worker_ms = took.worker_s * 1e3,
+                    "cells streamed (D-096)"
+                ),
+                Ok(_) => {}
+                Err(e) => tracing::warn!("the cells' streaming: {e}"),
+            }
+        }
         // The glass tank's liquid (#156): the statistics a frame in this slot asked for, then the
         // substeps the lab's ticks owe it, on the async compute queue.
         // Its buffer imported once, for the simulation and the drawing both.

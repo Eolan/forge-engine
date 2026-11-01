@@ -192,7 +192,9 @@ static const uint TEXTURE_NONE = 0xFFFFFFFFu;
 // (issue #93, D-004's amendment; crates/forge-render/src/cells.rs): its camera-relative position
 // is the cell difference to the camera's, taken in integers, plus the difference of the offsets
 // (`instance_relative`), exact near the camera wherever the scene stands in the world. The
-// transform is a unit quaternion and a uniform scale (`instance_frame`).
+// transform is a unit quaternion and a scale (`instance_frame`): `scale` the largest of its three
+// axes', `stretch` each axis's share of it (1, 1, 1 for a uniform scale; an authored scene's
+// instances are often stretched along one axis).
 public struct Instance
 {
     public int3 cell;
@@ -206,6 +208,8 @@ public struct Instance
     public uint material;   // its row in `Frame::materials`
     public uint flags;      // INSTANCE_STILL (#197), INSTANCE_VACANT (#220), INSTANCE_NO_* (#301)
     public uint texture;    // its own texture's sampled index plus one, 0 for none: a planet tile's normal map (#220)
+    public float3 stretch;  // each axis's scale over `scale`, at most 1: (1, 1, 1) for a uniform scale
+    public uint pad;
 };
 
 // Side of a cell, metres (forge_render::cells::CELL_SIZE): a power of two, so the product with
@@ -918,10 +922,37 @@ float4 quat_mul(float4 a, float4 b)
     return float4(a.w * b.xyz + b.w * a.xyz + cross(a.xyz, b.xyz), a.w * b.w - dot(a.xyz, b.xyz));
 }
 
+// Whether the instance is scaled alike along its three axes (every scene's but an authored one's).
+bool instance_uniform(Instance inst)
+{
+    return all(inst.stretch == 1.0);
+}
+
 // The instance's rotation and scale: object-space directions and offsets to camera-relative.
 float3x3 instance_frame(Instance inst)
 {
-    return quat_matrix(inst.rotation) * inst.scale;
+    if (instance_uniform(inst))
+        return quat_matrix(inst.rotation) * inst.scale;
+    float3 axes = inst.scale * inst.stretch;
+    return mul(quat_matrix(inst.rotation), float3x3(axes.x, 0.0, 0.0, 0.0, axes.y, 0.0, 0.0, 0.0, axes.z));
+}
+
+// What turns the instance's object-space normals to camera-relative ones, up to their length
+// (to normalise): the frame's inverse transpose, the frame itself where the scale is uniform.
+float3x3 instance_normal_frame(Instance inst)
+{
+    if (instance_uniform(inst))
+        return instance_frame(inst);
+    float3 axes = 1.0 / inst.stretch;
+    return mul(quat_matrix(inst.rotation), float3x3(axes.x, 0.0, 0.0, 0.0, axes.y, 0.0, 0.0, 0.0, axes.z));
+}
+
+// A camera-relative offset from the instance's origin back in object space (the frame's inverse).
+float3 instance_object_offset(Instance inst, float3 v)
+{
+    if (instance_uniform(inst))
+        return mul(transpose(quat_matrix(inst.rotation)), v) / inst.scale;
+    return mul(transpose(quat_matrix(inst.rotation)), v) / (inst.scale * inst.stretch);
 }
 
 // A point `cells` cells and `local` metres from the culling camera, in metres: the cell
@@ -1149,6 +1180,25 @@ float3 instance_point(Frame* f, Instance inst, float3 p)
 float3 instance_vector(Instance inst, float3 v)
 {
     return mul(instance_frame(inst), v);
+}
+
+// An object-space normal of the instance, turned (unnormalised; the inverse transpose where it is
+// stretched).
+float3 instance_normal(Instance inst, float3 n)
+{
+    return mul(instance_normal_frame(inst), n);
+}
+
+// The normal of the face spanned by object-space edges `a` and `b`, camera-relative, unnormalised
+// and scaled once by `scale` as the uniform case's (callers take its length times `scale` as twice
+// the face's area).
+float3 instance_face(Instance inst, float3 a, float3 b)
+{
+    if (instance_uniform(inst))
+        return instance_vector(inst, cross(a, b));
+    float3 s = inst.stretch;
+    float3x3 turn = mul(quat_matrix(inst.rotation), float3x3(s.x, 0.0, 0.0, 0.0, s.y, 0.0, 0.0, 0.0, s.z));
+    return inst.scale * cross(mul(turn, a), mul(turn, b));
 }
 
 // A camera-relative position in the scene frame: where the rays and the probes live.
@@ -1604,8 +1654,9 @@ ClusterVerdict cull_cluster(Frame* f, uint item, uint thread, bool streamed)
     // the axis at zero, whose normalisation is NaN and would (silently) cull the meshlet:
     // skip the test. The apex is camera-relative: the camera is the origin.
     // A double-sided cluster shows its back faces: no cone hides it (#171).
+    // A stretched instance's normals do not keep the cone: not culled by it.
     if (visible && (f[0].flags & FLAG_CONE_CULLING) != 0 && m.cone_cutoff < 1.0
-        && (v.cutouts & MATERIAL_FLAG_DOUBLE_SIDED) == 0)
+        && (v.cutouts & MATERIAL_FLAG_DOUBLE_SIDED) == 0 && instance_uniform(inst[0]))
     {
         float3 apex = pose_point(pose, m.cone_apex);
         float3 axis = normalize(mul(pose.frame, m.cone_axis));
@@ -2760,7 +2811,7 @@ void mesh_cutout_main(
         verts[thread].position = mul(f[0].view_proj, float4(relative, 1));
         verts[thread].uv = uvs ? paged_uv(f, uv_stream(f, base, m), thread) : float2(0.0);
         verts[thread].ground = v.position.xz;
-        verts[thread].slant = card_slant(normalize(instance_vector(inst, decode_normal(v.normal))), relative);
+        verts[thread].slant = card_slant(normalize(instance_normal(inst, decode_normal(v.normal))), relative);
     }
 
     for (uint t = thread; t < triangle_count; t += MESH_GROUP_SIZE)
@@ -2828,7 +2879,7 @@ FallbackCutoutVertex vertex_cutout_main(uint vertex_index : SV_VulkanVertexID, u
     o.id_base = slot << VISIBILITY_TRIANGLE_BITS;
     o.uv = float2(0.0);
     o.ground = v.position.xz;
-    o.slant = card_slant(normalize(instance_vector(inst, decode_normal(v.normal))), relative);
+    o.slant = card_slant(normalize(instance_normal(inst, decode_normal(v.normal))), relative);
     if (f[0].meshes[inst.mesh].uvs != 0)
         o.uv = paged_uv(f, uv_stream(f, base, m), local);
     return o;
@@ -4518,6 +4569,7 @@ struct Surface
     float3 dpdx;            // its change per pixel to the right and down
     float3 dpdy;
     float3x3 frame;         // the instance's rotation and scale: object-space directions to the camera-relative space
+    float3x3 normal_frame;  // object-space normals to camera-relative ones, up to their length (`instance_normal_frame`)
     uint instance_id;
     uint instance_place;    // a hash of where the instance stands, the same whatever its index (`interior_room`)
     uint meshlet_index;
@@ -4677,7 +4729,7 @@ void standard_surface(Material mat, Surface s, out float3 albedo, out float3 n)
             if (mat.albedo_texture != TEXTURE_NONE)
                 albedo *= texel * (0.7 + 0.6 * broad);
             if (mat.normal_texture != TEXTURE_NONE)
-                n = normalize(mul(s.frame, bent));
+                n = normalize(mul(s.normal_frame, bent));
             return;
         }
         if (mat.albedo_texture != TEXTURE_NONE)
@@ -4689,7 +4741,7 @@ void standard_surface(Material mat, Surface s, out float3 albedo, out float3 n)
         if (mat.normal_texture != TEXTURE_NONE)
         {
             float3 bent = triplanar_normal(mat.normal_texture, mat.normal_strength, s.object_normal, w, p, dpdx, dpdy);
-            n = normalize(mul(s.frame, bent));
+            n = normalize(mul(s.normal_frame, bent));
         }
     }
 }
@@ -4855,7 +4907,7 @@ LightInputs uv_mapped_light(Frame* f, Material mat, Surface s)
         bumps = 1.0 - min(mat.normal_strength, 1.0) * max(1.0 - len - NORMAL_LENGTH_ROUNDING, 0.0);
         t.xy *= mat.normal_strength;
         float3 bent = (t.x * T - t.y * B) * scale + t.z * N;
-        n = normalize(mul(s.frame, bent));
+        n = normalize(mul(s.normal_frame, bent));
     }
     float alpha = clamp(roughness, 0.02, 1.0);
     alpha *= alpha;
@@ -5143,7 +5195,7 @@ float3 standard_light(Frame* f, Material mat, Surface s, StandardInputs si)
     {
         float3 pane = lit;
         // The room behind, seen along the view into the mesh's space.
-        float3 d = normalize(mul(transpose(s.frame), -s.view));
+        float3 d = normalize(mul(transpose(s.normal_frame), -s.view));
         if (d.z > -1e-3)
             return pane;
         // Each window's room by where it stands, so a city that gains or loses an instance
@@ -5538,6 +5590,7 @@ void planet_layers(Frame* f, inout Surface s, out uint first, out uint second, o
     s.object_position = s.world;
     s.object_normal = s.n;
     s.frame = float3x3(1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0);
+    s.normal_frame = s.frame;
     s.instance_id = 0u;
 }
 
@@ -6214,7 +6267,7 @@ bool ray_back_face(Frame* f, uint instance, uint primitive, float3 direction)
         uint v = mesh.first_vertex + rs[0].indices[tri * 3 + k];
         p[k] = float3(rs[0].positions[v * 3], rs[0].positions[v * 3 + 1], rs[0].positions[v * 3 + 2]);
     }
-    float3 face = instance_vector(inst, cross(p[1] - p[0], p[2] - p[0]));
+    float3 face = instance_face(inst, p[1] - p[0], p[2] - p[0]);
     // A double-sided row has no back: its leaves are not the inside of anything (#171).
     return dot(face, direction) > 0.0
         && (f[0].materials[inst.material + rs[0].sections[tri]].flags & MATERIAL_FLAG_DOUBLE_SIDED) == 0;
@@ -6290,7 +6343,7 @@ RayHit ray_hit_seen(Frame* f, uint instance, uint primitive, float2 b, float3 or
         p[k] = float3(rs[0].positions[v * 3], rs[0].positions[v * 3 + 1], rs[0].positions[v * 3 + 2]);
     }
     float3 object_position = p[0] + b.x * (p[1] - p[0]) + b.y * (p[2] - p[0]);
-    float3 face = instance_vector(inst, cross(p[1] - p[0], p[2] - p[0]));
+    float3 face = instance_face(inst, p[1] - p[0], p[2] - p[0]);
     RayHit hit;
     hit.n = dot(face, face) > 1e-20 ? normalize(face) : -direction;
     hit.back = dot(hit.n, direction) > 0.0;
@@ -7215,6 +7268,7 @@ void bind_pose_surface(Frame* f, Mesh mesh, uint meshlet_index, Meshlet m, uint 
     float3x3 turn = b.lambda.x * skin_turn(f, c.joints, a0, eight) + b.lambda.y * skin_turn(f, c.joints, a1, eight)
                   + b.lambda.z * skin_turn(f, c.joints, a2, eight);
     s.frame = mul(s.frame, turn);
+    s.normal_frame = mul(s.normal_frame, turn);
     s.object_normal = normalize(b.lambda.x * decode_normal(a0.normal) + b.lambda.y * decode_normal(a1.normal)
                                 + b.lambda.z * decode_normal(a2.normal));
     s.object_position = b.lambda.x * a0.position + b.lambda.y * a1.position + b.lambda.z * a2.position;
@@ -7224,7 +7278,11 @@ void bind_pose_surface(Frame* f, Mesh mesh, uint meshlet_index, Meshlet m, uint 
     // joint's turn. The frame turns the bind pose's normal onto that normal, so a normal map's
     // detail lies along the prints' walls as on the flat.
     if (c.field != 0xFFFFFFFFu)
-        s.frame = mul(turn_onto(normalize(mul(s.frame, s.object_normal)), s.n), s.frame);
+    {
+        float3x3 onto = turn_onto(normalize(mul(s.normal_frame, s.object_normal)), s.n);
+        s.frame = mul(onto, s.frame);
+        s.normal_frame = mul(onto, s.normal_frame);
+    }
 }
 
 // The shortest turn taking unit vector `a` onto unit vector `b` (Rodrigues'), for any two not
@@ -7256,6 +7314,7 @@ void grass_surface(Frame* f, GrassHit h, uint2 pixel, inout Surface s, out float
     s.dpdx = h.dpdx * f[0].texture_lod_scale;
     s.dpdy = h.dpdy * f[0].texture_lod_scale;
     s.frame = float3x3(1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0);
+    s.normal_frame = s.frame;
     // Each clump (cell) its own of the row's two colours.
     s.instance_id = grass_hash(h.cell, 0x632BE5ABu);
     s.instance_place = s.instance_id;
@@ -7371,9 +7430,10 @@ PixelShading pixel_shading(Frame* f, uint class_index, uint2 pixel, uint vis, fl
         float3 o0 = decode_normal(v0.normal);
         float3 o1 = decode_normal(v1.normal);
         float3 o2 = decode_normal(v2.normal);
-        float3 n0 = normalize(mul(frame, o0));
-        float3 n1 = normalize(mul(frame, o1));
-        float3 n2 = normalize(mul(frame, o2));
+        float3x3 normal_frame = instance_normal_frame(inst);
+        float3 n0 = normalize(mul(normal_frame, o0));
+        float3 n1 = normalize(mul(normal_frame, o1));
+        float3 n2 = normalize(mul(normal_frame, o2));
         s.n = normalize(b.lambda.x * n0 + b.lambda.y * n1 + b.lambda.z * n2);
         // How far the normal turns across the pixel (#331): the vertices' normals by the
         // barycentrics' change per pixel.
@@ -7390,6 +7450,7 @@ PixelShading pixel_shading(Frame* f, uint class_index, uint2 pixel, uint vis, fl
         surface_relative = mul(frame, s.object_position) + relative;
         surface_scene = to_scene(f, surface_relative);
         s.frame = frame;
+        s.normal_frame = normal_frame;
         s.instance_id = inst.id;
         s.instance_place = asuint(inst.local.x) * 0x8da6b343u ^ asuint(inst.local.y) * 0xd8163841u
             ^ asuint(inst.local.z) * 0xcb1ab31fu ^ asuint(inst.cell.x) * 0x9E3779B9u ^ asuint(inst.cell.z) * 0x85EBCA6Bu;
@@ -7408,7 +7469,7 @@ PixelShading pixel_shading(Frame* f, uint class_index, uint2 pixel, uint vis, fl
         if ((mat.flags & MATERIAL_FLAG_GRATING) != 0)
         {
             s.n = grating_normal(s.view);
-            s.object_normal = normalize(mul(transpose(frame), s.n));
+            s.object_normal = normalize(instance_uniform(inst) ? mul(transpose(frame), s.n) : inst.stretch * mul(transpose(quat_matrix(inst.rotation)), s.n));
         }
         s.world = surface_scene;
         // A mesh with texture coordinates (D-047): interpolated as the position is.
@@ -7434,7 +7495,7 @@ PixelShading pixel_shading(Frame* f, uint class_index, uint2 pixel, uint vis, fl
             {
                 float4 texel = sample_image_grad(inst.texture - 1u, SAMPLER_LINEAR_CLAMP, s.uv, s.duvdx, s.duvdy);
                 s.object_normal = normalize(texel.rgb * 2.0 - 1.0);
-                s.n = normalize(mul(frame, s.object_normal));
+                s.n = normalize(mul(s.normal_frame, s.object_normal));
                 s.coast = texel.a;
             }
         }
@@ -7746,9 +7807,10 @@ void reflections_main(uint3 group : SV_GroupID, uint3 thread : SV_GroupThreadID)
     float2 size = float2(float(resolve_push.width), float(resolve_push.height));
     float2 ndc = float2((float(pixel.x) + 0.5) / size.x * 2.0 - 1.0, 1.0 - (float(pixel.y) + 0.5) / size.y * 2.0);
     Barycentrics b = barycentrics(c0, c1, c2, ndc, size);
-    float3 n = normalize(b.lambda.x * normalize(mul(frame, decode_normal(v0.normal)))
-        + b.lambda.y * normalize(mul(frame, decode_normal(v1.normal)))
-        + b.lambda.z * normalize(mul(frame, decode_normal(v2.normal))));
+    float3x3 normal_frame = instance_normal_frame(inst);
+    float3 n = normalize(b.lambda.x * normalize(mul(normal_frame, decode_normal(v0.normal)))
+        + b.lambda.y * normalize(mul(normal_frame, decode_normal(v1.normal)))
+        + b.lambda.z * normalize(mul(normal_frame, decode_normal(v2.normal))));
     float3 object_position = b.lambda.x * v0.position + b.lambda.y * v1.position + b.lambda.z * v2.position;
     // In the scene frame: the ray's.
     float3 world = to_scene(f, mul(frame, object_position) + relative);
@@ -7951,9 +8013,10 @@ PixelSurface pixel_surface(Frame* f, uint vis, uint2 pixel, uint width, uint hei
     float2 size = float2(float(width), float(height));
     float2 ndc = float2((float(pixel.x) + 0.5) / size.x * 2.0 - 1.0, 1.0 - (float(pixel.y) + 0.5) / size.y * 2.0);
     Barycentrics b = barycentrics(c0, c1, c2, ndc, size);
-    s.n = normalize(b.lambda.x * normalize(mul(frame, decode_normal(v0.normal)))
-        + b.lambda.y * normalize(mul(frame, decode_normal(v1.normal)))
-        + b.lambda.z * normalize(mul(frame, decode_normal(v2.normal))));
+    float3x3 normal_frame = instance_normal_frame(s.inst);
+    s.n = normalize(b.lambda.x * normalize(mul(normal_frame, decode_normal(v0.normal)))
+        + b.lambda.y * normalize(mul(normal_frame, decode_normal(v1.normal)))
+        + b.lambda.z * normalize(mul(normal_frame, decode_normal(v2.normal))));
     float3 object_position = b.lambda.x * v0.position + b.lambda.y * v1.position + b.lambda.z * v2.position;
     s.relative = mul(frame, object_position) + relative;
     if ((mat.flags & (MATERIAL_FLAG_DOUBLE_SIDED | MATERIAL_FLAG_FOLIAGE)) == MATERIAL_FLAG_DOUBLE_SIDED
@@ -9173,6 +9236,8 @@ void place_turned(Placement* p, uint slot, uint mesh, float3 position, float4 q,
     inst.material = m[0].material;
     inst.flags = 0u;
     inst.texture = 0u;
+    inst.stretch = float3(1.0, 1.0, 1.0);
+    inst.pad = 0u;
     p[0].instances[p[0].first + slot] = inst;
 }
 
@@ -9465,10 +9530,11 @@ void mover_motion_main(uint3 id : SV_DispatchThreadID)
     float2 uv = (float2(id.xy) + 0.5 - float2(p[0].jitter_x, p[0].jitter_y)) / size;
     float4 h = mul(p[0].relative_from_clip, float4(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, depth, 1.0));
     float3 point = h.xyz / h.w;
-    float3 object = mul(transpose(quat_matrix(now.rotation)), point - instance_relative(f, now)) / now.scale;
+    float3 object = instance_object_offset(now, point - instance_relative(f, now));
     if (p[0].skinned != 0)
         object = skinned_before(p, f, now.mesh, vis, object);
-    float3 point_before = mul(quat_matrix(before.rotation), object * before.scale) + instance_relative(f, before);
+    float3 turned = instance_uniform(before) ? mul(quat_matrix(before.rotation), object * before.scale) : mul(instance_frame(before), object);
+    float3 point_before = turned + instance_relative(f, before);
     float4 clip = mul(p[0].previous_from_relative, float4(point_before, 1.0));
     if (clip.w <= 1e-9)
         return;

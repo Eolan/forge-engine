@@ -610,7 +610,7 @@ pub fn place(
     let ms = start.elapsed().as_secs_f64() * 1e3;
 
     // The table as the GPU wrote it: its checksum, and its meshes against the mirror.
-    const INSTANCE_BYTES: u64 = 80;
+    const INSTANCE_BYTES: u64 = 96;
     let bytes = device.read_back(
         scene.instance_buffer(),
         u64::from(first) * INSTANCE_BYTES,
@@ -746,7 +746,7 @@ mod tests {
     fn the_morton_order_keeps_every_record_and_packs_neighbours_together() {
         // 256 records on a 16 × 16 grid of 10 m around an origin two cells out, in a scrambled
         // order, their index as the id; the records west of the origin sit in the cell before.
-        const RECORD: usize = 80;
+        const RECORD: usize = 96;
         let origin = CellPos {
             cell: IVec3::new(2, 0, 2),
             local: glam::Vec3::new(100.0, 0.0, 100.0),

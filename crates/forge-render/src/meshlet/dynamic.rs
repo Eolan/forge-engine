@@ -679,6 +679,21 @@ impl SceneEditor {
         scale: f32,
         material: MaterialId,
     ) -> Result<u32> {
+        self.add_instance_stretched(mesh, position, rotation, Vec3::splat(scale), material)
+    }
+
+    /// Adds an instance of `mesh` standing at `position`, turned by `rotation` and scaled by
+    /// `scale` along each of its axes, in `material` ([`MeshletSceneBuilder::add_instance_scaled`]).
+    /// Returns its slot.
+    pub fn add_instance_stretched(
+        &mut self,
+        mesh: MeshId,
+        position: CellPos,
+        rotation: Quat,
+        scale: Vec3,
+        material: MaterialId,
+    ) -> Result<u32> {
+        let (scale, stretch) = super::split_scale(scale);
         let Some((info, sections)) = self.mesh_records.get(mesh.0 as usize).copied().flatten()
         else {
             return Err(GpuError::Unsupported(format!(
@@ -696,7 +711,8 @@ impl SceneEditor {
             return no_room("instances");
         };
         let position = position.normalized();
-        let center = rotation * (Vec3::from(info.center) * scale) + position.local;
+        let center =
+            rotation * (Vec3::from(info.center) * scale * Vec3::from(stretch)) + position.local;
         // Slots past the table's end are handed out in order, so none is skipped; were one, its
         // record would be written vacant, as the culls and the structure read every slot.
         for gap in self.instances.len() as u32..slot {
@@ -714,6 +730,8 @@ impl SceneEditor {
             material: material.0,
             flags: 0,
             texture: 0,
+            stretch,
+            pad: 0,
         };
         if self.instances.len() <= slot as usize {
             self.instances.resize(slot as usize + 1, vacant());
@@ -773,7 +791,8 @@ impl SceneEditor {
         let (info, _) =
             self.mesh_records[record.mesh as usize].expect("an instance's mesh in the scene");
         let position = position.normalized();
-        let center = rotation * (Vec3::from(info.center) * scale) + position.local;
+        let center = rotation * (Vec3::from(info.center) * scale * Vec3::from(record.stretch))
+            + position.local;
         self.instances[instance as usize] = GpuInstance {
             cell: position.cell.to_array(),
             local: position.local.to_array(),
@@ -1146,6 +1165,7 @@ impl SceneEditor {
 fn vacant() -> GpuInstance {
     GpuInstance {
         flags: INSTANCE_VACANT,
+        stretch: [1.0; 3],
         ..GpuInstance::zeroed()
     }
 }
