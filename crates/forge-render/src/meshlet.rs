@@ -239,6 +239,21 @@ const INSTANCE_NO_PROBE_RAYS: u32 = 16;
 const INSTANCE_NO_MIRROR_RAYS: u32 = 32;
 /// `Instance::flags`: not met by the shadow rays from far points (D-075 step 3).
 const INSTANCE_NO_FAR_SHADOW_RAYS: u32 = 64;
+/// The worlds of rays (`RAY_*` in the shader: the shadow rays, the probes', the mirrors', the far
+/// shadow rays) an instance of `flags` is met by: the bits its top-level record's mask keeps
+/// (`tlas_instances_main`).
+fn ray_worlds(flags: u32) -> u32 {
+    [
+        (INSTANCE_NO_SHADOW_RAYS, 1),
+        (INSTANCE_NO_PROBE_RAYS, 2),
+        (INSTANCE_NO_MIRROR_RAYS, 4),
+        (INSTANCE_NO_FAR_SHADOW_RAYS, 8),
+    ]
+    .into_iter()
+    .filter(|&(off, _)| flags & off == 0)
+    .fold(0, |worlds, (_, ray)| worlds | ray)
+}
+
 /// Every `Instance::flags` bit [`Visibility`] sets.
 const INSTANCE_VISIBILITY: u32 = INSTANCE_NO_RASTER
     | INSTANCE_NO_SHADOW_RAYS
@@ -707,7 +722,11 @@ struct GpuFrame {
     /// This frame's joints' matrices (three rows each), which turn the textures' relief with the
     /// body.
     skin_joints: u64,
-    skin_pad: u64,
+    /// The worlds of rays some mover is met by (`ray_worlds` of their templates): a ray of none
+    /// skips the movers' structure, which it walks otherwise even when it can hit none of them
+    /// (an authored city's 549 turning fans, 0.4 ms of its night's rays).
+    movers_rays: u32,
+    movers_pad: u32,
     /// The ground window (#197): min x, min z, max x, max z in the scene's frame, where the
     /// windowed ground draws no fragment (min > max: none).
     ground_window: [f32; 4],
@@ -3951,6 +3970,19 @@ impl MeshletScene {
         self.rays.as_ref()
     }
 
+    /// The worlds of rays some mover is met by (`Frame::movers_rays`): the union over their
+    /// templates, a pool's slot counted with the last instance it showed (more than its hidden
+    /// record is met by: a walk kept, never one skipped wrongly); 0 without movers.
+    fn movers_rays(&self) -> u32 {
+        self.movers.as_ref().map_or(0, |movers| {
+            movers
+                .templates
+                .borrow()
+                .iter()
+                .fold(0, |worlds, t| worlds | ray_worlds(t.flags))
+        })
+    }
+
     /// The first mover's instance (#79): the movers are the table's trailing range. `None`
     /// without movers.
     pub fn first_mover(&self) -> Option<u32> {
@@ -5488,7 +5520,8 @@ impl MeshletRenderer {
             skin_clusters: scene.skins.as_ref().map_or(0, SceneSkins::clusters_address),
             skin_vertices: scene.skins.as_ref().map_or(0, SceneSkins::vertices_address),
             skin_joints: scene.skins.as_ref().map_or(0, SceneSkins::joints_address),
-            skin_pad: 0,
+            movers_rays: scene.movers_rays(),
+            movers_pad: 0,
             ground_window: scene.ground_window.get(),
             planet: scene.planet.get().camera,
             planet_axis: scene.planet.get().axis,
@@ -7625,6 +7658,24 @@ mod tests {
                 .zip(1u32..)
                 .all(|(i, k)| i.id == k)
         );
+    }
+
+    /// The rays' worlds an instance is met by follow its visibility: every one by default, none
+    /// for one only drawn (its rays skip the movers' structure when no mover is met by them).
+    #[test]
+    fn the_rays_worlds_follow_the_visibility() {
+        assert_eq!(ray_worlds(Visibility::ALL.flags()), 15);
+        let drawn = Visibility {
+            drawn: true,
+            ..Visibility::NONE
+        };
+        assert_eq!(ray_worlds(drawn.flags()), 0);
+        assert_eq!(ray_worlds(Visibility::NONE.flags()), 0);
+        let probes = Visibility {
+            probes: true,
+            ..Visibility::NONE
+        };
+        assert_eq!(ray_worlds(probes.flags()), 2);
     }
 
     /// A mover given its own material rows keeps them in its record, which its templates copy;

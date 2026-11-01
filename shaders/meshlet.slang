@@ -502,7 +502,8 @@ public struct Frame
     public SkinCluster* skin_clusters; // with skinned meshes (#165): the skin pass's clusters (skin.slang), else null
     public SkinVertex* skin_vertices;  // their vertices in the bind pose, from which their textures are projected (#166)
     public float4* skin_joints;        // this frame's joints' matrices, three rows each: they turn the textures' relief with the body
-    public uint64_t skin_pad;
+    public uint movers_rays;        // the worlds of rays (RAY_*) some mover is met by: the others skip their structure (`movers_tlas`)
+    public uint movers_pad;
     public float4 ground_window;    // the ground window (#197): min x, min z, max x, max z in the scene's frame, where MESH_WINDOWED_GROUND meshes draw no fragment (min > max: none)
     public float4 planet;           // the planet the scene stands on (#220): the camera from its centre, world axes (xyz), and its height over the sea (w), metres
     public float4 planet_axis;      // its north (xyz) and its radius at the sea's level (w, metres; 0: none)
@@ -553,10 +554,11 @@ uint shadow_world(Frame* f, float3 relative, uint2 pixel)
     return interleaved_gradient_noise(pixel, f[0].noise_frame, float2(17.0, 29.0)) < t ? RAY_SHADOW_FAR : RAY_SHADOW;
 }
 
-// The movers' structure the rays meet, 0 for none (`g_trace_movers`).
+// The movers' structure the rays meet, 0 for none (`g_trace_movers`), or when no mover is met by
+// this pass's rays (`g_ray_mask`, `Frame::movers_rays`): the rays walked it all the same.
 uint64_t movers_tlas(Frame* f)
 {
-    return g_trace_movers ? f[0].tlas_movers : 0;
+    return g_trace_movers && (f[0].movers_rays & g_ray_mask) != 0u ? f[0].tlas_movers : 0;
 }
 
 static const uint REGION_ANY = 0xFFFFFFFEu; // `lamps::REGION_ANY`: the lamps that light every region

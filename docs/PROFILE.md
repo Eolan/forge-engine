@@ -2823,8 +2823,10 @@ street 5.8 / 8.7. VRAM 3.9 GB (2.3 GB geometry: #387, pages about a tenth full).
   night (ReSTIR DI, DLSS Quality at 2560 × 1440): 14.02 → 14.48 ms, every ray also walking the
   movers' structure (`shadow/lamp restir` +0.19, `gi/trace` +0.2). Not their build: refitted
   (`FORGE_TLAS_REFIT=1`) `movers/tlas` shows 0.03 ms and the frame is the same; nor their hits:
-  drawn but seen by no ray, 14.46 against 14.41. To try: turning meshes traced at rest in the static
-  structure, or the movers' walk skipped by the rays none of them is seen by.
+  drawn but seen by no ray, 14.46 against 14.41. Since the rays skip the movers' structure when
+  no mover is met by them (`Frame::movers_rays`), the district traces its turning meshes at rest (a
+  static copy no pass draws) and draws them turning (movers no ray meets): 14.18 ms against 14.45
+  (two runs each), `shadow/lamp restir` back to its 2.79 without them; 14.01 with none.
 - **The night's lamps without most shadows** (D-065's amendment, #386): only the lights the source's
   raster mode shadows (465 of 6,640), 14.6 → 14.0 ms; the shadow rays are a small part of the night.
 

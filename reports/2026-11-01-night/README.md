@@ -31,7 +31,7 @@ we were working on a proper game engine", held to 120 fps at 2560 × 1440 throug
 | Street by day, still | 10.6 ms | 6.8 ms | 8.33 |
 | Turning 120°/s, driving 25 m/s, flying 40 m/s (resident, p99) | | 8.0, 9.2, 8.7 | 8.33 |
 | Flying 40 m/s, streamed in real time (p50 / p99) | | 5.79 / 7.65 (was 5.77 / 13.9) | 8.33 |
-| Street at night, 6,640 lamps, ReSTIR DI | | 13.7–14.0 ms (14.5 with the fans turning) | 8.33 |
+| Street at night, 6,640 lamps, ReSTIR DI | | 13.7–14.0 ms (14.2 with the fans turning) | 8.33 |
 
 By day under DLSS Quality the district holds the target, streamed or resident; DLAA does not yet
 (GI is half the frame). The night is the gap: `shadow/lamp restir` 2.9 ms, `gi/trace` 2.2,
@@ -59,8 +59,9 @@ worker's longest edit 47 → 23 ms.
   the owner's call; the measures keep every lamp shadowed.
 - **The turning fans cost 0.45 ms at night** (14.02 → 14.48): every ray also walks the movers'
   structure. Not its build (refitted, the same frame) nor the fans' hits (seen by no ray, the same
-  frame). Next: trace small turning meshes at rest in the static structure, or skip the movers'
-  walk for the rays none of them is seen by.
+  frame). Rays now skip the movers' structure when no mover is met by them, and the district
+  traces its fans at rest in the static structure while drawing them turning: 14.18 ms (0.17 over
+  no fans at all, from 0.45).
 - **The 112-byte lamp record costs nothing** (the Bistro's night 18.76 → 18.76 ms with the lists).
 
 ## Proposals for the owner (not built)
