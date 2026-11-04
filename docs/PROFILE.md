@@ -2833,6 +2833,18 @@ street 5.8 / 8.7. VRAM 3.9 GB (2.3 GB geometry: #387, pages about a tenth full).
   weighed a pixel); 831 maps, 262 MB in the game's own block formats.
 - **The night's lamps without most shadows** (D-065's amendment, #386): only the lights the source's
   raster mode shadows (465 of 6,640), 14.6 → 14.0 ms; the shadow rays are a small part of the night.
+- **The mirror rays' hits weigh their column's lamps** (#386, 2026-11-04): the frame's lamps of
+  every region in a grid of 32 × 32 columns of 8 m round the camera (`lamps::NearLamps`, rebuilt
+  with the frame's set, up to 1 MiB a frame slot), each column listing those whose reach meets it.
+  A mirror ray's hit weighs every lamp exactly, twice; now those of its column alone, the same sums
+  and picks (0 px at the owner's bar view, with and without DLSS). The benchmark path by day
+  (DLSS Quality at 2560 × 1440, 5,000 frames, `--lamp-restir`): `shading/reflections` 0.665 →
+  0.492 ms, the frame 17.42 → 17.27 (p99 20.29 → 19.57); the bar at 1920 × 1080 without the
+  upscaler 2.02 → 1.40 ms. The sampled hits (the bounce's, the probes') and ReSTIR's candidates
+  drawn from the column too came to more shadow rays, not less time (each about +0.1 ms on the
+  path, the still camera's shimmer 1.24 → 1.17 % in the bar, 2.49 → 2.74 % in the street at night):
+  left as they were. With the lamps off the path takes 8.63 ms: the lamps cost 8.8 of its 17.4
+  (`shadow/lamp restir` 4.65 and its REBLUR about 1.1, the bounce's hits 1.3, the probes' 1.05).
 
 ## Instances scaled per axis: the 96-byte record (#380, 2026-11-01)
 

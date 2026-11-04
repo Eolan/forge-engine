@@ -3290,7 +3290,9 @@ impl Demo for Gallery {
             forge_render::lamps::LampChoice::Nearest
         };
         let shares = forge_render::lamps::choose_shares(&lamps, camera_in_scene, choice);
-        self.kept_lamps = self.scene.set_chosen_lamps(frame.slot, &lamps, &shares);
+        self.kept_lamps = self
+            .scene
+            .set_chosen_lamps(frame.slot, &lamps, &shares, camera_in_scene);
         // Each far room's lamps that are on, for their light round its walls (#363).
         if let Some(probes) = self.probes.as_mut() {
             probes.set_room_lamps(&lamps, &shares);

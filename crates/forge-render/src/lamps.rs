@@ -809,9 +809,192 @@ pub fn lists(kept: &[GpuLamp]) -> Vec<[u32; 2]> {
     out
 }
 
+/// A column's side in [`NearLamps`], metres (#386): as [`FAR_CELL`].
+pub const NEAR_CELL: f32 = 8.0;
+/// [`NearLamps`]' columns along x and along z round the camera: 256 m of [`NEAR_CELL`]. A point
+/// beyond weighs every lamp, as before the grid.
+pub const NEAR_SIDE: u32 = 32;
+
+/// Mirrors `NearLamps` in `meshlet.slang`.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, Pod, Zeroable)]
+pub(crate) struct GpuNearLamps {
+    pub columns: u64,
+    pub indices: u64,
+    pub origin: [f32; 2],
+    pub cell: f32,
+    pub side: u32,
+    pub count: u32,
+    pub pad: [u32; 3],
+}
+
+const _: () = assert!(std::mem::size_of::<GpuNearLamps>() == 48);
+
+/// The frame's lamps, all of every region ([`EVERY_REGION`]), by the columns of a grid of
+/// [`NEAR_SIDE`] × [`NEAR_SIDE`] columns of [`NEAR_CELL`] metres round the camera (#386): each
+/// column lists, in increasing order, the lamps whose reach (`colour_reach.w`, as the shader lets
+/// a lamp go) meets it across the ground. Made only when no lamp of the frame has regions: its
+/// one use, a mirror ray's hit, weighs every lamp of the frame. A ray's hit, a probe's or a pixel weighs its column's
+/// lamps alone rather than the frame's every one: an authored district's hundreds, most of them
+/// beyond reach, cost its reflections, its bounce and its probes milliseconds. A lamp beyond its
+/// reach weighs nothing, and the distance across the ground is never more than the distance, so
+/// a column leaves out no lamp that lights a point in it, and the sums and picks are the same.
+pub(crate) struct NearLamps {
+    /// The grid's corner (x, z) in the scene frame, a whole number of columns.
+    pub origin: Vec2,
+    /// Per column, rows of increasing z: (first, count) in [`Self::indices`].
+    pub columns: Vec<[u32; 2]>,
+    /// The lamps' indices in the frame's list, column after column.
+    pub indices: Vec<u32>,
+    /// The lamps gridded: the frame's lamps of every region.
+    pub count: u32,
+}
+
+impl NearLamps {
+    /// The grid of `kept`'s lamps round `camera` (the scene frame); `None` when one of them has
+    /// regions (the light lists then), or there are none.
+    pub(crate) fn new(kept: &[GpuLamp], camera: Vec3) -> Option<Self> {
+        if kept.is_empty() || kept.iter().any(|l| l.regions != EVERY_REGION) {
+            return None;
+        }
+        let half = NEAR_SIDE as f32 * 0.5;
+        let origin = ((Vec2::new(camera.x, camera.z) / NEAR_CELL).floor() - half) * NEAR_CELL;
+        let side = NEAR_SIDE as i32;
+        let mut lists: Vec<Vec<u32>> = vec![Vec::new(); (NEAR_SIDE * NEAR_SIDE) as usize];
+        let mut count = 0;
+        for (i, l) in kept.iter().enumerate() {
+            count += 1;
+            if l.colour_reach[3] <= 0.0 {
+                continue;
+            }
+            // A hair over its reach, the bounds as the test: the shader's test is on the
+            // distance squared, rounded in the scene frame.
+            let reach = l.colour_reach[3] * 1.001 + 0.01;
+            let at = Vec2::new(l.position_radius[0], l.position_radius[2]) - origin;
+            let lo = ((at - reach) / NEAR_CELL)
+                .floor()
+                .as_ivec2()
+                .max(glam::IVec2::ZERO);
+            let hi = ((at + reach) / NEAR_CELL)
+                .floor()
+                .as_ivec2()
+                .min(glam::IVec2::splat(side - 1));
+            for z in lo.y..=hi.y {
+                for x in lo.x..=hi.x {
+                    // The column's nearest point to the lamp, within its reach.
+                    let corner = Vec2::new(x as f32, z as f32) * NEAR_CELL;
+                    if at.clamp(corner, corner + NEAR_CELL).distance(at) <= reach {
+                        lists[(z * side + x) as usize].push(i as u32);
+                    }
+                }
+            }
+        }
+        let mut columns = Vec::with_capacity(lists.len());
+        let mut indices = Vec::new();
+        for list in &lists {
+            columns.push([indices.len() as u32, list.len() as u32]);
+            indices.extend_from_slice(list);
+        }
+        Some(Self {
+            origin,
+            columns,
+            indices,
+            count,
+        })
+    }
+
+    /// The lamps listed for the column of `point` (the scene frame); `None` beyond the grid.
+    #[cfg(test)]
+    fn at(&self, point: Vec3) -> Option<&[u32]> {
+        let c = ((Vec2::new(point.x, point.z) - self.origin) / NEAR_CELL).floor();
+        if c.min_element() < 0.0 || c.max_element() >= NEAR_SIDE as f32 {
+            return None;
+        }
+        let [first, n] = self.columns[(c.y as u32 * NEAR_SIDE + c.x as u32) as usize];
+        Some(&self.indices[first as usize..(first + n) as usize])
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_column_lists_every_lamp_of_every_region_that_reaches_it_in_order() {
+        // Lamps scattered round the camera, some with regions (left to the lists), one dark.
+        let mut kept = Vec::new();
+        let mut h = 0x9E37_79B9_u32;
+        let mut next = || {
+            h ^= h << 13;
+            h ^= h >> 17;
+            h ^= h << 5;
+            h as f32 / u32::MAX as f32
+        };
+        for i in 0..300 {
+            let mut regions = EVERY_REGION;
+            if i % 7 == 0 {
+                regions[0] = 3;
+            }
+            let reach = if i % 50 == 1 {
+                0.0
+            } else {
+                2.0 + next() * 60.0
+            };
+            kept.push(GpuLamp {
+                position_radius: [
+                    next() * 400.0 - 200.0,
+                    next() * 30.0,
+                    next() * 400.0 - 200.0,
+                    0.05,
+                ],
+                colour_reach: [1.0, 1.0, 1.0, reach],
+                regions,
+                ..GpuLamp::default()
+            });
+        }
+        let camera = Vec3::new(13.0, 2.0, -40.0);
+        assert!(
+            NearLamps::new(&kept, camera).is_none(),
+            "lamps with regions: the lists"
+        );
+        kept.retain(|l| l.regions == EVERY_REGION);
+        let grid = NearLamps::new(&kept, camera).expect("every lamp of every region");
+        assert_eq!(
+            grid.count,
+            kept.iter().filter(|l| l.regions == EVERY_REGION).count() as u32
+        );
+        // Points over the grid and past it: every lamp of every region within its reach of a
+        // point is in the point's column, in increasing order; beyond the grid, none.
+        for _ in 0..2000 {
+            let point = Vec3::new(
+                camera.x + next() * 320.0 - 160.0,
+                next() * 30.0,
+                camera.z + next() * 320.0 - 160.0,
+            );
+            let Some(list) = grid.at(point) else {
+                let c = (Vec2::new(point.x, point.z) - grid.origin) / NEAR_CELL;
+                assert!(c.min_element() < 0.0 || c.max_element() >= NEAR_SIDE as f32);
+                continue;
+            };
+            assert!(list.windows(2).all(|w| w[0] < w[1]));
+            for (i, l) in kept.iter().enumerate() {
+                let lit = l.regions == EVERY_REGION
+                    && Vec3::from_slice(&l.position_radius[..3]).distance_squared(point)
+                        < l.colour_reach[3] * l.colour_reach[3];
+                if lit {
+                    assert!(
+                        list.contains(&(i as u32)),
+                        "lamp {i} lights {point} but is not listed"
+                    );
+                }
+                if l.regions != EVERY_REGION {
+                    assert!(!list.contains(&(i as u32)));
+                }
+            }
+        }
+        // The camera's column is in the middle of the grid.
+        assert!(grid.at(camera).is_some());
+    }
 
     #[test]
     fn the_light_lists_hold_each_lamp_under_each_of_its_regions() {

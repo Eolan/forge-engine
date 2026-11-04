@@ -433,6 +433,22 @@ public struct DecalGrid
     public uint pad;
 };
 
+// The frame's lamps, when none has regions (`lamps::EVERY_REGION`), by the columns of a grid round
+// the camera (#386, `lamps::NearLamps`): each column's list holds those whose reach meets it, so a
+// point weighs those alone, not the frame's every lamp (a lamp beyond its reach weighs nothing).
+public struct NearLamps
+{
+    public uint2* columns;  // per column (first, count) in `indices`, rows of increasing z
+    public uint* indices;   // the frame's lamp indices, column after column, increasing
+    public float2 origin;   // the grid's corner (x, z), the scene frame
+    public float cell;      // a column's side, metres
+    public uint side;       // columns along x and along z
+    public uint count;      // the lamps gridded: the frame's lamps of every region
+    public uint pad0;
+    public uint pad1;
+    public uint pad2;
+};
+
 // The street lamps lit beyond the frame's set (#284, lamps.rs `FarLamps`): columns of `cell`
 // metres in a hash as the decals', each column's lamps at `indices[first..]`, indices into
 // `lamps` (their whole light) and the frame's shares of it (`Frame::far_shares`).
@@ -551,6 +567,7 @@ public struct Frame
     public uint grass_depth;        // its cells along z
     public uint show_input;         // a debug view of a standard row's shading input (D-086, `r.show.input`, `shading_input`); 0: none
     public uint gi_reference;       // D-088's reference for the diffuse light (`r.gi.reference`, `near_field_reference`); 0: the probes
+    public NearLamps* near_lamps;   // the frame's lamps by columns round the camera when none has regions (#386), null: none
 };
 
 // Whether this thread's rays meet the movers: every pass's but the probes' unless their scene asks
@@ -609,7 +626,13 @@ uint2 lamp_run(Frame* f, uint key)
 // The lamps a surface in region `region` (across a doorway also `other`) takes: up to three runs
 // of the light lists, the lamps of every region's, `region`'s and `other`'s (`lamp_runs`); without
 // a region (REGION_NONE) or lists, every lamp of the frame, `direct`. A lamp under both `region`
-// and `other` counts under `region` only (`lamp_counted`).
+// and `other` counts under `region` only (`lamp_counted`). With `columns`, without a region and
+// within the grid of `Frame::near_lamps` (#386, made when no lamp has regions), every lamp is that
+// of the point at `world`'s column, marked LAMP_COLUMN: a lamp beyond its reach weighs nothing,
+// so an exact weighing's sums and picks are the same, without an authored district's hundreds of
+// lamps weighed twice at every mirror ray's hit. (Taken for the sampled hits and ReSTIR's candidates too, it drew lamps in
+// reach rather than nothing: more shadow rays, about 0.1 ms each for the bounce, the probes and
+// ReSTIR on the private district's path, and its still camera's shimmer up and down by view.)
 struct LampRuns
 {
     uint2 run[3];
@@ -617,7 +640,10 @@ struct LampRuns
     uint region;
 };
 
-LampRuns lamp_runs(Frame* f, uint region, uint other)
+// An entry of a run at or past this is one of `NearLamps::indices` (`lamp_at`).
+static const uint LAMP_COLUMN = 0x80000000u;
+
+LampRuns lamp_runs(Frame* f, uint region, uint other, float3 world, bool columns)
 {
     LampRuns r;
     r.region = region;
@@ -625,13 +651,31 @@ LampRuns lamp_runs(Frame* f, uint region, uint other)
     r.run[0] = r.direct ? uint2(0u, f[0].lamp_count) : lamp_run(f, REGION_ANY);
     r.run[1] = r.direct ? uint2(0u, 0u) : lamp_run(f, region);
     r.run[2] = r.direct || other == region ? uint2(0u, 0u) : lamp_run(f, other);
+    // Every lamp, by the point's column where the grid reaches it.
+    NearLamps* g = f[0].near_lamps;
+    if (columns && r.direct && g != nullptr && g[0].count == f[0].lamp_count)
+    {
+        float2 c = floor((world.xz - g[0].origin) / g[0].cell);
+        if (all(c >= 0.0) && all(c < float(g[0].side)))
+        {
+            uint2 column = g[0].columns[uint(c.y) * g[0].side + uint(c.x)];
+            r.direct = false;
+            r.run[0] = uint2(LAMP_COLUMN + column.x, LAMP_COLUMN + column.x + column.y);
+            r.run[1] = uint2(0u, 0u);
+            r.run[2] = uint2(0u, 0u);
+        }
+    }
     return r;
 }
 
 // The frame's index of the lamp at entry `k` of run `run`.
 uint lamp_at(Frame* f, LampRuns r, uint k)
 {
-    return r.direct ? k : f[0].lamp_lists[k].y;
+    if (r.direct)
+        return k;
+    if (k >= LAMP_COLUMN)
+        return f[0].near_lamps[0].indices[k - LAMP_COLUMN];
+    return f[0].lamp_lists[k].y;
 }
 
 // Whether the lamp at entry `k` of run `run` counts there: not again under `other`.
@@ -3761,7 +3805,7 @@ LampPlace lamp_place(Frame* f, ProbeField* probes, float3 world, float3 n, float
             place.other = at.other;
         }
     }
-    place.runs = lamp_runs(f, place.region, place.other);
+    place.runs = lamp_runs(f, place.region, place.other, world, false);
     return place;
 }
 
@@ -6841,7 +6885,8 @@ float3 hit_lamps_weighed(Frame* f, RayHit hit, uint region, uint seed, bool prob
     uint count = f[0].lamp_count;
     if (count == 0u || f[0].lamps == nullptr || f[0].tlas == 0)
         return float3(0.0);
-    LampRuns runs = lamp_runs(f, region, region);
+    // The grid's columns for an exact weighing (a mirror's hit): the same sums for less.
+    LampRuns runs = lamp_runs(f, region, region, hit.position, !sample);
     uint first = runs.run[0].y - runs.run[0].x;
     uint reach = first + (runs.run[1].y - runs.run[1].x);
     float total = 0.0;

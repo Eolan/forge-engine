@@ -779,11 +779,23 @@ struct GpuFrame {
     show_input: u32,
     /// D-088's reference for the diffuse light ([`MeshletRenderer::gi_reference`]).
     gi_reference: u32,
+    /// The frame's lamps of every region by columns round the camera (#386,
+    /// [`crate::lamps::NearLamps`]): the `NearLamps` record at [`NEAR_LAMPS_OFFSET`] in the lamps'
+    /// buffer; 0: none.
+    near_lamps: u64,
 }
 
 /// Where a frame slot's light lists start in its lamps' buffer, bytes: after the lamps.
 const LAMP_LISTS_OFFSET: u64 =
     (crate::lamps::LAMP_CAPACITY * std::mem::size_of::<crate::lamps::GpuLamp>()) as u64;
+
+/// Where a frame slot's grid of lamps by columns starts in its lamps' buffer (#386): its record,
+/// its columns, then its lists, after the light lists.
+const NEAR_LAMPS_OFFSET: u64 = LAMP_LISTS_OFFSET + (crate::lamps::MAX_LIST * 8) as u64;
+
+/// Room for the grid's columns and lists: the columns' 8 KiB, and some 250,000 entries (every
+/// lamp over a quarter of the grid). A larger grid is left out: every lamp is weighed, as before.
+const NEAR_LAMPS_BYTES: u64 = 1 << 20;
 
 /// The far street lamps' buffers (#284): their grid, the record the frame points at, and their
 /// shares of their light a frame slot.
@@ -2916,7 +2928,7 @@ impl MeshletSceneBuilder {
             lamp_buffers: (0..FRAMES_IN_FLIGHT)
                 .map(|i| {
                     device.create_buffer(BufferDesc {
-                        size: LAMP_LISTS_OFFSET + (crate::lamps::MAX_LIST * 8) as u64,
+                        size: NEAR_LAMPS_OFFSET + NEAR_LAMPS_BYTES,
                         usage: vk::BufferUsageFlags::STORAGE_BUFFER,
                         location: MemoryLocation::CpuToGpu,
                         category: MemoryCategory::Frame,
@@ -2925,6 +2937,7 @@ impl MeshletSceneBuilder {
                 })
                 .collect::<Result<Vec<_>>>()?,
             lamp_counts: std::array::from_fn(|_| Cell::new([0; 2])),
+            near_lamps: std::array::from_fn(|_| Cell::new(false)),
             decals,
             far_lamps,
             far_retired: Vec::new(),
@@ -3148,6 +3161,8 @@ pub struct MeshletScene {
     /// and how many of each.
     lamp_buffers: Vec<Buffer>,
     lamp_counts: [Cell<[u32; 2]>; FRAMES_IN_FLIGHT],
+    /// Whether a frame slot's lamps' buffer holds the grid of lamps by columns (#386).
+    near_lamps: [Cell<bool>; FRAMES_IN_FLIGHT],
     /// Its decals' tables and the record pointing into them (D-074, [`MeshletSceneBuilder::set_decals`]),
     /// none without decals.
     decals: Option<(Buffer, Buffer)>,
@@ -3734,17 +3749,19 @@ impl MeshletScene {
         choice: crate::lamps::LampChoice,
     ) -> Vec<crate::lamps::GpuLamp> {
         let shares = crate::lamps::choose_shares(lamps, camera, choice);
-        self.set_chosen_lamps(slot, lamps, &shares)
+        self.set_chosen_lamps(slot, lamps, &shares, camera)
     }
 
     /// As [`Self::set_lamps`], with the lamps already chosen: `shares` as
     /// [`crate::lamps::choose_shares`] gives them for `lamps` (whose shares the caller also hands
-    /// to the clear glass, [`crate::Glass::set_unlit`]).
+    /// to the clear glass, [`crate::Glass::set_unlit`]), seen from `camera` (the scene's frame),
+    /// round which the lamps' grid by columns stands (#386).
     pub fn set_chosen_lamps(
         &self,
         slot: FrameSlot,
         lamps: &[crate::lamps::Lamp],
         shares: &[(usize, f32)],
+        camera: Vec3,
     ) -> Vec<crate::lamps::GpuLamp> {
         let kept: Vec<crate::lamps::GpuLamp> = shares
             .iter()
@@ -3755,12 +3772,49 @@ impl MeshletScene {
             far.shares[slot.index].write(0, &far.far.weights(lamps, shares));
         }
         let lists = crate::lamps::lists(&kept);
+        let mut near = false;
         if !kept.is_empty() {
             let buffer = &self.lamp_buffers[slot.index];
             buffer.write(0, &kept);
             buffer.write(LAMP_LISTS_OFFSET, &lists);
+            // The lamps of every region by columns round the camera (#386): the record, then the
+            // columns and the lists, at their addresses in the buffer.
+            if let Some(grid) = crate::lamps::NearLamps::new(&kept, camera) {
+                let mut bytes = vec![0_u8; std::mem::size_of::<crate::lamps::GpuNearLamps>()];
+                let columns =
+                    crate::columns::place(&mut bytes, bytemuck::cast_slice(&grid.columns));
+                let indices =
+                    crate::columns::place(&mut bytes, bytemuck::cast_slice(&grid.indices));
+                if bytes.len() as u64 > NEAR_LAMPS_BYTES {
+                    static SAID: std::sync::atomic::AtomicBool =
+                        std::sync::atomic::AtomicBool::new(false);
+                    if !SAID.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                        tracing::warn!(
+                            bytes = bytes.len(),
+                            room = NEAR_LAMPS_BYTES,
+                            "the lamps' grid by columns is past its room: the mirror rays weigh every lamp (#386)"
+                        );
+                    }
+                } else {
+                    let base = buffer.address() + NEAR_LAMPS_OFFSET;
+                    let record = crate::lamps::GpuNearLamps {
+                        columns: base + columns,
+                        indices: base + indices,
+                        origin: grid.origin.to_array(),
+                        cell: crate::lamps::NEAR_CELL,
+                        side: crate::lamps::NEAR_SIDE,
+                        count: grid.count,
+                        pad: [0; 3],
+                    };
+                    bytes[..std::mem::size_of::<crate::lamps::GpuNearLamps>()]
+                        .copy_from_slice(bytemuck::bytes_of(&record));
+                    buffer.write(NEAR_LAMPS_OFFSET, &bytes);
+                    near = true;
+                }
+            }
         }
         self.lamp_counts[slot.index].set([kept.len() as u32, lists.len() as u32]);
+        self.near_lamps[slot.index].set(near);
         kept
     }
 
@@ -5531,6 +5585,11 @@ impl MeshletRenderer {
             lamp_count: scene.lamp_counts[slot.index].get()[0],
             lamp_list_count: scene.lamp_counts[slot.index].get()[1],
             lamp_lists: scene.lamp_buffers[slot.index].address() + LAMP_LISTS_OFFSET,
+            near_lamps: if scene.near_lamps[slot.index].get() {
+                scene.lamp_buffers[slot.index].address() + NEAR_LAMPS_OFFSET
+            } else {
+                0
+            },
             decals: scene.decals.as_ref().map_or(0, |d| d.1.address()),
             far_lamps: scene.far_lamps.as_ref().map_or(0, |l| l.record.address()),
             far_shares: scene
