@@ -10928,8 +10928,11 @@ took a shell 3 to 5 times too bright at night.
 - **Skipped** where a froxel's share times its extinction is under 2·10⁻⁴ a metre: over the
   volume's 64 m that is under 1.3 % of the radiance. By day the district's fog everywhere falls
   under it.
-- **The cost** (`fog/light`, the district at 1600 × 900): the bar by day 1.89 → 2.41 ms, at night
-  3.03 → 3.62, the street by day 1.34 → 1.77. Two lookups a froxel in a rolled loop.
+- **The cost** (`fog/light`, the district at 1600 × 900): as first pushed, the bar by day 1.89 →
+  2.41 ms, at night 3.03 → 3.62, the street by day 1.34 → 1.77. With the extinction and its share
+  blended as one (fewer froxels over the threshold) and the lookup in a branch of its own (chosen
+  per direction inside the loop, it cost the bar's night 1 ms more), the bar by day 2.12, at night
+  3.30. Two lookups a froxel in a rolled loop.
 - **The look:** a faint lift of the haze, mean ꟻLIP 0.020 (the bar by day), 0.027 (at night),
   0.028 (the street). The neon's own glow in the game's haze is still missing: the probes stand
   1.8 m apart in the bar's hall and blur it. `--fog-ambient 0` turns it off.

@@ -2867,8 +2867,9 @@ street 5.8 / 8.7. VRAM 3.9 GB (2.3 GB geometry: #387, pages about a tenth full).
   with the froxels lit at their middles; `fog/apply` 0.06–0.07, `fog/integrate` 0.001.
 - **The probes' light in the fog** (D-099 item 3, 2026-11-04): two probe lookups a froxel where its
   share of that light counts. `fog/light` at 1600 × 900 (the froxels are fixed, 160 × 90 × 64):
-  the bar by day 1.89 → 2.41 ms, at night 3.03 → 3.62, the street by day 1.34 → 1.77.
-  `--fog-ambient 0` for the A/B.
+  the bar by day 1.89 → 2.41 ms, at night 3.03 → 3.62, the street by day 1.34 → 1.77 as first
+  pushed; with the extinction blended with its share and the lookup in its own branch, the bar
+  2.12 by day and 3.30 at night. `--fog-ambient 0` for the A/B.
 - **What else the path's gap could take** (the owner's choice; one run each, the same session):
   D-097's baked probe rays (`FORGE_GI_BAKED=1`) 17.27 → 16.40 ms (`gi/probe rays` 2.75 → 2.02;
   0.01 more error against the path tracer by D-097's measure); the per-pixel bounce off
