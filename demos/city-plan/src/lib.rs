@@ -7690,6 +7690,8 @@ impl Scenario for PlanScenario {
         if let Some([grime, stain, cracks]) = decal_textures {
             let stamp = |texture, strength: f32, priority| forge_render::DecalKind {
                 texture,
+                alpha: forge_render::DecalAlpha::Premultiplied,
+                uv_rect: [0.0, 0.0, 1.0, 1.0],
                 tint: [1.0, 1.0, 1.0, strength],
                 strip: false,
                 priority,
@@ -7701,6 +7703,8 @@ impl Scenario for PlanScenario {
                 kinds: vec![
                     forge_render::DecalKind {
                         texture: grime,
+                        alpha: forge_render::DecalAlpha::Premultiplied,
+                        uv_rect: [0.0, 0.0, 1.0, 1.0],
                         tint: [1.0; 4],
                         strip: true,
                         priority: 0,

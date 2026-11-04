@@ -7170,6 +7170,16 @@ rivers meet, and flat mud covered the steep stream's gravel. A river's edge want
 whatever its bank is (as the shore's swash), not another row; row decals wait for a feature drawn
 in one material (a track, a worn path, a patch of another layer).
 
+**Decals from a production's textures** (2026-11-04, #304): the private district's 10,914 decals
+within 256 m (393 materials: dirt, dust, gravel, broken glass, road markings, posters) come as
+block-compressed textures, which cannot be premultiplied in their mips, and many show one cell of
+an atlas. A kind now says how its texture reads (`DecalAlpha`: premultiplied as Forge's own,
+straight, its colour and alpha apart and multiplied as it is read, or its red channel a mask over
+the kind's tint) and which part of it it shows (`DecalKind::uv_rect`, the gradients scaled with
+it). The village's thirteen views are 0 px from the same build without it. Their materials' other
+inputs (a gradient map's recolour, normal, roughness and parallax maps) wait for the colour decals
+to be drawn there and compared with the game's pictures.
+
 *(research: decals.md; D-007, D-013, D-021, D-026, D-028, D-047, D-065; issue #304)*
 
 ## D-075 — Forests as a ladder per tree, grass as a GPU pass near the camera ✅ (proposed 2026-10-19, #302, #300; the owner's go the same day: "follow your recommendations")
@@ -10592,3 +10602,4 @@ probes:
   hits, and the cache is not cleared when the scene's geometry changes or the probes reset (a
   probe's key is its place, so only a moved probe re-traces). Off, every capture of eight scenes is
   unchanged (0 px).
+

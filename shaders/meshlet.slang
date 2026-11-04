@@ -394,17 +394,29 @@ public struct Decal
 // A row decal's `DecalKind::row` for a colour decal.
 static const uint DECAL_NO_ROW = 0xFFFFFFFFu;
 
-// A kind of decal: its texture (colour premultiplied by alpha), its sampler (a stamp's clamps, a
-// strip's repeats along u), how it fades by depth and by the surface's facing, and its tint.
+// A kind of decal: its texture (read as `alpha` says: colour premultiplied by alpha, apart, or a red
+// mask over the tint), its sampler (a stamp's clamps, a strip's repeats along u), how it fades by
+// depth and by the surface's facing, its tint, and the part of the texture it shows.
 public struct DecalKind
 {
     public uint texture;
     public uint sampler;
     public float depth_fade; // the share of the box's depth it fades over towards both faces
-    public uint row;         // a row decal's material row, its texture's alpha the mask (~0: a colour decal)
+    public uint row;         // a row decal's material row, its texture's coverage the mask (~0: a colour decal)
     public float4 tint;      // rgb times its colour, a its strength
     public float4 facing;    // x: the cosine to the box's y under which it is gone, y: over which whole
+    public uint alpha;       // DECAL_PREMULTIPLIED, DECAL_STRAIGHT or DECAL_MASK
+    public uint strip;       // 1: a strip, its u wrapped within its cell (`uv_rect`)
+    public uint alpha_pad1;
+    public uint alpha_pad2;
+    public float4 uv_rect;   // the part of its texture it shows: u, v of its corner, its width and height
 };
+
+// How a decal kind's texture gives its colour and coverage (`DecalAlpha`): its colour premultiplied
+// by its alpha, its colour and alpha apart, or its red channel the coverage of the kind's tint.
+static const uint DECAL_PREMULTIPLIED = 0u;
+static const uint DECAL_STRAIGHT = 1u;
+static const uint DECAL_MASK = 2u;
 
 // The decals' grid (D-074): columns of `cell` metres (x, z) in an open-addressed hash of
 // `slot_mask` + 1 slots (x, z, first, count; count 0 an empty slot), each column's decals at
@@ -4667,9 +4679,10 @@ uint2 column_run(uint4* slots, uint slot_mask, float cell, float3 world)
 }
 
 // The decals over surface `s` (D-074, forge_render::decals): the decals of its grid column, in
-// painter's order, whose box holds it. A colour decal blends into `albedo` its texture's
+// painter's order, whose box holds it. Its texture read as its kind's `alpha` says (premultiplied,
+// apart and multiplied here, or a red mask over the tint), a colour decal blends into `albedo` its
 // premultiplied colour; a row decal (`rows`: the layered class) its row's surface, colour and
-// normal (`n`), by its texture's alpha, as a layer of the ground. A decal fades out towards its
+// normal (`n`), by its coverage, as a layer of the ground. A decal fades out towards its
 // box's faces along its axis, and on the surfaces that do not face that axis (the ground under a
 // wall's grime). Its texture's gradients are its box's axes dotted with the surface's analytic
 // change per pixel, scaled as the rows' textures are (`texture_lod_scale`): no halo where the
@@ -4695,11 +4708,20 @@ void apply_decals(Frame* f, Surface s, inout float3 albedo, inout float3 n, bool
         float strength = facing * depth * k.tint.a;
         if (strength <= 0.0)
             continue;
-        float2 scale = float2(d.repeat, 1.0) / (2.0 * d.half.xz);
-        float2 uv = (local.xz / (2.0 * d.half.xz) + 0.5) * float2(d.repeat, 1.0) + float2(d.phase, 0.0);
+        float2 scale = float2(d.repeat, 1.0) / (2.0 * d.half.xz) * k.uv_rect.zw;
+        float2 cell = (local.xz / (2.0 * d.half.xz) + 0.5) * float2(d.repeat, 1.0) + float2(d.phase, 0.0);
+        // A strip repeats within its cell (the sampler's wrap is the whole texture's); the
+        // gradients are explicit, so the wrap leaves no seam of mips.
+        if (k.strip != 0u)
+            cell.x = frac(cell.x);
+        float2 uv = k.uv_rect.xy + cell * k.uv_rect.zw;
         float2 gx = quat_turn(d.rotation, mul(s.frame, s.dpdx), true).xz * scale * f[0].texture_lod_scale;
         float2 gy = quat_turn(d.rotation, mul(s.frame, s.dpdy), true).xz * scale * f[0].texture_lod_scale;
         float4 t = sample_image_grad(k.texture, k.sampler, uv, gx, gy);
+        if (k.alpha == DECAL_STRAIGHT)
+            t.rgb *= t.a;
+        else if (k.alpha == DECAL_MASK)
+            t = float4(t.rrr, t.r);
         if (k.row == DECAL_NO_ROW)
         {
             albedo = albedo * (1.0 - t.a * strength) + t.rgb * k.tint.rgb * strength;

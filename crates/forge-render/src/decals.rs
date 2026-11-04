@@ -10,9 +10,13 @@
 //! projects along (out of the surface it marks). Kinds take their colour from a texture of their
 //! own ([`crate::textures::decal_grime`] and the like), premultiplied by its alpha in every mip,
 //! clamped at its edges (a stamp) or repeating along `u` (a strip: the foot of a wall). A row
-//! decal (`DecalKind::row`) takes from its texture only its alpha, a mask over a material row: where
-//! it masks, the surface is that row's (its colour and its normal), as a layered ground's layer is;
-//! the layered class alone takes them for now.
+//! decal (`DecalKind::row`) takes from its texture only its coverage (its alpha, or its red with
+//! `DecalAlpha::Mask`), a mask over a material row: where it masks, the surface is that row's (its
+//! colour and its normal), as a layered ground's layer is; the layered class alone takes them for
+//! now. Textures made elsewhere (a production's
+//! block-compressed ones) come with their alpha apart (`DecalAlpha::Straight`) or as a mask over
+//! the kind's tint (`DecalAlpha::Mask`), and a kind may show one cell of an atlas
+//! (`DecalKind::uv_rect`).
 
 use crate::columns::{ColumnTables, place};
 use bytemuck::{Pod, Zeroable};
@@ -25,12 +29,33 @@ pub const CELL: f32 = 4.0;
 /// priorities first, with a warning.
 pub const MAX_PER_CELL: usize = 16;
 
+/// How a kind's texture gives its colour and how much of the surface it covers.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum DecalAlpha {
+    /// RGBA, its colour premultiplied by its alpha in every mip (Forge's own decal textures).
+    #[default]
+    Premultiplied,
+    /// RGBA, its colour and its alpha apart (a block-compressed texture's), multiplied as it is
+    /// read: its mips' edges darken a little where the colour under its clear texels is dark.
+    Straight,
+    /// Its red channel alone: how much of the kind's tint covers the surface (a mask over a flat
+    /// colour; a one-channel texture's). The texture is uploaded linear: decoded as sRGB, a half
+    /// coverage would read as about a fifth.
+    Mask,
+}
+
 /// A kind of decal: how its texture marks a surface.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct DecalKind {
-    /// Its texture in the scene's [`crate::TextureSet`] (`TextureSet::add`): RGBA, its colour
-    /// premultiplied by its alpha in every mip.
+    /// Its texture in the scene's [`crate::TextureSet`] (`TextureSet::add`), read as `alpha` says.
     pub texture: TextureId,
+    /// How its texture gives its colour and its coverage.
+    pub alpha: DecalAlpha,
+    /// The part of its texture it shows: `u`, `v` of its corner and its width and height, in the
+    /// texture's coordinates (an atlas's cell); `[0, 0, 1, 1]` for all of it. A strip repeats its
+    /// cell along `u`, from its phase, within the cell. A stamp's edges and coarser mips read a
+    /// little of the cells beside it where the atlas leaves no gutter.
+    pub uv_rect: [f32; 4],
     /// What its colour is multiplied by (rgb), and its strength (a).
     pub tint: [f32; 4],
     /// Its texture repeats along the box's `x` (a strip: [`Decal::repeat`] times, from the decal's
@@ -104,7 +129,15 @@ struct GpuDecalKind {
     row: u32,
     tint: [f32; 4],
     facing: [f32; 4],
+    /// `DecalAlpha`: 0 premultiplied, 1 straight, 2 a red mask.
+    alpha: u32,
+    /// 1: a strip, its `u` wrapped within its cell.
+    strip: u32,
+    pad: [u32; 2],
+    uv_rect: [f32; 4],
 }
+
+const _: () = assert!(std::mem::size_of::<GpuDecalKind>() == 80);
 
 /// Mirrors `DecalGrid` in `meshlet.slang`: where the tables stand and the hash's size.
 #[repr(C)]
@@ -206,6 +239,14 @@ impl DecalSet {
                 row: k.row.map_or(u32::MAX, |r| r.0),
                 tint: k.tint,
                 facing: [k.facing[0], k.facing[1], 0.0, 0.0],
+                alpha: match k.alpha {
+                    DecalAlpha::Premultiplied => 0,
+                    DecalAlpha::Straight => 1,
+                    DecalAlpha::Mask => 2,
+                },
+                strip: u32::from(k.strip),
+                pad: [0; 2],
+                uv_rect: k.uv_rect,
             })
             .collect();
         let mut bytes: Vec<u8> = Vec::new();
@@ -232,6 +273,8 @@ mod tests {
     fn kind(priority: u8) -> DecalKind {
         DecalKind {
             texture: TextureId(0),
+            alpha: DecalAlpha::Premultiplied,
+            uv_rect: [0.0, 0.0, 1.0, 1.0],
             tint: [1.0; 4],
             strip: false,
             priority,
@@ -300,5 +343,27 @@ mod tests {
         assert_eq!(list.len(), MAX_PER_CELL);
         // The lowest priorities went first.
         assert!(list.iter().filter(|&&i| i % 2 == 0).count() < MAX_PER_CELL / 2);
+    }
+
+    #[test]
+    fn a_kind_keeps_how_its_texture_reads_and_its_atlas_cell() {
+        let atlas = DecalKind {
+            alpha: DecalAlpha::Mask,
+            uv_rect: [0.5, 0.25, 0.5, 0.25],
+            ..kind(0)
+        };
+        let straight = DecalKind {
+            alpha: DecalAlpha::Straight,
+            ..kind(1)
+        };
+        let set = DecalSet {
+            kinds: vec![kind(0), straight, atlas],
+            decals: vec![decal(0.0, 0.0, 2)],
+        };
+        let t = set.tables(|id| id.0).expect("tables");
+        let kinds: &[GpuDecalKind] = bytemuck::cast_slice(&t.bytes[t.kinds as usize..]);
+        assert_eq!(kinds.iter().map(|k| k.alpha).collect::<Vec<_>>(), [0, 1, 2]);
+        assert_eq!(kinds[0].uv_rect, [0.0, 0.0, 1.0, 1.0]);
+        assert_eq!(kinds[2].uv_rect, [0.5, 0.25, 0.5, 0.25]);
     }
 }
