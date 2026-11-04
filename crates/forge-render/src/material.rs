@@ -393,6 +393,11 @@ pub const MATERIAL_LEVELS: u32 = 16384;
 /// [`GpuMaterial`]'s flags: a layered material (D-095), its layers rows after it.
 pub const MATERIAL_MULTILAYER: u32 = 32768;
 
+/// [`GpuMaterial`]'s flags: a layered material's layer with a microblend
+/// ([`forge_core::material::Microblend`]), held in its row's mask slots (a layer has no masks of
+/// its own): its texture, then its tiles, contrast, normal strength and offset as float bits.
+pub const MATERIAL_MICROBLEND: u32 = 65536;
+
 /// The textures a world's materials sample, uploaded with their mips and visible to every
 /// shader through the bindless set. Released when dropped.
 pub struct TextureSet {
@@ -1024,6 +1029,11 @@ pub fn gpu_rows(table: &MaterialTable, textures: Option<&TextureSet>) -> Vec<Gpu
                         MATERIAL_MULTILAYER
                     } else {
                         0
+                    }
+                    | if multilayer.is_none() && uv.microblend.is_some() {
+                        MATERIAL_MICROBLEND
+                    } else {
+                        0
                     },
                 contour: r.contour.map_or(0, |c| u32::from(c.below) + 1),
                 contour_above: r.contour.map_or(0, |c| c.above),
@@ -1054,9 +1064,19 @@ pub fn gpu_rows(table: &MaterialTable, textures: Option<&TextureSet>) -> Vec<Gpu
                 layer_count: multilayer.map_or(0, |m| m.layers),
                 presence_texture: texture(multilayer.map(|m| m.presence)),
                 pad_layers: 0,
-                mask_textures: std::array::from_fn(|k| {
-                    texture(multilayer.and_then(|m| m.masks[k]))
-                }),
+                mask_textures: match (multilayer, uv.microblend) {
+                    (None, Some(mb)) => [
+                        texture(Some(mb.texture)),
+                        mb.tiles.to_bits(),
+                        mb.contrast.to_bits(),
+                        mb.normal_strength.to_bits(),
+                        mb.offset[0].to_bits(),
+                        mb.offset[1].to_bits(),
+                        0,
+                        0,
+                    ],
+                    _ => std::array::from_fn(|k| texture(multilayer.and_then(|m| m.masks[k]))),
+                },
             }
         })
         .collect()

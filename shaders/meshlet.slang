@@ -171,6 +171,7 @@ static const uint MATERIAL_FLAG_GLAZED = 2048;  // a window's glass a probe's ra
 static const uint MATERIAL_FLAG_LAMP = 4096;    // a lamp's glowing part: the probes' rays take none of its glow (D-065)
 static const uint MATERIAL_FLAG_LEVELS = 16384; // a layered material's layer: roughness and metalness from single-channel maps, remapped to `levels`
 static const uint MATERIAL_FLAG_MULTILAYER = 32768; // a layered material (D-095): its layers rows after it, from `first_layer`
+static const uint MATERIAL_FLAG_MICROBLEND = 65536; // a layered material's layer with a microblend in its mask slots: texture, tiles, contrast, normal strength, offset u, v (float bits)
 static const uint MATERIAL_FLAG_DRAWN_AFTER = 8192; // left out of the visibility pass, drawn after the resolve; the rays meet it (D-065's glass)
 static const uint CUTOUT_GROUND_WINDOW = 1u << 31; // `cluster_cutouts`: windowed ground reaching into the ground window (#197)
 static const uint CUTOUT_LADDER = 1u << 30;        // `describe_cluster`: a cluster of an instance crossing its ladder (D-075), dithered (`cutout_kept`)
@@ -5083,7 +5084,19 @@ LightInputs multilayer_light(Frame* f, Material mat, Surface s)
         if (mask_image == TEXTURE_NONE)
             continue;
         float4 masks = sample_image_grad(mask_image, SAMPLER_ANISOTROPIC_WRAP, s.uv, gx, gy);
-        float w = masks[m % 4u] * layer.alpha;
+        float mask = masks[m % 4u];
+        // Its microblend (D-095, `forge_core::material::Microblend`): the mask's edge broken up by
+        // the microblend's alpha at the layer's contrast, the shipped game's form. Zero where the
+        // mask is, so the presence bits still hold.
+        if ((layer.flags & MATERIAL_FLAG_MICROBLEND) != 0u && layer.mask_textures_a.x != TEXTURE_NONE && mask > 0.0)
+        {
+            float tiles = asfloat(layer.mask_textures_a.y);
+            float2 at = s.uv * tiles + float2(asfloat(layer.mask_textures_b.x), asfloat(layer.mask_textures_b.y));
+            float a = sample_image_grad(layer.mask_textures_a.x, SAMPLER_ANISOTROPIC_WRAP, at, gx * tiles, gy * tiles).a;
+            float c = clamp(asfloat(layer.mask_textures_a.z), 1e-5, 1.0);
+            mask = saturate(((a + mask - 1.0) * (1.0 - c) + mask * c) / c);
+        }
+        float w = mask * layer.alpha;
         if (w <= 0.0)
             continue;
         LightInputs l = uv_mapped_light(f, layer, s);

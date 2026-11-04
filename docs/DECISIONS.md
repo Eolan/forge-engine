@@ -10441,6 +10441,28 @@ mixes texels whose four differ: seams). So, in place of item 2:
 - **Next:** the microblends at the masks' edges, the masks block-compressed, texture streaming
   (#385).
 
+**The microblends, their masks' part (2026-11-04).** The owner thought the private district's bar
+ceiling was missing textures. Its maps and masks all load. What its layered surfaces lacked was each
+layer's microblend: 12,377 of the district's 19,564 layers name one (concrete wear, dirt stains,
+fine filth, leaks, scratches; 6,834 with a normal), the grime that breaks a layer's mask at its edge.
+- **The form:** the shipped game's, as WolvenKit's Blender add-on reconstructs it from its shader
+  graph: with the mask m, the microblend's alpha a (at the layer's microblend tiling and offset over
+  the mesh's UVs) and its contrast c (clamped to 0.00001–1), the weight is
+  `saturate(((a + m − 1)(1 − c) + m c) / c)` times the opacity. At contrast 1 the mask is as it is;
+  lower, its rise becomes a ragged edge. It is zero where the mask is, so the presence bits hold.
+- **The rows:** a layer's row holds its microblend in its mask slots, which a layer never uses
+  (`MATERIAL_MICROBLEND`, `forge_core::material::Microblend`). Every row without one is unchanged.
+- **Measured** at the bar, DLSS Quality at 1080p: 60 % of the pixels move by more than two codes,
+  mostly the structure's metals and the floor (a plate behind the bar shows its diamond pattern
+  through the grime); `shading/standard` within its noise (1.46 → 1.39 ms). A still camera's moving
+  pixels (frames ten apart, DLSS Quality at 2560 × 1440): the bathroom 1.20 → 1.34 %, the bar
+  8.25 → 8.31 %, spread over the metals and tiles the microblends reveal, which carry the room's
+  reflections; softening a low contrast by the pixel's footprint changed nothing (1.34 %), so it
+  was left out.
+- **Left:** the microblends' normals (red and green, at their strength, where the mask is under 1)
+  and four of the district's 112 microblends that the archives do not hold by name. The look is the
+  owner's to judge on a walk.
+
 ## D-096 — Authored worlds cooked into packages and streamed by cell ✅ (proposed 2026-11-01 and followed under the owner's word of the night, "Follow recommendations until 10 am"; #214, #338, D-053, D-077, D-094)
 
 **Why:** the owner, 2026-11-01, on the private district (D-083 step 4): "Zomboid uses very old

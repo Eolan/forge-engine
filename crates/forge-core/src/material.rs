@@ -132,6 +132,29 @@ pub struct UvMapping {
     pub levels: Option<[f32; 4]>,
     /// With `levels`: the metalness map (red).
     pub metalness_texture: Option<TextureId>,
+    /// A layered material's layer (D-095): its microblend, which breaks up the edge of its mask.
+    pub microblend: Option<Microblend>,
+}
+
+/// A layered material's layer's microblend (D-095's next step): a tiling detail texture whose
+/// alpha `a` breaks up the edge of the layer's mask `m` at its `contrast` `c` (clamped to
+/// 0.00001–1), the layer's weight then `saturate(((a + m − 1)(1 − c) + m c) / c)` times its
+/// opacity. At contrast 1 the mask is as it is; lower, the mask's soft rise becomes a ragged edge
+/// where the microblend's alpha crosses it (scratches, leaks, filth). The form is the shipped
+/// game's, as WolvenKit's Blender add-on reconstructs it from its shader graph. The microblend's
+/// normal (red and green, `normal_strength`) is kept for a later step.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Microblend {
+    /// Its texture (alpha the breakup; linear).
+    pub texture: TextureId,
+    /// How many times it repeats over the mesh's UVs.
+    pub tiles: f32,
+    /// How sharply the mask's edge follows its alpha (1: not at all).
+    pub contrast: f32,
+    /// Its normal's strength (not drawn yet).
+    pub normal_strength: f32,
+    /// Its offset over the UVs, after the tiling.
+    pub offset: [f32; 2],
 }
 
 /// A layered material (D-095, an authored city's surfaces): its layers are `layers` rows from
@@ -184,6 +207,7 @@ impl Default for UvMapping {
             alpha: 1.0,
             levels: None,
             metalness_texture: None,
+            microblend: None,
         }
     }
 }

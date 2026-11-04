@@ -347,6 +347,11 @@ files (`docs/research/`) and the decisions (`docs/DECISIONS.md`).
 - **The light through leaves** (`meshlet.slang`'s `leaf_transmission`, #346). Barré-Brisebois and
   Bouchard's translucency approximation (GDC 2011, above), the light's direction bent by the
   normal and a lobe round the view, as Frostbite uses it for thin foliage.
+- **Layered materials' microblends** (`meshlet.slang`'s `multilayer_light`, D-095). The shipped
+  city game's form of a layer's mask broken up by its microblend's alpha at its contrast, as the
+  WolvenKit team's Cyberpunk Blender add-on reconstructs it from the game's shader graph
+  (`material_types/multilayered.py`, its mask mixer): the formula only, no code taken (the
+  add-on's repository states no licence).
 
 **The render graph** (`forge-gpu::graph`, D-020):
 - **The frame graph.** Yuriy O'Donnell, "FrameGraph: Extensible Rendering Architecture in
