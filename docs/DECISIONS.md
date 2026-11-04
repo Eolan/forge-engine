@@ -8064,6 +8064,23 @@ grid's density no longer mattering (0.5 m within a level of 1 m). The map check'
 by ꟻLIP up to 0.134 (the room) and 0.053 (the hall), accepted; `--furniture-in-probes` keeps
 them in to compare.
 
+**Halls (2026-11-04).** In the private district (D-083 step 4) the bar's two floors are a region
+each, about 700 m² and 3.8 m high. 1 m apart the ground floor's four boxes asked 4,625 probes,
+more than the whole pool (4,320 there). The pool took three of its boxes and stopped at the
+fourth, so the floor above never got a grid. Its points took the far rooms' share of the open
+sky, and at 16:21 its railing, trusses and ceiling glared white over a dim bar. The owner: the top
+half "seems to not fit with the bottom half". A region's grids now take at most
+`RoomGridParams::region_probes` (1,024, a quarter of the default pool). A larger region's probes
+stand farther apart, across and up alike, by the least step of 10 % that fits, three times the
+spacing at most. The scale is worked out once per room set. The bar's ground floor takes 1.77 m
+(about 1,008 probes) and the floor above gets its own grid, lit by its lamps and the neon below. The village's
+largest room asks 528, so its 13 map-check shots are unchanged (ꟻLIP 0). On the district's
+benchmark path the frame did not cost more: 17.21 against 17.30 ms, then 16.51 against 17.12, the
+probes' rays 2.84 → 2.65 ms on average. `--probe-room-region` sets the cap (100000: none). A
+room grid builds its distance maps with the rooms' wider lobe (#283) at any spacing: the choice
+went by the spacing alone, and a hall's grid past 1.5 m took the cascades' narrow one (the bar's
+GI view moved by ꟻLIP 0.05, the lit view 0.01).
+
 *(research: probe-levels-indoors.md; D-068; issue #353)*
 
 ## D-079 — Marks where bodies strike: a pool of run-time decals on static surfaces ✅ (proposed 2026-10-24, accepted the same day, Phase 7)

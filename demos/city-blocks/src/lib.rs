@@ -493,7 +493,7 @@ pub struct Args {
     #[arg(long, conflicts_with = "probe_rooms")]
     no_probe_rooms: bool,
     /// The room grids' probes at most `ACROSS,UP` metres apart (`RoomGridParams::spacing` and
-    /// `height_spacing`).
+    /// `height_spacing`), a hall's farther (`--probe-room-region`).
     #[arg(long, value_delimiter = ',')]
     probe_room_spacing: Option<Vec<f32>>,
     /// Rays a room grid's probe traces a frame (`RoomGridParams::rays`, the cascades' by default).
@@ -503,6 +503,10 @@ pub struct Args {
     /// street of houses it sets how far the grids reach.
     #[arg(long)]
     probe_room_pool: Option<u32>,
+    /// Probes a region's room grids take at most (`RoomGridParams::region_probes`, the scene's or
+    /// 1,024): a hall's probes stand farther apart.
+    #[arg(long)]
+    probe_room_region: Option<u32>,
     /// Draw the island without its water (issue #105, D-038): the stand-in sea's opaque plane,
     /// and the rivers and lakes painted into the ground's layers.
     #[arg(long)]
@@ -1655,6 +1659,7 @@ impl Gallery {
                             .unwrap_or(scene.height_spacing),
                         rays: args.probe_room_rays.or(scene.rays),
                         probes: args.probe_room_pool.unwrap_or(scene.probes),
+                        region_probes: args.probe_room_region.unwrap_or(scene.region_probes),
                     }
                 }),
                 ..ProbeParams::default()

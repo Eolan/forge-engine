@@ -159,7 +159,8 @@ void probe_state_main(uint3 id : SV_DispatchThreadID)
 // distances and their squares weighted by the cosine to the power 50, a narrow lobe, so the
 // map keeps the shape of what surrounds the probe.
 //
-// In a room-sized cascade (PROBE_ROOM_SPACING) the lobe is the cosine to the power 10 (#283).
+// In a room-sized cascade (PROBE_ROOM_SPACING) and a room grid the lobe is the cosine to the
+// power 10 (#283).
 // There probes stand a few tens of centimetres from ceilings, reveals and a stair's opening, and
 // see them at grazing angles. Seen so, an edge's distances change from one texel to the next by
 // more than the bilinear lookup can follow: the test's boundary took the map's 14-texel grid,
@@ -350,7 +351,9 @@ void probe_blend_main(uint3 group : SV_GroupID, uint thread : SV_GroupIndex)
         uint2 t = uint2(thread % DISTANCE_TEXELS, thread / DISTANCE_TEXELS);
         float3 dir = texel_direction(t, DISTANCE_TEXELS);
         float farthest = 1.5 * sqrt(3.0) * slot.spacing; // a miss counts as this far
-        float sharpness = slot.spacing <= PROBE_ROOM_SPACING ? DISTANCE_SHARPNESS_ROOM : DISTANCE_SHARPNESS;
+        // A room grid's at any spacing: a hall's probes stand farther apart (D-078's halls).
+        bool room = slot.spacing <= PROBE_ROOM_SPACING || slot.grid != ROOM_NONE;
+        float sharpness = room ? DISTANCE_SHARPNESS_ROOM : DISTANCE_SHARPNESS;
         float2 sum = float2(0.0);
         float total = 0.0;
         for (uint i = 0; i < random; i++)

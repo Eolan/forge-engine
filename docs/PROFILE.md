@@ -2591,6 +2591,11 @@ probes allows, and the cascades' probes in those rooms retire. The village at 18
   corners' tiles from the base probe's, and skipping as the cascades do, left about +0.02.
 - **Not counted:** the probe passes run on the async compute queue, so the real frame pays less
   than the serial one.
+- **Halls (2026-11-04):** a region's grids hold at most 1,024 probes (`region_probes`). The
+  private district's benchmark path, 2560 × 1440 under DLSS Quality, two runs each, without the
+  cap and then with it: the frame 17.30 → 17.21 ms and 17.12 → 16.51 (p50 17.58 → 17.54 and
+  17.29 → 16.73); `gi/probe rays` 2.88 → 2.78 and 2.80 → 2.53. The bar's ground floor alone had
+  taken 3,175 of the pool's 4,320 probes.
 
 ## The far rooms' daylight (#356, D-078, 2026-10-29)
 

@@ -14,9 +14,15 @@
 //!   back. A full pool lets its farthest grid go for a room [`EVICT_MARGIN`] nearer: in a street
 //!   of houses the pool, not the radius, sets how far the grids reach. A new grid takes its first [`YOUNG_FRAMES`] updates, then
 //!   fades in over [`FADE_FRAMES`]: until then, the cascades light the room as before.
+//! - **Halls.** A region's grids take at most [`RoomGridParams::region_probes`]: a hall's probes
+//!   stand farther apart, by the least step of 10 % that brings them within it ([`MOST_SCALE`]
+//!   times the spacing at most). A shipped game's bar, 700 m² on each of two floors, asked 4,625
+//!   probes 1 m apart for its ground floor alone: it took the pool, and the floor above, with no
+//!   grid, took the far rooms' share of the open sky, a white glare at a quarter to five.
 //! - **The frames.** Each frame slot has its own tables (the grids, the pool's slots and the
 //!   regions' hash), rewritten each frame: a few kilobytes.
 
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use bytemuck::{Pod, Zeroable};
@@ -43,6 +49,9 @@ pub(super) const YOUNG_FRAMES: u32 = 8;
 pub(super) const FADE_FRAMES: u32 = 30;
 /// Grids at once, at most.
 pub(super) const MAX_GRIDS: usize = 256;
+/// The farthest apart a hall's probes stand ([`RoomGridParams::region_probes`]), times the
+/// spacing.
+pub(super) const MOST_SCALE: f32 = 3.0;
 /// `ROOM_NONE` in `probes.slang`: no grid.
 pub(super) const ROOM_NONE: u32 = u32::MAX;
 
@@ -53,9 +62,10 @@ pub struct RoomGridParams {
     pub probes: u32,
     /// Metres from the camera to a room's box within which it gets its grid.
     pub radius: f32,
-    /// Metres between a grid's probes across the floor, at most.
+    /// Metres between a grid's probes across the floor, at most (a hall's farther apart:
+    /// [`Self::region_probes`]).
     pub spacing: f32,
-    /// Metres between its layers up, at most.
+    /// Metres between its layers up, at most (a hall's farther apart, as across).
     pub height_spacing: f32,
     /// Rays a grid's probe traces a frame, the first 32 with fixed directions (64 up to
     /// [`super::ProbeParams::rays`], which a larger count takes): the grids' cost is mostly their
@@ -65,15 +75,19 @@ pub struct RoomGridParams {
     /// sRGB levels away from 128's on average: the rotations repeat every 8 frames, so the
     /// fewer the rays the fewer directions a probe ever sees. `None`: the cascades' count.
     pub rays: Option<u32>,
+    /// Probes a region's grids take at most: a larger region's (a hall's) stand farther apart,
+    /// across and up alike, so one room never takes the pool.
+    pub region_probes: u32,
 }
 
 impl Default for RoomGridParams {
-    /// 4,096 probes, rooms within 20 m, probes at most 1 m apart: three layers in a room 2.7 m
-    /// high. Measured against probes twice as dense (the cascades 0.5 m apart, grids 0.75 m) in the
+    /// 4,096 probes, rooms within 20 m, probes at most 1 m apart (but in halls): three layers in a
+    /// room 2.7 m high. Measured against probes twice as dense (the cascades 0.5 m apart, grids 0.75 m) in the
     /// village's room and hall, 1 m grids came within 2.5 sRGB levels, 1.5 m ones up to 7 too
     /// bright (the walls' light drawn from farther in), and the 1 m cascade up to 8.5 too dark. Two
     /// layers 2 m apart left a bright V over a table: the lower layer stood under it, and its
-    /// visibility test left the wall above to the upper one.
+    /// visibility test left the wall above to the upper one. A region's grids at most 1,024
+    /// probes, a quarter of the pool: the village's largest room asks 528.
     fn default() -> Self {
         Self {
             probes: 4096,
@@ -81,6 +95,7 @@ impl Default for RoomGridParams {
             spacing: 1.0,
             height_spacing: 1.0,
             rays: None,
+            region_probes: 1024,
         }
     }
 }
@@ -109,6 +124,32 @@ impl RoomOutline {
         let hi = Vec3::new(hi.x, self.ceiling, hi.y);
         (lo - p).max(p - hi).max(Vec3::ZERO).length()
     }
+}
+
+/// Per region of a set's `rooms`, the scale on the grids' spacing, across and up, that brings its
+/// grids within `params.region_probes`: 1 where they fit, else the least step of 10 % that does,
+/// [`MOST_SCALE`] at most. Only the regions that need one are listed.
+fn region_scales(rooms: &[&RoomOutline], params: &RoomGridParams) -> HashMap<u32, f32> {
+    let mut regions: HashMap<u32, Vec<&RoomOutline>> = HashMap::new();
+    for &room in rooms {
+        regions.entry(room.region).or_default().push(room);
+    }
+    let probes = |rooms: &[&RoomOutline], s: f32| -> u32 {
+        rooms
+            .iter()
+            .map(|r| grid_shape(r, params.spacing * s, params.height_spacing * s).len())
+            .sum()
+    };
+    regions
+        .into_iter()
+        .filter_map(|(region, rooms)| {
+            let mut s = 1.0f32;
+            while s < MOST_SCALE && probes(&rooms, s) > params.region_probes {
+                s = (s * 1.1).min(MOST_SCALE);
+            }
+            (s > 1.0).then_some((region, s))
+        })
+        .collect()
 }
 
 /// A grid's place and shape: probe (i, j, k) stands at `origin + i·step.x·axis + j·step.y·up +
@@ -274,6 +315,9 @@ struct RoomBook {
     slots: Vec<u32>,
     /// Rooms past the pool, reported once.
     full_reported: bool,
+    /// Per room set (by serial), the scale on the spacing of its regions too large for
+    /// [`RoomGridParams::region_probes`] ([`region_scales`]), made when the set is first seen.
+    scales: HashMap<u64, HashMap<u32, f32>>,
 }
 
 impl RoomBook {
@@ -286,6 +330,7 @@ impl RoomBook {
             frame: 0,
             slots: vec![ROOM_NONE; params.probes as usize],
             full_reported: false,
+            scales: HashMap::new(),
         }
     }
 
@@ -305,6 +350,8 @@ impl RoomBook {
         for g in std::mem::take(&mut self.grids) {
             self.drop_grid(&g);
         }
+        // A new store's sets count their serials from 0 again.
+        self.scales.clear();
     }
 
     fn restart(&mut self) {
@@ -332,18 +379,30 @@ impl RoomBook {
                 k += 1;
             }
         }
-        // The rooms near enough, nearest first; every room's distance.
+        // The rooms near enough, nearest first; every room's distance; the rooms of the sets not
+        // seen before, for their halls' spacing.
         let radius = self.params.radius;
         let mut near: Vec<(f32, (u64, u32), &RoomOutline)> = Vec::new();
-        let mut present = std::collections::HashMap::new();
+        let mut present = HashMap::new();
+        let mut sets = HashSet::new();
+        let mut new_sets: HashMap<u64, Vec<&RoomOutline>> = HashMap::new();
         for (key, room) in rooms {
             let d = room.distance(camera);
             present.insert(key, d);
+            sets.insert(key.0);
+            if !self.scales.contains_key(&key.0) {
+                new_sets.entry(key.0).or_default().push(room);
+            }
             if d <= radius {
                 near.push((d, key, room));
             }
         }
         near.sort_by(|a, b| a.0.total_cmp(&b.0));
+        for (serial, rooms) in new_sets {
+            self.scales
+                .insert(serial, region_scales(&rooms, &self.params));
+        }
+        self.scales.retain(|serial, _| sets.contains(serial));
         // Those whose room went (its set removed) leave at once, those past the radius and the
         // hysteresis fade out (back within the radius, in again from where they stood), and those
         // faded out give their slots back.
@@ -373,7 +432,17 @@ impl RoomBook {
             if self.grids.len() >= MAX_GRIDS {
                 break;
             }
-            let shape = grid_shape(room, self.params.spacing, self.params.height_spacing);
+            let scale = self
+                .scales
+                .get(&key.0)
+                .and_then(|s| s.get(&room.region))
+                .copied()
+                .unwrap_or(1.0);
+            let shape = grid_shape(
+                room,
+                self.params.spacing * scale,
+                self.params.height_spacing * scale,
+            );
             let Some(first) = self.pool.take(shape.len()) else {
                 // The pool full: the farthest grid, if [`EVICT_MARGIN`] farther than this room (one
                 // past the radius kept by the hysteresis first of all), fades out, and its slots
@@ -676,7 +745,65 @@ mod tests {
             spacing: 1.0,
             height_spacing: 1.0,
             rays: None,
+            region_probes: probes,
         }
+    }
+
+    #[test]
+    fn a_hall_spreads_its_probes_to_leave_the_floor_above_its_grid() {
+        // A bar's two floors, 30 × 24 m each, 3.8 m high, the ground floor in two boxes; the pool
+        // holds 4,096 probes, a region's grids 1,024 at most.
+        let ground = [
+            RoomOutline {
+                region: 1,
+                ..room(
+                    [[0.0, 0.0], [20.0, 0.0], [20.0, 24.0], [0.0, 24.0]],
+                    0.0,
+                    3.8,
+                )
+            },
+            RoomOutline {
+                region: 1,
+                ..room(
+                    [[20.0, 0.0], [30.0, 0.0], [30.0, 24.0], [20.0, 24.0]],
+                    0.0,
+                    3.8,
+                )
+            },
+        ];
+        let upper = RoomOutline {
+            region: 2,
+            ..room(
+                [[0.0, 0.0], [30.0, 0.0], [30.0, 24.0], [0.0, 24.0]],
+                3.8,
+                7.6,
+            )
+        };
+        let small = street_room(32.0, 3);
+        let rooms = [ground[0], ground[1], upper, small];
+        let mut book = RoomBook::new(RoomGridParams {
+            region_probes: 1024,
+            ..params(4096)
+        });
+        step(&mut book, Vec3::new(20.0, 1.7, 10.0), &rooms);
+        let probes = |region: u32| -> u32 {
+            book.grids
+                .iter()
+                .filter(|g| g.region == region)
+                .map(|g| g.shape.len())
+                .sum()
+        };
+        // At 1 m the ground floor alone asks 4,000 probes and the floor above went without.
+        assert!(probes(1) > 0 && probes(1) <= 1024, "{}", probes(1));
+        assert!(probes(2) > 0 && probes(2) <= 1024, "{}", probes(2));
+        // A room that fits keeps its spacing.
+        assert_eq!(probes(3), 75);
+        assert!(
+            book.grids
+                .iter()
+                .filter(|g| g.region == 1)
+                .all(|g| g.shape.step.x > 1.0)
+        );
     }
 
     #[test]
@@ -777,6 +904,31 @@ mod tests {
             step(&mut book, back, &rooms);
         }
         assert_eq!(regions(&book), [1, 3]);
+    }
+
+    #[test]
+    fn a_cleared_book_works_its_halls_out_again() {
+        // A hall as set 0's region 1, then the regions changed whole: a new store's set 0, whose
+        // region 1 is a small room, keeps its spacing.
+        let hall = RoomOutline {
+            region: 1,
+            ..room(
+                [[0.0, 0.0], [30.0, 0.0], [30.0, 24.0], [0.0, 24.0]],
+                0.0,
+                3.8,
+            )
+        };
+        let mut book = RoomBook::new(RoomGridParams {
+            region_probes: 1024,
+            ..params(4096)
+        });
+        step(&mut book, Vec3::new(10.0, 1.7, 10.0), &[hall]);
+        assert!(book.grids[0].shape.step.x > 1.0);
+        book.clear();
+        let small = street_room(0.0, 1);
+        step(&mut book, Vec3::new(2.0, 1.0, 2.0), &[small]);
+        assert_eq!(book.grids.len(), 1);
+        assert_eq!(book.grids[0].shape.len(), 75);
     }
 
     #[test]
