@@ -1285,6 +1285,17 @@ impl Gallery {
             look.exposure_compensation,
             by_night,
         );
+        match look.exposure_range {
+            // `clamp` panics on an inverted or NaN range.
+            Some((lo, hi)) if lo.is_finite() && hi.is_finite() && lo <= hi => {
+                auto_exposure.range = (lo, hi);
+            }
+            Some(range) => tracing::warn!(
+                ?range,
+                "the scene's exposure range is not one: kept the app's"
+            ),
+            None => {}
+        }
         let space = (look.backdrop == Backdrop::Space)
             .then(|| SpaceSky::new(ctx, renderer.sun_illuminance))
             .transpose()?;

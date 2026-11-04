@@ -88,6 +88,11 @@ pub struct Look {
     /// run that starts at night keeps the shared stop): an authored scene keyed as its authors'
     /// pictures are (D-089).
     pub exposure_compensation: Option<f32>,
+    /// The metered exposure's lowest and highest EV100 (`AutoExposure::range`), the app's where
+    /// none (or where it is not one: inverted, not finite): an authored scene's own limits, so a
+    /// dark room is shown as much darker than the street as its authors' pictures show it. By day
+    /// and by night alike (the night's floor, D-046, lifts nothing under it).
+    pub exposure_range: Option<(f32, f32)>,
     /// Local exposure (D-067) on from the start (unless `--no-local-exposure`), with the meter
     /// keyed on a lower band (0.25–0.95) and the shadows' contrast at 0.55 (unless
     /// `--meter-band`, `--local-exposure-contrast`): a room seen from a lit hall through its door
@@ -140,6 +145,7 @@ impl Default for Look {
             chase: false,
             metered: false,
             exposure_compensation: None,
+            exposure_range: None,
             local_exposure: false,
             shade_adapt: None,
             environment: None,

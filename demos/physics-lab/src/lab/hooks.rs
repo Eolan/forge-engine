@@ -281,6 +281,7 @@ impl Scenario for LabScenario {
             metered: kind == LabScene::Bistro,
             exposure_compensation: (kind == LabScene::Bistro)
                 .then_some(super::bistro::EXPOSURE_COMPENSATION),
+            exposure_range: None,
             local_exposure: false,
             shade_adapt: None,
             // An authored scene under its authors' sky and sun (D-084), the chart under its own, for

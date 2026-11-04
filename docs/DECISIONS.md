@@ -9873,6 +9873,16 @@ steps". Steps 1 and 2 as proposed.
 **Open:** whether the classroom, an inside lit through its windows, should be metered too. The
 chart stays a card at one exposure.
 
+**A scene's own exposure range (2026-11-04).** A look may also give the metered exposure's lowest
+and highest EV100 (`Look::exposure_range`, `AutoExposure::range`), so a dark room is shown as much
+darker than the street as its authors' pictures show it. The private district (D-083 step 4) takes
+its source's limits at the hour, placed on Forge's EV100 by one offset fitted on the source's
+sunlit street frames (shown at its ceiling). Against 14 of the source's benchmark frames matched to
+the path (their edges against a capture every 0.25 s), the frames' geometric-mean luminance was
++0.76 EV off on average (rms 1.60) under the app's range, and +0.17 (rms 0.54) under the source's;
+its bar from 2.45 EV too bright to within half a stop. A range that is not one (inverted, not
+finite) is ignored with a warning: `clamp` would panic. No other scene gives one.
+
 ## D-090 — Which light under the bounce, by the calibration ✅ (proposed 2026-10-31; D-083, D-088; the owner's go the same day: option 2)
 
 **Why:** the owner, during D-088's SHaRC: "Compare and see what's best and work real-time". The
