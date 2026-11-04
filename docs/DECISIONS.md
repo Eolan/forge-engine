@@ -10603,3 +10603,48 @@ probes:
   probe's key is its place, so only a moved probe re-traces). Off, every capture of eight scenes is
   unchanged (0 px).
 
+## D-098 — Glossy reflections: rays inside the lobe, denoised, under the sharp mirror's band 🟡 (proposed 2026-11-04)
+
+**The need** (the owner, 2026-11-04, the private district's bar: "some surfaces have issue … mirrors
+and bin … the bar door"): the layered metals (a door, a bin, a bathroom's metal mirror; roughness
+0.30–0.42, normal maps tiled over them) showed a speckle of every colour, steady with the camera
+still. Measured at the owner's view, the lamps off, DLSS Quality:
+- with the mirror rays off (`r.reflections.rays=0`) the metals are clean: the speckle is what D-050's
+  rays bring back;
+- the rays meet the right surfaces (their hits' albedo alone draws the room as a clean mirror image);
+  their light differs from hit to hit, and the layers' normal maps aim each pixel's ray apart
+  (flat materials give smooth bands instead);
+- neither the motion vectors moved to the reflection (`r.reflections.motion=0`), the reflections'
+  history (`--no-reflection-history`) nor DLAA change it: it is not a temporal failure;
+- two causes of the hits' light were mended in the district's loader: the street's probes lit the
+  bar's surfaces (the scene had no rooms: the source's interior volumes are now the probes' rooms,
+  D-068, and the bathroom is dark with its lamps off), and the source's BC5 normal maps kept unit
+  normals in their mips (now rebuilt as Forge's own, D-086, so Toksvig widens the tiles' grout).
+  The speckle on the metals stays: most of their maps are BC1, and up close Toksvig is small anyway.
+
+**Why:** D-050 traces one exact mirror ray a pixel, all of it up to roughness 0.30 and fading out
+by 0.42 (#306), and steadies it with a history that reprojects a flat mirror. A brushed metal at
+0.35 reflects over a GGX lobe some 10° wide each side; a sharp ray shows each ripple of its normal
+map instead, and the room's light varies enough between neighbouring hits to read as noise. The
+game's ray-traced mode draws these as soft reflections.
+
+**Proposed** (D-050's option (c), "both"):
+1. **Two bands.** The sharp mirror as now for the smooth rows (roughness under about 0.15: glass,
+   water, mirrors, paint); for the glossy band (0.15 to 0.45), one ray a pixel aimed inside the
+   row's GGX lobe (visible-normal sampling), its hit lit as today's mirror hits are.
+2. **Denoised by NRD's REBLUR_SPECULAR** (already in the frame for the lamps' and the bounce's
+   signals, D-065, D-088; on every vendor), fed the ray's hit distance and the pixel's roughness;
+   it reprojects by the virtual point as D-050's history does, and widens its blur with the lobe.
+   D-050's history keeps the sharp band.
+3. **Past 0.45** the probes' dimmed sky, as today.
+4. **Checks:** the bar's metals at the owner's view against the game's grab of the same place; the
+   village's glossy floor (#306's) and the city's glass unchanged in the sharp band; the cost in
+   `docs/PROFILE.md` (NVIDIA's figure for REBLUR's specular alone is about 1.2 ms at 1440p on an RTX
+   4080; the glossy band's tiles only).
+
+**Also seen, separate:** the source's capsule lights become spheres of half their length (up to
+0.5 m), so a mirror shows a 1 m glowing ball where a tube hangs; and its 1,363 area lights given in
+nits are read as lumens until calibrated against its pictures (the private district's notes).
+
+**For the owner:** take (c) as proposed, or keep the sharp mirror and narrow #306's fade (fewer
+rays on glossy rows: no speckle, but no reflection of the room either, the probes' sky instead).
