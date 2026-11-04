@@ -10783,3 +10783,25 @@ is built (research, D-008's practice).
 **Decided** (the owner, 2026-11-04: "Follow recommendations"): as proposed, the lamps' fog
 unshadowed first, the shadow ray a later option; the patent search before the build.
 
+**The patent search (the same day, web research: Google Patents' full text for "froxel", 22 hits
+read, then by holder; Espacenet and others refused automated requests; not legal advice):** no
+live patent found reads on items 1–4 as written.
+- **Sony's pending US 2026/0038215 (EP 4687106, GB 2643037)** samples fog on a grid, then builds a
+  finer second set by interpolation. Wronski 2014 predates it. Forge reads its volume once a pixel,
+  trilinearly: no finer intermediate grid, ever.
+- **NVIDIA's ReGIR (US 12,299,801)** fills grid cells with lights by resampling. The columns list
+  every lamp in reach, chosen deterministically: never fill them by RIS.
+- **NVIDIA's pending US 2023/0419590** steers light sampling by values learned from earlier rays:
+  the weights stay analytic.
+- **AMD's tiled lists (US 10,803,655, US 12,136,165)** are per screen tile; Forge's are world
+  columns.
+- **Arm's US 10,665,010** keeps caster sets per lit sub-volume: none here (shadows trace the TLAS).
+- **Imagination's family (US 10,672,183, US 11,127,198, GB 2571656)** updates a directional
+  representation from the previous frame: a froxel holds one colour, the phase applied for the
+  view, never lobes blended over frames.
+- **Prior art:** Wronski (SIGGRAPH 2014), Hillaire (2015, local lights in froxels and their
+  temporal reprojection), Unreal 4.16 (2017), Unity HDRP's density volumes (2018), Godot 4's fog
+  volumes (MIT, 2022).
+- **Before the shadowed option:** run the full-text queries again (the site blocked the later
+  ones), since applications from the last 18 months are not yet published.
+
