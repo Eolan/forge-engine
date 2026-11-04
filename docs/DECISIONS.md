@@ -10651,12 +10651,16 @@ rays on glossy rows: no speckle, but no reflection of the room either, the probe
 
 **Found the same day, after the proposal: the lobe alone does not mend it.** Aiming the rays of the
 0.30–0.42 band inside their lobe (a patch kept in the private district's notes) left the bar's
-metals as they were. What their rays bring back is the probes' light at the hits
-(`probe_irradiance_hit`): with the hits lit by their albedo alone the mirror image is clean; with
-the probes' light alone it is the speckle. The district's finest cascade is 4 m apart, larger than
-the bathroom, so few of the eight probes round a hit stand in its room and see it: in a room the
-lookup divides by that small coverage, outside it fills the rest with the open sky (the "horizon"
-seen in the metals). The surfaces seen directly hide it, lit near the camera by the per-pixel
-trace; the probes alone show the room dark, as it is. So the reflections' hits need light as good
-as the pixels': the room grids (D-078, 1 m) where a room has one, a floor on the coverage the
-lookup divides by, or the hits' own short trace, measured before the lobe and REBLUR.
+metals as they were. Each term of the hits' light taken alone, at the owner's view, the lamps off:
+their places (distance), normals and albedo all vary smoothly from pixel to pixel, the rays staying
+in the room (3 to 8 m); the sky's irradiance at them is smooth; the probes' irradiance at them is
+the speckle, with the hit lookup (`probe_irradiance_hit`), with the pixels' lookup
+(`probe_irradiance`), and with a fixed upward normal alike, the room's own probe grid (D-078) or
+the cascades. So the probe field's light varies from point to point there, by far more than its
+1 m grid would explain: most likely the probes' visibility (the Chebyshev test on their depth
+moments) switching between probes whose light differs (one seeing a lit doorway, one a dark wall).
+The surfaces seen directly hide it, lit near the camera by the per-pixel trace (D-088); the probes
+alone show the room dark, as it is, at the camera's distance. The district's rooms (its interior
+volumes as D-068 regions, cut into rectangles so each grid stays in its room) and its normal maps
+rebuilt as D-086's did not change it. Next, before the lobe and REBLUR: the probes' visibility
+in that room, and a short trace from the mirror hits as the pixels have.
