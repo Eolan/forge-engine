@@ -19,7 +19,7 @@ struct FogBox
     float4 row1;     // an affine transform
     float4 row2;
     float4 medium;   // x: density (extinction, 1/m), y: height falloff (1/m), z: the share absorbed, w: its priority (the list's order)
-    float4 shape;    // x: the box's height (m), y: its edges' blend (m), zw: 0
+    float4 shape;    // x: the box's height (m), y: its edges' blend (m), z: the share of the probes' light it scatters, w: 0
     float4 tint;     // rgb: the colour its scattering takes, a: 0
 };
 
@@ -31,10 +31,12 @@ struct Fog
     float4 sun;             // xyz: towards the sun; w: the sun's pre-exposed illuminance
     float4 sun_color;       // rgb: the sunlight's colour; a: the phase's anisotropy g
     float4 global;          // the scene's own fog everywhere: x density (1/m), y the height it thins above (the scene frame), z its falloff (1/m), w the share absorbed
-    float4 scales;          // x: the sun's light into the fog, y: the lamps', zw: 0
+    float4 scales;          // x: the sun's light into the fog, y: the lamps', z: the probes' in the boxes (times each one's share), w: the probes' in the fog everywhere
     Frame* frame;           // the resolve's frame: its lamps, their grid, the TLAS
     FogBox* boxes;
     Lamp* fog_lamps;        // lamps that light the fog alone (an authored scene's), near the camera
+    ProbeField* probes;     // the probes whose light the fog scatters, or null (with `sky`)
+    float4* sky;            // the sky's light (SH), the probes' lookup's fallback
     uint box_count;
     uint light;             // storage index of the lit froxels: rgb scattered light, a extinction
     uint light_sampled;
@@ -58,6 +60,9 @@ FogPush fog_push;
 static const uint FOG_FROXELS_X = 160;
 static const uint FOG_FROXELS_Y = 90;
 static const uint FOG_SLICES = 64;
+// The least share of the probes' light a froxel scatters, per metre (extinction times its share),
+// for it to be looked up.
+static const float FOG_LEAST_AMBIENT = 2e-4;
 
 // Distance (m) of slice boundary `k` (0..FOG_SLICES): quadratic, fine near the camera.
 float fog_slice_distance(Fog* g, float k)
@@ -85,12 +90,13 @@ float fog_phase(float cos_theta, float g)
 // scene): each covering box lays its medium over those before it by its fade, so where they
 // overlap the highest priority's rules (the source's rule) and its edges blend into what lies
 // under them.
-void fog_medium(Fog* g, float3 world, out float extinction, out float albedo, out float3 tint)
+void fog_medium(Fog* g, float3 world, out float extinction, out float albedo, out float3 tint, out float ambient)
 {
     // The scene's own fog under the boxes: even up to its height, thinning above it.
     extinction = g[0].global.x * exp(-g[0].global.z * max(world.y - g[0].global.y, 0.0));
     albedo = 1.0 - saturate(g[0].global.w);
     tint = float3(1.0);
+    ambient = g[0].scales.w;
     for (uint k = 0u; k < g[0].box_count; k++)
     {
         FogBox b = g[0].boxes[k];
@@ -108,6 +114,7 @@ void fog_medium(Fog* g, float3 world, out float extinction, out float albedo, ou
         extinction = lerp(extinction, b.medium.x * exp(-b.medium.y * max(above, 0.0)), fade);
         albedo = lerp(albedo, 1.0 - saturate(b.medium.z), fade);
         tint = lerp(tint, b.tint.rgb, fade);
+        ambient = lerp(ambient, b.shape.z * g[0].scales.z, fade);
     }
 }
 
@@ -138,7 +145,8 @@ void fog_light_main(uint3 id : SV_DispatchThreadID)
     float extinction;
     float albedo;
     float3 tint;
-    fog_medium(g, world, extinction, albedo, tint);
+    float ambient_share;
+    fog_medium(g, world, extinction, albedo, tint, ambient_share);
     float3 scattered = float3(0.0);
     if (extinction > 0.0)
     {
@@ -198,7 +206,25 @@ void fog_light_main(uint3 id : SV_DispatchThreadID)
             visible = f[0].tlas != 0 && ray_blocked(f, ray) ? 0.0 : 1.0;
         }
         float3 sunlight = g[0].sun.w * g[0].sun_color.rgb * fog_phase(dot(-direction, -sun), anisotropy) * visible;
-        scattered = extinction * albedo * tint * (lamps * (f[0].exposure * g[0].scales.y) + sunlight * g[0].scales.x);
+        // The probes' light (D-099's item 3): the sky's and the scene's bounce, glowing surfaces'
+        // included, as a white surface facing up and one facing down take it, in the region the
+        // froxel stands in. A field that gives irradiances E_up and E_down has a mean radiance of
+        // (E_up + E_down) / 2π, scattered every way alike. One lookup in a rolled loop: each
+        // inlined copy grows the pass (#348). Skipped where the froxel's share of it scatters less
+        // than FOG_LEAST_AMBIENT a metre: over the volume's 64 m, under 1.3 % of that radiance (an
+        // authored city's fog everywhere by day, a twentieth of 0.003 a metre, which cost 0.45 ms).
+        float3 ambient = float3(0.0);
+        if (ambient_share * extinction > FOG_LEAST_AMBIENT && g[0].probes != nullptr && g[0].sky != nullptr)
+        {
+            [loop]
+            for (uint k = 0u; k < 2u; k++)
+            {
+                float3 n = float3(0.0, k == 0u ? 1.0 : -1.0, 0.0);
+                ambient += probe_irradiance_hit(g[0].probes, world, n, -direction, sh_irradiance(g[0].sky, n), false);
+            }
+            ambient *= ambient_share * f[0].sun_illuminance * f[0].exposure / 6.28318531;
+        }
+        scattered = extinction * albedo * tint * (lamps * (f[0].exposure * g[0].scales.y) + sunlight * g[0].scales.x + ambient);
     }
     g_storage_images_rgba16f[NonUniformResourceIndex(g[0].light)][uint2(id.z * FOG_FROXELS_X + id.x, id.y)] = float4(scattered, extinction);
 }

@@ -583,6 +583,11 @@ pub struct Args {
     /// No fog (D-099): the scene's fog volumes left out (the fog's A/B).
     #[arg(long)]
     pub no_fog: bool,
+    /// The probes' light (the sky's and the scene's bounce, glowing surfaces' included) in the fog
+    /// (D-099, `FogParams::ambient`) times this, over the scene's own shares: 1 as the scene sets
+    /// it, 0 none (its A/B).
+    #[arg(long, default_value_t = 1.0)]
+    pub fog_ambient: f32,
     /// No street lamps beyond the frame's set (#284): their pools go dark past the nearest
     /// lamps the frame lights with shadow rays, as before (the far lamps' A/B).
     #[arg(long)]
@@ -4708,6 +4713,11 @@ impl Demo for Gallery {
                     movers: targets.movers,
                     global: environment.and_then(|e| e.global),
                     light_scales: environment.map_or([1.0, 1.0], |e| e.light_scales),
+                    ambient: environment
+                        .map_or([1.0, 1.0], |e| e.ambient_scales)
+                        .map(|a| a * self.args.fog_ambient),
+                    probes,
+                    sky: Some(sky.light),
                 },
                 boxes,
                 fog_lamps,

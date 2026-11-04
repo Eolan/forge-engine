@@ -1,14 +1,15 @@
 //! Fog lit by the lamps (D-099, `shaders/fog.slang`): authored fog volumes (boxes with a
 //! density, a height falloff, a colour and an absorption) laid into a froxel volume in front of
 //! the camera, D-032's layout ([`crate::dust`]), each froxel lit by the frame's lamps whose reach
-//! meets its column of the lamps' grid (#386, unshadowed) and by the sun through a shadow ray.
+//! meets its column of the lamps' grid (#386, unshadowed), by the sun through a shadow ray and by
+//! the probes' light (the sky's and the scene's bounce, glowing surfaces' included).
 //!
 //! Three graph passes a frame, over the HDR image before the upscaler:
 //! - `fog/light`: per froxel (160 × 90 × 64, quadratic in depth to the volume's far end), the
 //!   medium (the boxes there in priority order, each over the others by its edges' fade) and the
-//!   light it scatters
-//!   towards the camera (Henyey–Greenstein), at the froxel's middle (a jittered point shimmered,
-//!   and lit a froxel white beside a bulb);
+//!   light it scatters towards the camera (Henyey–Greenstein for the lamps and the sun; the
+//!   probes' light every way alike, from their irradiance up and down), at the froxel's middle (a
+//!   jittered point shimmered, and lit a froxel white beside a bulb);
 //! - `fog/integrate`: per froxel column, the light gathered and the transmittance to each slice;
 //! - `fog/apply`: per pixel, the colour dimmed by the fog in front of it and brightened by what
 //!   it scatters, by the pixel's depth (one trilinear read of the volume).
@@ -21,9 +22,9 @@ use std::sync::Arc;
 
 use bytemuck::{Pod, Zeroable};
 use forge_gpu::{
-    Buffer, BufferDesc, ComputePipelineDesc, Device, FRAMES_IN_FLIGHT, FrameGraph, FrameSlot,
-    ImageAccess, ImageHandle, MemoryCategory, MemoryLocation, Pipeline, Result, ShaderCompiler,
-    ShaderStage, TransientDesc, vk,
+    Buffer, BufferAccess, BufferDesc, ComputePipelineDesc, Device, FRAMES_IN_FLIGHT, FrameGraph,
+    FrameSlot, ImageAccess, ImageHandle, MemoryCategory, MemoryLocation, Pipeline, Result,
+    ShaderCompiler, ShaderStage, TransientDesc, vk,
 };
 use glam::{Mat4, Quat, Vec3};
 
@@ -62,6 +63,9 @@ pub struct FogBox {
     pub blend: f32,
     /// The colour its scattering takes (linear).
     pub tint: Vec3,
+    /// The share of the probes' light its fog scatters (an authored volume's ambient scale: 0
+    /// keeps a room's haze to its lamps; 1 by default).
+    pub ambient: f32,
 }
 
 impl FogBox {
@@ -93,6 +97,7 @@ impl FogBox {
             height: size.y,
             blend,
             tint,
+            ambient: 1.0,
         }
     }
 
@@ -129,6 +134,8 @@ struct GpuFog {
     frame: u64,
     boxes: u64,
     fog_lamps: u64,
+    probes: u64,
+    sky: u64,
     box_count: u32,
     light: u32,
     light_sampled: u32,
@@ -168,6 +175,15 @@ pub struct FogParams {
     /// How strongly the sun's light, then the lamps', scatter in the fog (1: whole). An authored
     /// city's environment lets a hundredth of its sun into its fog.
     pub light_scales: [f32; 2],
+    /// How strongly the probes' light scatters in the fog everywhere, then in the boxes (each
+    /// times its own [`FogBox::ambient`]): 1 whole, 0 none. An authored city's environment lets a
+    /// twentieth of it into its fog everywhere by day, all of it twice over by night.
+    pub ambient: [f32; 2],
+    /// This frame's probes ([`crate::Probes::update`]), whose light the fog scatters; none: no
+    /// such light.
+    pub probes: Option<crate::probes::ProbeLight>,
+    /// The sky's light this frame: the probes' lookup falls back to it where they leave a point.
+    pub sky: Option<crate::SkyLight>,
 }
 
 /// A scene's fog everywhere (D-099): an authored environment's volumetric fog, the boxes laid
@@ -291,7 +307,7 @@ impl FogVolume {
                         b.absorption.clamp(0.0, 1.0),
                         b.priority,
                     ],
-                    shape: [b.height, b.blend, 0.0, 0.0],
+                    shape: [b.height, b.blend, b.ambient.max(0.0), 0.0],
                     tint: b.tint.extend(0.0).to_array(),
                 }
             })
@@ -333,51 +349,74 @@ impl FogVolume {
         let address = buffer.address();
         let inverse = params.view_proj.inverse();
         let pipeline = &self.light;
-        graph
+        // The probes' light needs both the probes and the sky's (their lookup's fallback).
+        let ambient = params
+            .probes
+            .zip(params.sky)
+            .filter(|_| params.ambient.iter().any(|&a| a > 0.0));
+        let mut pass = graph
             .pass("fog/light")
             .image(light, ImageAccess::StorageWrite(compute))
-            .with(|p| crate::MoversFrame::declare(params.movers, p, compute, true))
-            .run(move |resources, commands| {
-                buffer.write(
-                    0,
-                    &[GpuFog {
-                        inv_view_proj: inverse.to_cols_array(),
-                        camera: params.camera.extend(params.far).to_array(),
-                        sun: params
-                            .sun_dir
-                            .normalize_or(Vec3::Y)
-                            .extend(params.sun_illuminance)
-                            .to_array(),
-                        sun_color: params.sun_color.extend(params.anisotropy).to_array(),
-                        global: params.global.map_or([0.0; 4], |g| {
-                            [
-                                g.density.max(0.0),
-                                g.height,
-                                g.falloff.max(0.0),
-                                g.absorption.clamp(0.0, 1.0),
-                            ]
-                        }),
-                        scales: [params.light_scales[0], params.light_scales[1], 0.0, 0.0],
-                        frame: params.frame,
-                        boxes: boxes_address,
-                        fog_lamps: lamps_address,
-                        box_count,
-                        light: resources.storage(light, 0).0,
-                        light_sampled: resources.sampled(light).0,
-                        volume: resources.storage(volume, 0).0,
-                        volume_sampled: resources.sampled(volume).0,
-                        depth: resources.sampled(depth).0,
-                        color: resources.storage(color, 0).0,
-                        width: extent.width,
-                        height: extent.height,
-                        fog_lamp_count,
-                    }],
-                );
-                commands.bind_pipeline(pipeline);
-                commands.push_constants(pipeline, &address);
-                commands.dispatch(FROXELS_X.div_ceil(GROUP), FROXELS_Y.div_ceil(GROUP), SLICES);
-                Ok(())
-            });
+            .with(|p| crate::MoversFrame::declare(params.movers, p, compute, true));
+        if let Some((p, sky)) = ambient {
+            pass = pass
+                .buffer(sky.buffer, BufferAccess::ShaderRead(compute))
+                .buffer(p.data, BufferAccess::ShaderRead(compute))
+                .buffer(p.region, BufferAccess::ShaderRead(compute))
+                .with(|b| p.declare_far(b, compute))
+                .image(p.irradiance, ImageAccess::Sampled(compute))
+                .image(p.distance, ImageAccess::Sampled(compute));
+        }
+        let (probes_address, sky_address) =
+            ambient.map_or((0, 0), |(p, sky)| (p.address, sky.address));
+        pass.run(move |resources, commands| {
+            buffer.write(
+                0,
+                &[GpuFog {
+                    inv_view_proj: inverse.to_cols_array(),
+                    camera: params.camera.extend(params.far).to_array(),
+                    sun: params
+                        .sun_dir
+                        .normalize_or(Vec3::Y)
+                        .extend(params.sun_illuminance)
+                        .to_array(),
+                    sun_color: params.sun_color.extend(params.anisotropy).to_array(),
+                    global: params.global.map_or([0.0; 4], |g| {
+                        [
+                            g.density.max(0.0),
+                            g.height,
+                            g.falloff.max(0.0),
+                            g.absorption.clamp(0.0, 1.0),
+                        ]
+                    }),
+                    scales: [
+                        params.light_scales[0],
+                        params.light_scales[1],
+                        params.ambient[1].max(0.0),
+                        params.ambient[0].max(0.0),
+                    ],
+                    frame: params.frame,
+                    boxes: boxes_address,
+                    fog_lamps: lamps_address,
+                    probes: probes_address,
+                    sky: sky_address,
+                    box_count,
+                    light: resources.storage(light, 0).0,
+                    light_sampled: resources.sampled(light).0,
+                    volume: resources.storage(volume, 0).0,
+                    volume_sampled: resources.sampled(volume).0,
+                    depth: resources.sampled(depth).0,
+                    color: resources.storage(color, 0).0,
+                    width: extent.width,
+                    height: extent.height,
+                    fog_lamp_count,
+                }],
+            );
+            commands.bind_pipeline(pipeline);
+            commands.push_constants(pipeline, &address);
+            commands.dispatch(FROXELS_X.div_ceil(GROUP), FROXELS_Y.div_ceil(GROUP), SLICES);
+            Ok(())
+        });
         let pipeline = &self.integrate;
         graph
             .pass("fog/integrate")
@@ -415,7 +454,9 @@ mod tests {
     #[test]
     fn the_records_keep_the_shaders_layout() {
         assert_eq!(std::mem::size_of::<GpuFogBox>(), 96);
-        assert_eq!(std::mem::size_of::<GpuFog>(), 208);
+        assert_eq!(std::mem::size_of::<GpuFog>(), 224);
         assert_eq!(std::mem::offset_of!(GpuFog, fog_lamps), 160);
+        assert_eq!(std::mem::offset_of!(GpuFog, sky), 176);
+        assert_eq!(std::mem::offset_of!(GpuFog, box_count), 184);
     }
 }

@@ -230,6 +230,9 @@ pub struct FogEnvironment {
     pub global: Option<forge_render::GlobalFog>,
     /// How strongly the sun's light, then the lamps', scatter in the fog (1: whole).
     pub light_scales: [f32; 2],
+    /// How strongly the probes' light scatters in the fog everywhere, then in the boxes (1: whole;
+    /// `FogParams::ambient`).
+    pub ambient_scales: [f32; 2],
     /// The phase's anisotropy g.
     pub anisotropy: f32,
 }

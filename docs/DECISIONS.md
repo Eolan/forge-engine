@@ -10910,3 +10910,23 @@ live patent found reads on items 1–4 as written.
   - the lamps' shadows (the patent searches first);
   - reflections and glass seeing the fog.
 
+**The probes' light in the fog (2026-11-05, item 3).** Each froxel scatters the probes' light every
+way alike: a white surface facing up and one facing down take irradiances E_up and E_down there
+(`probe_irradiance_hit`, in the froxel's region: a room's grid in a room), and a field that gives
+those has a mean radiance of (E_up + E_down) / 2π. It carries the sky's and the scene's bounce,
+glowing surfaces' included, which the lamps' direct light leaves out.
+- **Its share.** `FogParams::ambient` holds two shares: one for the fog everywhere, one for the
+  boxes, where it multiplies each box's own `FogBox::ambient`. The shipped game's environment lets
+  in a twentieth by day (`ambientScale` 0.05) and twice over at night, and 0.15 in its volumes
+  (`localAmbientScale`); its boxes' own shares are mostly 1 or 0.1–0.5. At share 1 everywhere, the
+  district's sunlit streets came out 0.8 EV too bright against the source's frames; with the
+  source's shares they are within 0.1.
+- **Skipped** where a froxel's share times its extinction is under 2·10⁻⁴ a metre: over the
+  volume's 64 m that is under 1.3 % of the radiance. By day the district's fog everywhere falls
+  under it.
+- **The cost** (`fog/light`, the district at 1600 × 900): the bar by day 1.89 → 2.41 ms, at night
+  3.03 → 3.62, the street by day 1.34 → 1.77. Two lookups a froxel in a rolled loop.
+- **The look:** a faint lift of the haze, mean ꟻLIP 0.020 (the bar by day), 0.027 (at night),
+  0.028 (the street). The neon's own glow in the game's haze is still missing: the probes stand
+  1.8 m apart in the bar's hall and blur it. `--fog-ambient 0` turns it off.
+
