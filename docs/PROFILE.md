@@ -2874,6 +2874,12 @@ street 5.8 / 8.7. VRAM 3.9 GB (2.3 GB geometry: #387, pages about a tenth full).
   D-097's baked probe rays (`FORGE_GI_BAKED=1`) 17.27 → 16.40 ms (`gi/probe rays` 2.75 → 2.02;
   0.01 more error against the path tracer by D-097's measure); the per-pixel bounce off
   (`r.gi.trace=0`) 14.18 ms, both 13.21 (the bounce brings the error from 0.043 to 0.034).
+- **The district's path after the source's light radii** (2026-11-04 night, `Lamp::range`, the fog
+  with the probes' light): DLSS Quality 13.74–14.38 ms (two runs). At DLSS Balanced, D-094's wish:
+  12.49 ms (p50 12.59, p99 13.59); with D-097's baked probe rays 11.72; with the per-pixel bounce
+  off too 10.03 (p99 10.98), against the source's own 9.26 ms (108 fps, RT Ultra, Balanced). The
+  passes at Balanced: `gi/probe rays` 2.31, `shadow/lamp restir` 2.09, `gi/trace` 1.54,
+  `gi/probe blend` 0.70.
 
 ## Instances scaled per axis: the 96-byte record (#380, 2026-11-01)
 
