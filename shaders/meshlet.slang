@@ -4280,10 +4280,13 @@ float3 sky_reflection(float4* sky, float3 irradiance, float3 n, float3 view, flo
     float weight = dot(fresnel, float3(0.2126, 0.7152, 0.0722));
     g_reflection_request = float4(r, weight * traced_weight);
     g_reflection_tint = weight > 1e-6 ? fresnel / weight : float3(1.0);
-    // The open sky the traced hit replaces at the request's own weight and colour: the hit's
-    // `request.w * tint * (hit - open)` then leaves no sky-coloured rest (with a tinted F0 and the
-    // luminance alone, negative in blue on gold over a dark wall: the review of 2026-10-30).
-    return fresnel * occlusion * (environment - traced_weight * open) + g_reflection_request.w * g_reflection_tint * open;
+    // The traced share is left out: the mirror ray's pass adds what its ray met, the sky on a miss,
+    // at the request's own weight and colour (`request.w * tint`, so a tinted F0 leaves no
+    // sky-coloured rest: the review of 2026-10-30). Shaded with the open sky and taken off again
+    // there, a dark room's reflection was the difference of two values hundreds of times its size,
+    // the first rounded to a half float in the colour image: a bar's metals and a bathroom's
+    // mirror speckled in red, green and blue, each channel's rounding its own (2026-11-04).
+    return fresnel * occlusion * (environment - traced_weight * open);
 }
 
 // The rough end of the mirror rays (#306): roughness 0.30, Blinn-Phong about 245. Smoother rows
@@ -7372,6 +7375,8 @@ float3 shade_jelly(Frame* f, Material mat, Surface s, uint instance, bool traced
     float3 mirror_tint = g_reflection_tint;
     if (traced && mirror.w > 0.0)
     {
+        // The open sky `sky_reflection` leaves to the ray, which a hit replaces below.
+        color += mirror.w * mirror_tint * sky_along(s.sky, mirror.xyz);
         RayDesc ray;
         ray.Origin = s.world + s.n * 0.003;
         ray.Direction = mirror.xyz;
@@ -7746,7 +7751,9 @@ uint shade_pixel<let SHADOWS : int>(uint class_index, uint2 pixel, uint vis)
     s.probes = resolve_push.probes; // read under a sky only
     s.shore = resolve_push.shore;
     bool mirror_ray = wants_mirror_ray<SHADOWS>(f, mat);
-    s.traced = mirror_ray && resolve_push.request_image != 0xFFFFFFFFu;
+    // Not a blade's: the mirror rays' pass skips grass, and a traced row's sky is left to its ray
+    // (`sky_reflection`).
+    s.traced = mirror_ray && !grass && resolve_push.request_image != 0xFFFFFFFFu;
     // Its shadow rays (the sun's, the lamps'): the trees' cards near, their proxies far.
     g_ray_mask = shadow_world(f, surface_relative, pixel);
     if (SHADOWS != 0 && f[0].tlas != 0 && (f[0].flags & FLAG_SHADOWS) != 0)
@@ -7810,14 +7817,29 @@ uint shade_pixel<let SHADOWS : int>(uint class_index, uint2 pixel, uint vis)
         : standard_light(f, mat, s, si);
     if (grass)
         color *= grass_scale;
+    // A debug view that replaces or tints the colour asks for no mirror ray: the ray's pass adds
+    // the whole reflection (`sky_reflection` leaves it out), which would show over the view.
+    bool debug_view = false;
     if (culled_debug)
+    {
         color = lerp(color, float3(1.0, 0.0, 0.0), 0.8); // a culling error (FLAG_SHOW_CULLED)
+        debug_view = true;
+    }
     if (software && (f[0].flags & FLAG_SHOW_RASTER) != 0)
+    {
         color = lerp(color, float3(0.1, 0.9, 0.3), 0.6); // the software rasteriser's pixels
+        debug_view = true;
+    }
     if ((f[0].flags & FLAG_SHOW_LADDER) != 0 && ladder)
+    {
         color = lerp(color, float3(0.15, 0.35, 1.0) * dot(color, float3(0.3, 0.6, 0.1)) * 2.0, 0.85);
+        debug_view = true;
+    }
     if ((f[0].flags & FLAG_SHOW_AO) != 0 && s.ao >= 0.0)
+    {
         color = float3(s.ao * 0.25); // the occlusion, as a light grey surface in the sun
+        debug_view = true;
+    }
     // A standard row's shading input (D-086), its value out of the exposure below.
     if (f[0].show_input != 0u && class_index == MATERIAL_CLASS_STANDARD)
     {
@@ -7833,7 +7855,12 @@ uint shade_pixel<let SHADOWS : int>(uint class_index, uint2 pixel, uint vis)
             color = probe_irradiance(s.probes, s.world, s.n, s.n, s.view, color);
     }
     if (!grass && (f[0].flags & FLAG_SHOW_REGIONS) != 0 && s.probes != nullptr)
+    {
         color = probe_region_tint(s.probes, s.world, s.n, s.view);
+        debug_view = true;
+    }
+    if (debug_view)
+        g_reflection_request = float4(0.0);
     color *= f[0].sun_illuminance * f[0].exposure / 3.14159265;
     g_storage_images_rgba16f[NonUniformResourceIndex(resolve_push.color_image)][pixel] = float4(color, 1.0);
     if (s.traced)
@@ -7902,8 +7929,8 @@ void resolve_tiles<let SHADOWS : int>(uint class_index, uint3 group, uint3 threa
         shade_pixel<SHADOWS>(class_index, pixel, vis);
 }
 
-// What a mirror ray that met nothing adds to the sky its pixel was shaded with (the table with
-// the clouds over it, `sky_reflection`): the clouds as the frame shows them in its direction,
+// What a mirror ray that met nothing adds to the sky in its direction (the table with the clouds
+// over it, which `sky_reflection` leaves to the ray): the clouds as the frame shows them there,
 // where it shows them (the owner, 2026-10-24: the table's clouds, a degree a texel, streaked the
 // still water and slid as the camera moved). The clear table under the cloud layer the compose
 // lays over the sky, faded out towards the image's edges and only where the frame sees the sky
@@ -7936,10 +7963,11 @@ float3 seen_clouds(Frame* f, float4* sky, float3 direction, float2 size)
 
 // The mirror rays of the smooth rows (issue #52), in a pass of their own over the tiles the
 // standard pass listed, so the resolve does not carry the ray's code and registers. The
-// resolve shaded the pixel with the sky in the mirror direction and stored that direction and
-// the weight W of what a ray meets there instead, and W's colour T (a metal's tint) below them.
-// This pass traces the ray and, on a hit, adds W × T × (hit − sky): the same sum as tracing
-// inside the resolve.
+// resolve shaded the pixel without the share of its reflection a ray traces, and stored the
+// mirror direction, that share's weight W and its colour T (a metal's tint) below them. This
+// pass traces the ray and adds W × T × what it met (the sky on a miss): the same sum as tracing
+// inside the resolve, without the sky added and taken off again through the half-float colour
+// (D-098's last paragraph).
 [shader("compute")]
 [numthreads(8, 8, 1)]
 void reflections_main(uint3 group : SV_GroupID, uint3 thread : SV_GroupThreadID)
@@ -8032,12 +8060,12 @@ void reflections_main(uint3 group : SV_GroupID, uint3 thread : SV_GroupThreadID)
         }
     }
     // What the pixel reflects, before the exposure: what the ray met, or on a miss the sky as the
-    // frame shows it there (the table and `seen_clouds`). The history settles that light, and the
-    // sky the pixel was shaded with (the table in the mirror direction) is taken off after: kept
-    // with it, a difference against one frame's sky came back under another's, since the sky,
-    // at infinity, slides over a mirror unlike the trees it reflects. Moving sideways over the
-    // village's water, the clouds showed through the trees' reflections as pale streaks, and a
-    // blue band opened under the quay (the owner, 2026-10-28).
+    // frame shows it there (the table and `seen_clouds`). The history settles that light whole,
+    // the sky with it: the pixel was shaded without its traced share (`sky_reflection`). A
+    // history of its difference from the sky the pixel was shaded with brought one frame's sky
+    // back under another's, since the sky, at infinity, slides over a mirror unlike the trees it
+    // reflects. Moving sideways over the village's water, the clouds showed through the trees'
+    // reflections as pale streaks, and a blue band opened under the quay (the owner, 2026-10-28).
     float4 up_table = sky[SH_COEFFICIENTS];
     float3 mirror = sky_view_luminance(uint(up_table.w + 0.5), up_table.xyz, sky[SH_COEFFICIENTS + 1].xyz, request.xyz) * 3.14159265;
     float3 reflected = hit.w > 0.0 ? hit.xyz : mirror + seen_clouds(f, sky, request.xyz, size);
@@ -8045,7 +8073,7 @@ void reflections_main(uint3 group : SV_GroupID, uint3 thread : SV_GroupThreadID)
         reflected = steadied_reflection(history, f, pixel, size, mul(frame, object_position) + relative, record.x, reflected, hit.w > 0.0 ? distance : -1.0, mover);
     // At the request's weight and colour (`g_reflection_tint`, the image's lower half).
     float3 tint = g_storage_images_rgba16f[NonUniformResourceIndex(resolve_push.request_image)][pixel + uint2(0u, resolve_push.height)].rgb;
-    float3 added = request.w * tint * (reflected - mirror);
+    float3 added = request.w * tint * reflected;
     if (all(added == float3(0.0)))
         return;
     RWTexture2D<float4> color = g_storage_images_rgba16f[NonUniformResourceIndex(resolve_push.color_image)];

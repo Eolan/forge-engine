@@ -10608,7 +10608,7 @@ probes:
   probe's key is its place, so only a moved probe re-traces). Off, every capture of eight scenes is
   unchanged (0 px).
 
-## D-098 — Glossy reflections: rays inside the lobe, denoised, under the sharp mirror's band 🟡 (proposed 2026-11-04)
+## D-098 — Glossy reflections: rays inside the lobe, denoised, under the sharp mirror's band ✅ (proposed 2026-11-04; the owner's go the same day: "follow recommendations"; on hold: the speckle was a rounding fault, below)
 
 **The need** (the owner, 2026-11-04, the private district's bar: "some surfaces have issue … mirrors
 and bin … the bar door"): the layered metals (a door, a bin, a bathroom's metal mirror; roughness
@@ -10654,6 +10654,13 @@ nits are read as lumens until calibrated against its pictures (the private distr
 **For the owner:** take (c) as proposed, or keep the sharp mirror and narrow #306's fade (fewer
 rays on glossy rows: no speckle, but no reflection of the room either, the probes' sky instead).
 
+**Decided** (the owner, 2026-11-04: "follow recommendations"), the band drawn by the surface rather
+than by roughness alone: a row without a normal map (glass, water, a mirror, paint) keeps D-050's
+exact mirror ray at any roughness, so the city's glass stays as chosen; a row with a normal map or
+layers (D-095) aims its ray inside its GGX lobe, over the band #306 traces (to roughness 0.42), its
+history reprojected with the surface rather than the mirror's virtual point (which the bumps break),
+then NRD's REBLUR_SPECULAR where NRD is installed. Built in two steps, each measured.
+
 **Found the same day, after the proposal: the lobe alone does not mend it.** Aiming the rays of the
 0.30–0.42 band inside their lobe (a patch kept in the private district's notes) left the bar's
 metals as they were. Each term of the hits' light taken alone, at the owner's view, the lamps off:
@@ -10669,3 +10676,24 @@ alone show the room dark, as it is, at the camera's distance. The district's roo
 volumes as D-068 regions, cut into rectangles so each grid stays in its room) and its normal maps
 rebuilt as D-086's did not change it. Next, before the lobe and REBLUR: the probes' visibility
 in that room, and a short trace from the mirror hits as the pixels have.
+
+**Found later the same day: the speckle was the colour image's rounding, mended apart from D-098.**
+The finding above was wrong: those captures of the probes' light went through the same fault. Each
+term written straight into the frame instead (`reflections_main`'s output, the anti-aliasing and
+the history off), the hits' probes, albedo, metal and sun are all smooth, and the speckle is red,
+green and blue apart, each channel its own: rounding, not light. `sky_reflection` shaded a traced
+row with the open sky in its mirror direction, at the ray's weight, and the mirror rays' pass took
+that sky off again as it added the hit (`request.w * tint * (hit - sky)`). In a dark room the sky
+is hundreds of times the room's light, and the class pass had stored it in the half-float colour
+image (11 bits): its rounding was as large as the reflection, left behind when the sky came off.
+Negative halves clamped, it also brightened every reflecting metal indoors. Mended by leaving the
+traced share out of the shading (the pass adds the hit, or the sky on a miss: the same sum without
+the cancelling); the jelly, whose ray is traced in its class pass in registers, adds the sky back
+where it subtracts it. At the owner's view (the door's lower panel; the difference from a 3 × 3
+median over the local light): 0.141 → 0.063 with DLSS Quality and the lamps on (the rest is the
+lamps' single shadow ray at the hits, which DLSS mostly averages), 0.396 → 0.027 with neither
+anti-aliasing nor lamps; the door's mean light 12 times lower, its true reflection of a dim room.
+The village's map views change by under 0.003 (outdoors the sky and what the rays meet are alike),
+the Bistro's day view in 98 pixels of 1.44 million (ꟻLIP mean 0.0005). The lobe and REBLUR (step
+1 kept as a patch in the private district's notes) are now a look question, not the speckle's
+answer: on hold until the glossy metals are compared with the game's grab of the same place.
