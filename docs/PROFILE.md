@@ -2857,6 +2857,9 @@ street 5.8 / 8.7. VRAM 3.9 GB (2.3 GB geometry: #387, pages about a tenth full).
   the Bistro), 8 of every lamp's (1.294 % in the bar), one spatial sample (−0.8 ms, the bar 1.545 %),
   and RTXDI's pairwise bias correction (−0.3 to −0.8 ms, but the Bistro's night 17 % darker: its
   lamps round walls, #372).
+- **The lamps' fog** (D-099 step 1, 2026-11-04): 25 fog boxes in reach, the lamps unshadowed: the
+  bar at the benchmark's 20 s `fog/light` 0.56 ms (its first, jittered form), the bathroom 0.30
+  with the froxels lit at their middles; `fog/apply` 0.06–0.07, `fog/integrate` 0.001.
 - **What else the path's gap could take** (the owner's choice; one run each, the same session):
   D-097's baked probe rays (`FORGE_GI_BAKED=1`) 17.27 → 16.40 ms (`gi/probe rays` 2.75 → 2.02;
   0.01 more error against the path tracer by D-097's measure); the per-pixel bounce off

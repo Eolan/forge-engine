@@ -74,6 +74,11 @@ use afloat::Barrels;
 use scenario::{Backdrop, Running, Scenario};
 use world::world;
 
+/// How far the fog's froxels reach from the camera, metres (D-099): a room and the street beyond.
+const FOG_FAR: f32 = 64.0;
+/// The fog's phase: a little forward scattering, so lamps seen through it glow.
+const FOG_ANISOTROPY: f32 = 0.2;
+
 /// The shared app's flags: the city's, the gallery's, the island's and the renderer's (a demo's
 /// own scene adds its own, #216).
 #[derive(Parser, Debug, Clone)]
@@ -561,6 +566,9 @@ pub struct Args {
     /// without its stains (the decals' A/B, for their look and their cost in the resolve).
     #[arg(long)]
     pub no_decals: bool,
+    /// No fog (D-099): the scene's fog volumes left out (the fog's A/B).
+    #[arg(long)]
+    pub no_fog: bool,
     /// No street lamps beyond the frame's set (#284): their pools go dark past the nearest
     /// lamps the frame lights with shadow rays, as before (the far lamps' A/B).
     #[arg(long)]
@@ -1004,6 +1012,8 @@ struct Gallery {
     /// `--lamp-restir`: the lamps by ReSTIR DI (D-065's comparison), and the lamps the frame
     /// lights with, in its order.
     restir: Option<forge_render::LampRestir>,
+    /// The scene's fog volumes in the scene frame and their passes (D-099), when it has some.
+    fog: Option<(forge_render::FogVolume, Vec<forge_render::FogBox>)>,
     kept_lamps: Vec<forge_render::lamps::GpuLamp>,
     /// `--day`: seconds into the day, the metered scene and the automatic exposure (issue #57).
     day_time: f32,
@@ -2115,6 +2125,35 @@ impl Gallery {
             );
             None
         };
+        // The scene's fog volumes (D-099), from the world frame to the scene's, lit by the lamps
+        // and the sun through rays.
+        let fog_boxes: Vec<forge_render::FogBox> = running
+            .as_ref()
+            .filter(|_| !args.no_fog)
+            .map_or_else(Vec::new, |running| {
+                let offset =
+                    forge_render::CellPos::from_f64(glam::DVec3::ZERO).relative_to(scene.origin());
+                running
+                    .fog_boxes()
+                    .into_iter()
+                    .map(|b| b.moved(offset))
+                    .collect()
+            });
+        let fog = if fog_boxes.is_empty() {
+            None
+        } else if ctx.device.features().ray_query && scene.rays().is_some() {
+            tracing::info!(
+                boxes = fog_boxes.len(),
+                "fog volumes lit by the lamps (D-099)"
+            );
+            Some((
+                forge_render::FogVolume::new(&ctx.device, &ctx.shaders)?,
+                fog_boxes,
+            ))
+        } else {
+            tracing::warn!("fog volumes need ray queries: left out");
+            None
+        };
         // Where ReSTIR lights the lamps rather than the light lists (#372): every lamp, or past
         // the nearest.
         renderer.lamp_restir_from =
@@ -2166,6 +2205,7 @@ impl Gallery {
             lamp_check,
             cell_check,
             restir,
+            fog,
             kept_lamps: Vec::new(),
             // The look's curve waits for the console's variable (`register_vars`), under which
             // `--set` and the files win over it.
@@ -4558,6 +4598,28 @@ impl Demo for Gallery {
                 extent,
             );
             reactive = reactive.or(Some(mask));
+        }
+        // The scene's fog (D-099), over the HDR scene before it is metered and upscaled.
+        if let Some((fog, boxes)) = &self.fog {
+            fog.draw(
+                &mut frame.graph,
+                frame.slot,
+                forge_render::FogParams {
+                    view_proj: taa_frame.jittered_projection * self.camera.view_rotation(),
+                    camera: camera_in_scene,
+                    far: FOG_FAR,
+                    sun_dir: self.renderer.sun_dir,
+                    sun_color: self.renderer.sun_color,
+                    sun_illuminance: self.renderer.sun_illuminance * exposure,
+                    anisotropy: FOG_ANISOTROPY,
+                    frame: self.renderer.frame_address(frame.slot),
+                    movers: targets.movers,
+                },
+                boxes,
+                targets.depth,
+                taa_frame.color,
+                extent,
+            );
         }
         if metered {
             // Meter the finished HDR scene for the exposure of the frames to come.

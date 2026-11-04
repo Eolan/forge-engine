@@ -217,6 +217,11 @@ pub trait Running: Send {
     fn probe_regions(&self) -> Vec<forge_render::RegionVolume> {
         Vec::new()
     }
+    /// Its fog volumes (D-099, [`forge_render::FogVolume`]), in the world frame as
+    /// [`Self::probe_regions`]: lit by the lamps and the sun. None by default.
+    fn fog_boxes(&self) -> Vec<forge_render::FogBox> {
+        Vec::new()
+    }
     /// A key pressed: whether the scene took it. An Enter it takes starts the app's liquid over
     /// too.
     fn key_pressed(&mut self, code: KeyCode, camera: &FlyCamera) -> bool;

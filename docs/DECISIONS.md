@@ -10805,3 +10805,31 @@ live patent found reads on items 1–4 as written.
 - **Before the shadowed option:** run the full-text queries again (the site blocked the later
   ones), since applications from the last 18 months are not yet published.
 
+**Step 1 built (2026-11-04): the boxes and the lamps, unshadowed** (`forge_render::FogVolume`,
+`shaders/fog.slang`, the city app's `Running::fog_boxes`, `--no-fog`).
+- **The volume:** D-032's layout (160 × 90 × 64 froxels to 64 m, quadratic). Its medium is the
+  boxes at each froxel laid in priority order (ties by their order in the scene), each over those
+  under it by its edges' fade (metres to its nearest face, per axis). It thins with height above
+  the box's floor, and the share absorbed comes from the box. The 32 boxes kept are the nearest by
+  their bounding spheres, so a large box round the camera is never dropped.
+- **The light:** the lamps of the froxel's column of the lamps' grid (#386, every lamp beyond the
+  grid), weighed as the light lists weigh a surface facing each (reach, beam, colour), plus the
+  sun through a shadow ray, with a Henyey–Greenstein phase (g 0.2). Applied over the HDR scene
+  before the exposure meter and the upscaler.
+- **Each froxel lit at its middle,** a lamp's light taken from no nearer than half the froxel's
+  size. Jittered within the froxel each frame (as D-032's dust is), the volume shimmered with nothing
+  to settle it: a still camera's moving pixels in the private district's bathroom went 1.50 → 2.81 %,
+  and a sample landing beside a bulb lit its whole froxel white. At the middle: 0.23 %.
+- **Measured** on the private district, DLSS Quality at 2560 × 1440, 25 boxes in reach: the bar
+  `fog/light` 0.56 ms (jittered, before the fix), the bathroom 0.30; `fog/apply` 0.06–0.07,
+  `fog/integrate` 0.001.
+- **The look:** at the data's densities (`densityFactor` taken as extinction per metre) the haze is
+  faint. Five times thicker, by eye against the game's frame of the same benchmark moment, it fills
+  the bar and glows round its lamps; the private viewer's default until the environment's own fog
+  is read.
+- **Left:**
+  - the glow the neon's own emission gives the game's fog (only lamps scatter here);
+  - the ambient light (the volume's `ambientScale`);
+  - the lamps' shadows (the patent searches first);
+  - reflections and glass seeing the fog.
+
