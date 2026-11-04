@@ -1398,9 +1398,11 @@ impl Gallery {
         let night = ((args.day.is_some() || args.time_of_day.is_some()) && open_sky)
             .then(|| {
                 let root = forge_app::workspace_root_from(env!("CARGO_MANIFEST_DIR"));
+                // The stars against the app's sun, as `set_sun_of_day` lights the night (a scene's
+                // own sun level, `Look::sun_illuminance`, binned them 2 EV too dim).
                 let mut night = forge_render::night::NightSky::new(
                     &ctx.device,
-                    renderer.sun_illuminance,
+                    forge_render::starfield::SUN_ILLUMINANCE_1AU,
                     Some(&root),
                 )?;
                 night.show_real = args.real_sky;

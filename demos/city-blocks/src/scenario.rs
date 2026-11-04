@@ -51,7 +51,8 @@ pub struct Look {
     /// The sun's illuminance at the ground, lux (the sky's light with it), the app's where none
     /// (128,000): an authored world's lamps are set against its own sun, and dimming its sun
     /// keeps them as their data gives them (their reach, and so their cost, unchanged). `--day`
-    /// and `--time-of-day` keep the app's.
+    /// and `--time-of-day` under the ground's own sky give the app's; an environment map or
+    /// another backdrop keeps this.
     pub sun_illuminance: Option<f32>,
     /// What surrounds the scene.
     pub backdrop: Backdrop,
