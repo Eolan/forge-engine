@@ -10,7 +10,8 @@
 //! A BC5 normal map's levels hold unit normals, so the spread of the bumps a coarse level averages
 //! is lost; [`bc5_normals_to_bc7`] rebuilds its levels from the unit normals, unnormalised, as BC7
 //! (Intel's ISPC Texture Compressor through `intel_tex_2`), and [`write_dds`] keeps them on disk
-//! (D-086).
+//! (D-086). A BC1 normal map made by a tool that normalised each level loses it alike
+//! ([`bc1_normals_to_bc7`]).
 
 use std::fmt;
 
@@ -494,6 +495,32 @@ pub fn bc5_normals_to_bc7(texture: &CompressedTexture) -> Option<CompressedTextu
             }
         }
     }
+    Some(normals_to_bc7(texture, level0))
+}
+
+/// A BC1 normal map (RGB: xyz × 0.5 + 0.5, its green as the shader reads it) as BC7, every level,
+/// as [`bc5_normals_to_bc7`] does a BC5 one: level 0's normals made unit, the smaller levels their
+/// unnormalised means. A production's BC1 maps hold unit normals in every level, so their coarse
+/// levels said a bumpy surface was flat (a bar's layered metals, mirror-smooth at any distance).
+/// `None` for another format.
+pub fn bc1_normals_to_bc7(texture: &CompressedTexture) -> Option<CompressedTexture> {
+    if texture.format != BlockFormat::Bc1 {
+        return None;
+    }
+    let level0 = color_plane(texture)?
+        .into_iter()
+        .map(|c| {
+            let n = Vec3::from_array(c.map(|v| f32::from(v) / 255.0 * 2.0 - 1.0));
+            n.normalize_or(Vec3::Z)
+        })
+        .collect();
+    Some(normals_to_bc7(texture, level0))
+}
+
+/// `level0`'s normals (`texture`'s size) and their unnormalised means as BC7, every level
+/// ([`normal_levels`]), each texel's xyz × 0.5 + 0.5 in RGB, alpha 255.
+fn normals_to_bc7(texture: &CompressedTexture, level0: Vec<Vec3>) -> CompressedTexture {
+    let (w, h) = (texture.width as usize, texture.height as usize);
     let settings = intel_tex_2::bc7::opaque_fast_settings();
     let levels = normal_levels(w, h, level0)
         .into_iter()
@@ -522,14 +549,14 @@ pub fn bc5_normals_to_bc7(texture: &CompressedTexture) -> Option<CompressedTextu
             )
         })
         .collect();
-    Some(CompressedTexture {
+    CompressedTexture {
         name: texture.name.clone(),
         width: texture.width,
         height: texture.height,
         format: BlockFormat::Bc7,
         srgb: false,
         levels,
-    })
+    }
 }
 
 /// `texture` as a DDS file [`read_dds`] reads back: the DX10 header's DXGI format (BC1, BC3, BC4, BC5 or
@@ -812,6 +839,47 @@ mod tests {
         );
         assert_eq!(back.levels, bc7.levels);
         assert!(bc5_normals_to_bc7(&back).is_none());
+    }
+
+    #[test]
+    fn a_bc1_normal_map_becomes_bc7_whose_coarse_level_keeps_the_spread() {
+        // 8 × 4 in BC1: the left block's normals lean one way (255, 128, 128 → +x), the right
+        // block's the other (0, 128, 128 → -x); both four-colour blocks of one colour.
+        let lean = |r: u16| {
+            let c = ((r >> 3) << 11) | ((128_u16 >> 2) << 5) | (128 >> 3);
+            let [a, b] = c.to_le_bytes();
+            // c0 > c1 for the four-colour mode: c1 one step lower in blue.
+            let [d, e] = (c - 1).to_le_bytes();
+            [a, b, d, e, 0, 0, 0, 0]
+        };
+        let t = CompressedTexture {
+            name: "normal".into(),
+            width: 8,
+            height: 4,
+            format: BlockFormat::Bc1,
+            srgb: false,
+            levels: vec![[lean(255), lean(0)].concat()],
+        };
+        let bc7 = bc1_normals_to_bc7(&t).expect("BC1 transcodes");
+        assert_eq!(bc7.format, BlockFormat::Bc7);
+        assert_eq!(
+            bc7.levels.iter().map(Vec::len).collect::<Vec<_>>(),
+            [32, 16, 16, 16]
+        );
+        // The 1 × 1 level averages the two leans: short (about the blue's 0.0), so Toksvig sees
+        // the spread; read back from a decoded colour, its length is well under one.
+        assert!(bc1_normals_to_bc7(&bc7).is_none());
+        let levels = normal_levels(
+            8,
+            4,
+            [Vec3::X; 4]
+                .into_iter()
+                .chain([Vec3::NEG_X; 4])
+                .cycle()
+                .take(32)
+                .collect(),
+        );
+        assert!(levels.last().expect("levels").2[0].length() < 0.1);
     }
 
     #[test]

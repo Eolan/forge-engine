@@ -8776,7 +8776,12 @@ shortening reaches Toksvig, so the highlight widens where the bumps average away
 0.85–1.28 (to 1.9 before); the shade under the awnings 1.1–1.7 (D-088's); a still camera 5,004
 pixels (5,032). A mip bias of −1 (NVIDIA's DLSS guidance for DLAA, `r.textures.lod_bias`, 0 by
 default) sharpens the cobbles a little for 10 % more shimmer (5,502): not taken. Falcor's
-cobbles keep more contrast (its 1,024 jittered samples of level 0).
+cobbles keep more contrast (its 1,024 jittered samples of level 0). **BC1 normal maps alike**
+(2026-11-04, `bc1_normals_to_bc7`): a production's tools write BC1 normal maps (RGB, the normal
+in every level made unit), four in five of the private district's layered materials' maps; read
+as they were, its metals and tiles stayed mirror-smooth at any distance. Rebuilt the same way, a
+tiled wall's grout widens its lobe from a few metres; up close, where the texels are larger than
+the pixels, nothing changes, as it should.
 
 **The review's fixes (2026-10-30):** the GGX terms in `shaders/brdf.slang`, shared by the
 resolve and the impostors (still Blinn-Phong and Lagarde's Fresnel, they would have stepped in
