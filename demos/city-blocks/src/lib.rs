@@ -409,7 +409,8 @@ pub struct Args {
     #[arg(long, default_value_t = 60.0)]
     step_hz: f32,
     /// The sun's elevation over the horizon, degrees (63.4 over the city, the renderer's default
-    /// sun; 30 over the island, where a high sun flattens the relief).
+    /// sun; 30 over the island, where a high sun flattens the relief). A scene that gives its own
+    /// sun (its look's `sun`) keeps it.
     #[arg(long)]
     sun_elevation: Option<f32>,
     /// Draw without the sun's ray-traced shadows (J toggles them; devices without ray queries
@@ -1301,9 +1302,24 @@ impl Gallery {
             .transpose()?;
         if let Some(sun) = look.sun {
             renderer.sun_dir = sun.normalize();
+            // Its colour through the air at its own height: it kept the default sun's (63.4°), and
+            // a scene's afternoon sun at 34° was lit as at noon.
+            renderer.sun_color = Vec3::from(atmosphere_params.transmittance(
+                Vec3::new(0.0, atmosphere_params.bottom_radius + 0.05, 0.0),
+                renderer.sun_dir,
+                64,
+            ));
         }
         if look.white_sun {
             renderer.sun_color = Vec3::ONE;
+        } else if let Some(hue) = look.sun_color {
+            // The authors' hue, at the air's level (its luminance).
+            let luma = |c: Vec3| c.dot(Vec3::new(0.2126, 0.7152, 0.0722));
+            if hue.is_finite() && hue.min_element() >= 0.0 && luma(hue) > 1e-6 {
+                renderer.sun_color = hue * (luma(renderer.sun_color) / luma(hue));
+            } else {
+                tracing::warn!(?hue, "the scene's sun colour is not one: kept the air's");
+            }
         }
         // An environment map as the sky (D-084): loaded once, its sun the scene's at every hour of
         // the day (`--day` and a daytime `--time-of-day` leave it). `--time-of-day` from sunset

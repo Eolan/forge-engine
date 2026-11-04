@@ -43,6 +43,11 @@ pub struct Look {
     pub sun: Option<Vec3>,
     /// The sun white, as no air reddens it.
     pub white_sun: bool,
+    /// The sun's colour as the scene's authors set it (linear RGB, its hue alone: the light's
+    /// level stays the sunlight's through the air at its height). None: the air's. `white_sun`
+    /// wins over it, and `--day`, `--time-of-day` or an environment map's sun, which colour the
+    /// sun themselves, leave it unused.
+    pub sun_color: Option<Vec3>,
     /// What surrounds the scene.
     pub backdrop: Backdrop,
     /// The spray of the scene's own splashes ([`Running::splashes`]), with or without water.
@@ -132,6 +137,7 @@ impl Default for Look {
         Self {
             sun: None,
             white_sun: false,
+            sun_color: None,
             backdrop: Backdrop::Sky,
             splashes: false,
             particles: false,

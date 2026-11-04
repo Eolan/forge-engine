@@ -8580,6 +8580,25 @@ working as if we were working on a proper game engine."):
   pbrt-v4 or Cycles path-traces and Forge loads, found now and downloaded on the owner's word
   (the foliage work of D-075 and D-091 measured against it).
 
+**The district against its source's frames (2026-11-04/05).** The source's benchmark frames are
+matched to the path by their edges (frame k at (k − 11) × 2 + 1 s; 25 of 37 match). The district
+takes its source's exposure limits (D-089's note), its lamps against Forge's physical sun, its
+glows' ray-traced EV, and its sun's colour, each fitted or read on those frames (the numbers stay
+with the private data). Two engine changes came of it:
+- **A scene's sun had the default sun's colour.** City-blocks coloured the sun through the air at
+  the default 63.4° and kept that colour when a scene gave its own direction: the district's
+  afternoon sun at 34° and the village's at 33.5° were lit as at noon. The colour is now the
+  air's at the scene's sun. The map check sets the hour (`--time-of-day`) and is unchanged (ꟻLIP 0,
+  13 shots); the village run without it gets a slightly warmer sun, and the physics lab's yard and
+  materials scenes (a sun 26.6° up) a redder one, about 0.2 EV dimmer at a fixed exposure: their
+  captures (`lab-yard*`, `lab-materials*`) move. `--sun-elevation` already left a scene's sun's
+  direction alone; now its colour too.
+- **A scene may give its sun's colour** (`Look::sun_color`, its hue at the air's level): its
+  authors' light where the air's model differs (a white sun wins over it; `--day`,
+  `--time-of-day` and an environment map colour the sun themselves). The district's afternoon sun is golden: its
+  sunlit streets' red over green 1.07 → 1.36 against the source's 1.49 (blue over green 0.88 →
+  0.69, the source 0.65).
+
 ## D-084 — An environment map as the sky, its sun taken out of it ✅ (the owner's go, 2026-10-29)
 
 **Why:** D-083's first comparison, the Bistro's Exterior_1 beside NVIDIA's render, could not
