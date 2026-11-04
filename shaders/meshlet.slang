@@ -5085,6 +5085,8 @@ LightInputs multilayer_light(Frame* f, Material mat, Surface s)
             continue;
         float4 masks = sample_image_grad(mask_image, SAMPLER_ANISOTROPIC_WRAP, s.uv, gx, gy);
         float mask = masks[m % 4u];
+        float4 microblend = float4(0.0);
+        float microblend_strength = 0.0;
         // Its microblend (D-095, `forge_core::material::Microblend`): the mask's edge broken up by
         // the microblend's alpha at the layer's contrast, the shipped game's form. Zero where the
         // mask is, so the presence bits still hold.
@@ -5092,14 +5094,36 @@ LightInputs multilayer_light(Frame* f, Material mat, Surface s)
         {
             float tiles = asfloat(layer.mask_textures_a.y);
             float2 at = s.uv * tiles + float2(asfloat(layer.mask_textures_b.x), asfloat(layer.mask_textures_b.y));
-            float a = sample_image_grad(layer.mask_textures_a.x, SAMPLER_ANISOTROPIC_WRAP, at, gx * tiles, gy * tiles).a;
+            microblend = sample_image_grad(layer.mask_textures_a.x, SAMPLER_ANISOTROPIC_WRAP, at, gx * tiles, gy * tiles);
             float c = clamp(asfloat(layer.mask_textures_a.z), 1e-5, 1.0);
-            mask = saturate(((a + mask - 1.0) * (1.0 - c) + mask * c) / c);
+            mask = saturate(((microblend.a + mask - 1.0) * (1.0 - c) + mask * c) / c);
+            // Its normal (red, green) bends the layer's where the mask is broken, under 1 (the
+            // reconstruction's step, eased over the mask's last eighth: a mask filtered to just
+            // under 1 inside a layer would turn the bumps on and off texel by texel).
+            microblend_strength = asfloat(layer.mask_textures_a.w) * saturate((1.0 - mask) * 8.0);
         }
         float w = mask * layer.alpha;
         if (w <= 0.0)
             continue;
         LightInputs l = uv_mapped_light(f, layer, s);
+        // Its strength may be negative (452 of a district's layers): the bumps inverted.
+        if (microblend_strength != 0.0)
+        {
+            // In the cotangent frame `uv_mapped_light` bends a normal map in (T along +u, B along
+            // +v, the map's +y towards −v), from the mesh's UVs, which the microblend's tiling only
+            // scales.
+            float3 N = s.object_normal;
+            float3 dp1perp = cross(N, s.dpdx);
+            float3 dp2perp = cross(s.dpdy, N);
+            float3 T = dp2perp * gx.x + dp1perp * gy.x;
+            float3 B = dp2perp * gx.y + dp1perp * gy.y;
+            float scale = rsqrt(max(max(dot(T, T), dot(B, B)), 1e-30));
+            float2 d = (microblend.xy * 2.0 - 1.0) * microblend_strength;
+            // The frame's scale (the instance's, `instance_normal_frame`) taken off: bumps
+            // as strong at any placed size.
+            float3 frame_n = mul(s.normal_frame, N);
+            l.n = normalize(l.n + mul(s.normal_frame, (d.x * T - d.y * B) * scale) * rsqrt(max(dot(frame_n, frame_n), 1e-30)));
+        }
         li.albedo = lerp(li.albedo, l.albedo, w);
         li.n = normalize(lerp(li.n, l.n, w));
         // The lobes blend by their exponents' logarithm, so a rough layer over a smooth one

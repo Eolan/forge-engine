@@ -10459,9 +10459,15 @@ fine filth, leaks, scratches; 6,834 with a normal), the grime that breaks a laye
   8.25 → 8.31 %, spread over the metals and tiles the microblends reveal, which carry the room's
   reflections; softening a low contrast by the pixel's footprint changed nothing (1.34 %), so it
   was left out.
-- **Left:** the microblends' normals (red and green, at their strength, where the mask is under 1)
-  and four of the district's 112 microblends that the archives do not hold by name. The look is the
-  owner's to judge on a walk.
+- **Their normals, the same day** (the owner: "Follow recommendations"): the microblend's red and
+  green, at its strength (negative in 452 of the district's layers: the bumps inverted), bend the
+  layer's normal in the frame its normal map bends in, where its mask is under 1 (eased over the
+  mask's last eighth, so a mask filtered to just under 1 does not flicker), before it blends with
+  the layers under it; the instance's scale taken off the frame. The microblend's bumps take no
+  Toksvig widening yet. Most layers' strength is 0 or 0.01: at the bar 0.17 % of the pixels
+  move, the bathroom's shimmer unchanged (1.344 %).
+- **Left:** four of the district's 112 microblends, which the archives do not hold by name. The
+  look is the owner's to judge on a walk.
 
 ## D-096 — Authored worlds cooked into packages and streamed by cell ✅ (proposed 2026-11-01 and followed under the owner's word of the night, "Follow recommendations until 10 am"; #214, #338, D-053, D-077, D-094)
 
@@ -10720,7 +10726,7 @@ the Bistro's day view in 98 pixels of 1.44 million (ꟻLIP mean 0.0005). The lob
 1 kept as a patch in the private district's notes) are now a look question, not the speckle's
 answer: on hold until the glossy metals are compared with the game's grab of the same place.
 
-## D-099 — Fog lit by the lamps: authored fog volumes in D-032's froxels, the lamps' light scattered 🟡 (proposed 2026-11-04; D-032, D-065, D-094, #386)
+## D-099 — Fog lit by the lamps: authored fog volumes in D-032's froxels, the lamps' light scattered ✅ (proposed 2026-11-04; the owner's go the same day: "Follow recommendations"; D-032, D-065, D-094, #386)
 
 **The need** (the owner's comparisons with the shipped city game's benchmark, the private district's
 bar): the game fills the bar with a haze that every lamp lights. The pool table's red light, the
@@ -10773,4 +10779,7 @@ is built (research, D-008's practice).
 - go or no-go;
 - the lamps' fog unshadowed first (cheap, the raster mode's look) or shadowed from the start (the
   ray-traced modes' look, a ray a froxel).
+
+**Decided** (the owner, 2026-11-04: "Follow recommendations"): as proposed, the lamps' fog
+unshadowed first, the shadow ray a later option; the patent search before the build.
 

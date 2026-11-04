@@ -142,7 +142,8 @@ pub struct UvMapping {
 /// opacity. At contrast 1 the mask is as it is; lower, the mask's soft rise becomes a ragged edge
 /// where the microblend's alpha crosses it (scratches, leaks, filth). The form is the shipped
 /// game's, as WolvenKit's Blender add-on reconstructs it from its shader graph. The microblend's
-/// normal (red and green, `normal_strength`) is kept for a later step.
+/// normal (red and green, at `normal_strength`, negative inverting it) bends the layer's where
+/// the mask is broken (under 1).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Microblend {
     /// Its texture (alpha the breakup; linear).
@@ -151,7 +152,7 @@ pub struct Microblend {
     pub tiles: f32,
     /// How sharply the mask's edge follows its alpha (1: not at all).
     pub contrast: f32,
-    /// Its normal's strength (not drawn yet).
+    /// Its normal's strength (negative: the bumps inverted).
     pub normal_strength: f32,
     /// Its offset over the UVs, after the tiling.
     pub offset: [f32; 2],
