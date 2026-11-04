@@ -10910,11 +10910,15 @@ live patent found reads on items 1–4 as written.
   - the lamps' shadows (the patent searches first);
   - reflections and glass seeing the fog.
 
-**The probes' light in the fog (2026-11-05, item 3).** Each froxel scatters the probes' light every
+**The probes' light in the fog (2026-11-04, item 3).** Each froxel scatters the probes' light every
 way alike: a white surface facing up and one facing down take irradiances E_up and E_down there
-(`probe_irradiance_hit`, in the froxel's region: a room's grid in a room), and a field that gives
-those has a mean radiance of (E_up + E_down) / 2π. It carries the sky's and the scene's bounce,
-glowing surfaces' included, which the lamps' direct light leaves out.
+(`probe_irradiance_hit`, in the froxel's region: a room's grid in a room), its mean radiance taken
+as (E_up + E_down) / 2π: exact for light even over each half of the sky, light from straight above
+counted twice, light from the side (a sunlit wall's) less than it should. It carries the sky's and
+the scene's bounce, glowing surfaces' included, which the lamps' direct light leaves out. Without
+probes, the open sky's light, as surfaces take it. The extinction that scatters it (the extinction
+times its share) is blended across a box's edge as one: blended apart and multiplied, a box's edge
+took a shell 3 to 5 times too bright at night.
 - **Its share.** `FogParams::ambient` holds two shares: one for the fog everywhere, one for the
   boxes, where it multiplies each box's own `FogBox::ambient`. The shipped game's environment lets
   in a twentieth by day (`ambientScale` 0.05) and twice over at night, and 0.15 in its volumes

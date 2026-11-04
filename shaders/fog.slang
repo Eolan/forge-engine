@@ -63,6 +63,21 @@ static const uint FOG_SLICES = 64;
 // The least share of the probes' light a froxel scatters, per metre (extinction times its share),
 // for it to be looked up.
 static const float FOG_LEAST_AMBIENT = 2e-4;
+// A lamp's light scattered towards the camera at `world` (lux times the phase, its fog share
+// taken), fading to nothing at `reach`; a lamp's light is taken from no nearer than `half_size`.
+float3 fog_lamp_light(Lamp lamp, float reach, float3 world, float3 direction, float half_size, float anisotropy)
+{
+    float3 d = lamp.position_radius.xyz - world;
+    float dist2 = dot(d, d);
+    if (dist2 >= reach * reach)
+        return float3(0.0);
+    float dist = sqrt(dist2);
+    float3 to_lamp = d / max(dist, 1e-6);
+    float window = saturate(1.0 - pow(dist / reach, 4.0));
+    float least = max(lamp.position_radius.w, half_size);
+    float3 lux = lamp.colour_reach.rgb / max(dist2, least * least) * window * window * lamp_beam(lamp, to_lamp);
+    return (1.0 - asfloat(lamp.flags.y)) * lux * fog_phase(dot(-direction, -to_lamp), anisotropy);
+}
 
 // Distance (m) of slice boundary `k` (0..FOG_SLICES): quadratic, fine near the camera.
 float fog_slice_distance(Fog* g, float k)
@@ -96,7 +111,11 @@ void fog_medium(Fog* g, float3 world, out float extinction, out float albedo, ou
     extinction = g[0].global.x * exp(-g[0].global.z * max(world.y - g[0].global.y, 0.0));
     albedo = 1.0 - saturate(g[0].global.w);
     tint = float3(1.0);
-    ambient = g[0].scales.w;
+    // `ambient` is the extinction that scatters the probes' light (the extinction times its
+    // share), blended as one: the share and the extinction blended apart and multiplied gave a
+    // box's edges a shell 3 to 5 times too bright where the fog everywhere's share is high (2 at
+    // night in the shipped city) and the box's low.
+    ambient = extinction * g[0].scales.w;
     for (uint k = 0u; k < g[0].box_count; k++)
     {
         FogBox b = g[0].boxes[k];
@@ -111,10 +130,11 @@ void fog_medium(Fog* g, float3 world, out float extinction, out float albedo, ou
         float3 to_faces = (0.5 - a) * size;
         float inside = min(to_faces.x, min(to_faces.y, to_faces.z));
         float fade = b.shape.y > 0.0 ? saturate(inside / b.shape.y) : 1.0;
-        extinction = lerp(extinction, b.medium.x * exp(-b.medium.y * max(above, 0.0)), fade);
+        float box = b.medium.x * exp(-b.medium.y * max(above, 0.0));
+        extinction = lerp(extinction, box, fade);
         albedo = lerp(albedo, 1.0 - saturate(b.medium.z), fade);
         tint = lerp(tint, b.tint.rgb, fade);
-        ambient = lerp(ambient, b.shape.z * g[0].scales.z, fade);
+        ambient = lerp(ambient, box * b.shape.z * g[0].scales.z, fade);
     }
 }
 
@@ -145,8 +165,8 @@ void fog_light_main(uint3 id : SV_DispatchThreadID)
     float extinction;
     float albedo;
     float3 tint;
-    float ambient_share;
-    fog_medium(g, world, extinction, albedo, tint, ambient_share);
+    float ambient_extinction;
+    fog_medium(g, world, extinction, albedo, tint, ambient_extinction);
     float3 scattered = float3(0.0);
     if (extinction > 0.0)
     {
@@ -162,36 +182,16 @@ void fog_light_main(uint3 id : SV_DispatchThreadID)
                 for (uint e = runs.run[r].x; e < runs.run[r].y; e++)
                 {
                     Lamp lamp = f[0].lamps[lamp_at(f, runs, e)];
-                    float3 d = lamp.position_radius.xyz - world;
-                    float dist2 = dot(d, d);
-                    float reach = lamp.colour_reach.w;
-                    if (dist2 >= reach * reach)
-                        continue;
-                    float dist = sqrt(dist2);
-                    float3 to_lamp = d / max(dist, 1e-6);
-                    float window = saturate(1.0 - pow(dist / reach, 4.0));
-                    float least = max(lamp.position_radius.w, half_size);
-                    float3 lux = lamp.colour_reach.rgb / max(dist2, least * least) * window * window * lamp_beam(lamp, to_lamp);
-                    float share = 1.0 - asfloat(lamp.flags.y);
-                    lamps += share * lux * fog_phase(dot(-direction, -to_lamp), anisotropy);
+                    lamps += fog_lamp_light(lamp, lamp.colour_reach.w, world, direction, half_size, anisotropy);
                 }
             }
         }
-        // The lamps of the fog alone (an authored scene's lights that light no surface).
+        // The lamps of the fog alone (an authored scene's lights that light no surface), to their
+        // own reach.
         for (uint k = 0u; k < g[0].fog_lamp_count; k++)
         {
             Lamp lamp = g[0].fog_lamps[k];
-            float3 d = lamp.position_radius.xyz - world;
-            float dist2 = dot(d, d);
-            float reach = lamp.colour_reach.w;
-            if (dist2 >= reach * reach)
-                continue;
-            float dist = sqrt(dist2);
-            float3 to_lamp = d / max(dist, 1e-6);
-            float window = saturate(1.0 - pow(dist / reach, 4.0));
-            float least = max(lamp.position_radius.w, half_size);
-            float3 lux = lamp.colour_reach.rgb / max(dist2, least * least) * window * window * lamp_beam(lamp, to_lamp);
-            lamps += (1.0 - asfloat(lamp.flags.y)) * lux * fog_phase(dot(-direction, -to_lamp), anisotropy);
+            lamps += fog_lamp_light(lamp, lamp.colour_reach.w, world, direction, half_size, anisotropy);
         }
         // The sun through a shadow ray.
         float3 sun = normalize(g[0].sun.xyz);
@@ -208,23 +208,26 @@ void fog_light_main(uint3 id : SV_DispatchThreadID)
         float3 sunlight = g[0].sun.w * g[0].sun_color.rgb * fog_phase(dot(-direction, -sun), anisotropy) * visible;
         // The probes' light (D-099's item 3): the sky's and the scene's bounce, glowing surfaces'
         // included, as a white surface facing up and one facing down take it, in the region the
-        // froxel stands in. A field that gives irradiances E_up and E_down has a mean radiance of
-        // (E_up + E_down) / 2π, scattered every way alike. One lookup in a rolled loop: each
-        // inlined copy grows the pass (#348). Skipped where the froxel's share of it scatters less
-        // than FOG_LEAST_AMBIENT a metre: over the volume's 64 m, under 1.3 % of that radiance (an
+        // froxel stands in, the mean radiance taken as (E_up + E_down) / 2π, scattered every way
+        // alike: exact for light even over each half of the sky; light from straight above counts
+        // twice, light from the side (a sunlit wall's) less than it should. One lookup in a rolled loop: each
+        // inlined copy grows the pass (#348). Skipped where the froxel's extinction times its share is
+        // under FOG_LEAST_AMBIENT a metre: over the volume's 64 m, under 1.3 % of that radiance (an
         // authored city's fog everywhere by day, a twentieth of 0.003 a metre, which cost 0.45 ms).
         float3 ambient = float3(0.0);
-        if (ambient_share * extinction > FOG_LEAST_AMBIENT && g[0].probes != nullptr && g[0].sky != nullptr)
+        // Without probes, the open sky's light.
+        if (ambient_extinction > FOG_LEAST_AMBIENT && g[0].sky != nullptr)
         {
             [loop]
             for (uint k = 0u; k < 2u; k++)
             {
                 float3 n = float3(0.0, k == 0u ? 1.0 : -1.0, 0.0);
-                ambient += probe_irradiance_hit(g[0].probes, world, n, -direction, sh_irradiance(g[0].sky, n), false);
+                float3 open = sh_irradiance(g[0].sky, n);
+                ambient += g[0].probes != nullptr ? probe_irradiance_hit(g[0].probes, world, n, -direction, open, false) : open;
             }
-            ambient *= ambient_share * f[0].sun_illuminance * f[0].exposure / 6.28318531;
+            ambient *= ambient_extinction * f[0].sun_illuminance * f[0].exposure / 6.28318531;
         }
-        scattered = extinction * albedo * tint * (lamps * (f[0].exposure * g[0].scales.y) + sunlight * g[0].scales.x + ambient);
+        scattered = albedo * tint * (extinction * (lamps * (f[0].exposure * g[0].scales.y) + sunlight * g[0].scales.x) + ambient);
     }
     g_storage_images_rgba16f[NonUniformResourceIndex(g[0].light)][uint2(id.z * FOG_FROXELS_X + id.x, id.y)] = float4(scattered, extinction);
 }

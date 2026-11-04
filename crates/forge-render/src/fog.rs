@@ -179,8 +179,8 @@ pub struct FogParams {
     /// times its own [`FogBox::ambient`]): 1 whole, 0 none. An authored city's environment lets a
     /// twentieth of it into its fog everywhere by day, all of it twice over by night.
     pub ambient: [f32; 2],
-    /// This frame's probes ([`crate::Probes::update`]), whose light the fog scatters; none: no
-    /// such light.
+    /// This frame's probes ([`crate::Probes::update`]), whose light the fog scatters; none: the
+    /// open sky's (`sky`), as a surface takes it without them.
     pub probes: Option<crate::probes::ProbeLight>,
     /// The sky's light this frame: the probes' lookup falls back to it where they leave a point.
     pub sky: Option<crate::SkyLight>,
@@ -350,25 +350,28 @@ impl FogVolume {
         let inverse = params.view_proj.inverse();
         let pipeline = &self.light;
         // The probes' light needs both the probes and the sky's (their lookup's fallback).
-        let ambient = params
-            .probes
-            .zip(params.sky)
+        // The sky's light (without probes, the open sky's alone, as surfaces take it).
+        let sky = params
+            .sky
             .filter(|_| params.ambient.iter().any(|&a| a > 0.0));
+        let probes = params.probes.filter(|_| sky.is_some());
         let mut pass = graph
             .pass("fog/light")
             .image(light, ImageAccess::StorageWrite(compute))
             .with(|p| crate::MoversFrame::declare(params.movers, p, compute, true));
-        if let Some((p, sky)) = ambient {
+        if let Some(sky) = sky {
+            pass = pass.buffer(sky.buffer, BufferAccess::ShaderRead(compute));
+        }
+        if let Some(p) = probes {
             pass = pass
-                .buffer(sky.buffer, BufferAccess::ShaderRead(compute))
                 .buffer(p.data, BufferAccess::ShaderRead(compute))
                 .buffer(p.region, BufferAccess::ShaderRead(compute))
                 .with(|b| p.declare_far(b, compute))
                 .image(p.irradiance, ImageAccess::Sampled(compute))
                 .image(p.distance, ImageAccess::Sampled(compute));
         }
-        let (probes_address, sky_address) =
-            ambient.map_or((0, 0), |(p, sky)| (p.address, sky.address));
+        let probes_address = probes.map_or(0, |p| p.address);
+        let sky_address = sky.map_or(0, |s| s.address);
         pass.run(move |resources, commands| {
             buffer.write(
                 0,
