@@ -10719,3 +10719,58 @@ The village's map views change by under 0.003 (outdoors the sky and what the ray
 the Bistro's day view in 98 pixels of 1.44 million (ꟻLIP mean 0.0005). The lobe and REBLUR (step
 1 kept as a patch in the private district's notes) are now a look question, not the speckle's
 answer: on hold until the glossy metals are compared with the game's grab of the same place.
+
+## D-099 — Fog lit by the lamps: authored fog volumes in D-032's froxels, the lamps' light scattered 🟡 (proposed 2026-11-04; D-032, D-065, D-094, #386)
+
+**The need** (the owner's comparisons with the shipped city game's benchmark, the private district's
+bar): the game fills the bar with a haze that every lamp lights. The pool table's red light, the
+neon's green and the lamps' pools all glow through it. Forge draws the same room clear, its lamps
+lighting only the surfaces. It is the largest look gap left in the bar, after the layers'
+microblends (D-095).
+
+**What the authored data holds:** 223 fog volumes in the district (`worldStaticFogVolumeNode`), each
+a box with:
+- a density (mostly 0.005–0.1 a metre, a few at 2–5);
+- a height falloff (on or off) and a falloff;
+- a colour (186 of 223 white);
+- an absorption, an ambient scale, a priority and a blend falloff.
+
+The bar's own volume is a 31.8 × 9.0 × 24.3 m box: density 0.0175, falloff 0.15, absorption 0.4,
+ambient 0.6. The colour comes from the lamps, not the fog.
+
+**What Forge has:** one froxel volume (D-032, 160 × 90 × 64), lit by the sun through a shadow ray a
+froxel, its medium from noise; the far field the atmosphere's aerial-perspective table.
+
+**Proposed:**
+1. **The medium from authored volumes:** boxes (an inverse transform, a density, a height falloff
+   from the box's floor, a colour, an absorption), the highest priority over the others where
+   they overlap, blended at their edges. The scenes' own fog: a scene with none keeps D-032's look
+   unchanged.
+2. **The lamps' light scattered:** per froxel, the lamps whose reach meets its column of the
+   frame's grid (`lamps::NearLamps`, #386), weighed as the light lists weigh a surface (the same
+   reach, beam and colour), with an isotropic or mildly forward Henyey–Greenstein phase.
+   - **First without shadows:** a lamp lights the fog of its room through walls only where its reach
+     spans them, as the source's raster mode does.
+   - **Then shadowed, as an option:** one shadow ray a froxel to a lamp drawn by weight (as the
+     hits' lamps are), steadied by D-032's temporal reprojection.
+3. **The sun as now,** and the ambient light from the probes' irradiance at the froxel times the
+   volume's ambient scale (rooms dark, the street lit).
+4. **Applied as D-032's,** to every pixel by its depth; reflections and glass take the volume at
+   their hit later.
+5. **Measured:**
+   - the bar's view against the game's grab of the same benchmark frame (light ratio maps, as D-083's
+     comparisons);
+   - the cost on the benchmark path (a target of about 1 ms at DLSS Quality, 2560 × 1440);
+   - a still camera's shimmer;
+   - the village and the Bistro unchanged where they have no volumes.
+
+**Patents:** none surfaced in a first web search. The froxel volume has been published since 2014
+(Wronski, SIGGRAPH; Hillaire, 2015), and open engines ship it (Godot 4's fog volumes, Bevy's). A
+proper search of the patent databases on lights scattered in a froxel volume runs before any of it
+is built (research, D-008's practice).
+
+**For the owner:**
+- go or no-go;
+- the lamps' fog unshadowed first (cheap, the raster mode's look) or shadowed from the start (the
+  ray-traced modes' look, a ray a froxel).
+
