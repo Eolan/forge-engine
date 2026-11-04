@@ -71,6 +71,9 @@ pub struct Lamp {
     /// Without, no shadow ray is traced to it: its light reaches every surface in its reach and
     /// its regions, through what stands between.
     pub shadows: bool,
+    /// The share of its light the fog scatters (D-099, [`crate::FogVolume`]): 1 for most, 0 for
+    /// a lamp an authored scene keeps out of its fog (its `scaleVolFog`).
+    pub fog: f32,
 }
 
 impl Lamp {
@@ -301,7 +304,8 @@ pub struct GpuLamp {
     /// x: the cosine beyond which a cone's light is none; for a flat piece ([`Emission::Flat`]):
     /// y its turn, zw its half sizes (z over 0 marks it flat); else yzw 0.
     pub beam_edge: [f32; 4],
-    /// x: [`LAMP_SHADOWLESS`] when it casts no shadow ([`Lamp::shadows`]); yzw 0.
+    /// x: [`LAMP_SHADOWLESS`] when it casts no shadow ([`Lamp::shadows`]); y: one less
+    /// [`Lamp::fog`], as float bits (a zeroed record lights the fog whole); zw 0.
     pub flags: [u32; 4],
 }
 
@@ -421,6 +425,7 @@ pub fn street_lights(lamps: &[(Vec3, f32, f32, bool)]) -> Vec<Lamp> {
                 regions,
                 emission: Emission::STREET,
                 shadows: true,
+                fog: 1.0,
             });
         }
     }
@@ -565,7 +570,14 @@ pub(crate) fn gpu_lamp(l: &Lamp, share: f32) -> GpuLamp {
         regions: l.regions,
         beam,
         beam_edge,
-        flags: [if l.shadows { 0 } else { LAMP_SHADOWLESS }, 0, 0, 0],
+        // y: the share of its light the fog does not scatter (`1 − fog`), so a record left zero
+        // lights the fog whole.
+        flags: [
+            if l.shadows { 0 } else { LAMP_SHADOWLESS },
+            (1.0 - l.fog.clamp(0.0, 4.0)).to_bits(),
+            0,
+            0,
+        ],
     }
 }
 
@@ -580,6 +592,7 @@ pub const DARK: Lamp = Lamp {
     regions: EVERY_REGION,
     emission: Emission::Every,
     shadows: true,
+    fog: 1.0,
 };
 
 /// A set of lamps in a [`LampTable`].
@@ -1100,6 +1113,7 @@ mod tests {
             regions: EVERY_REGION,
             emission: Emission::Every,
             shadows: true,
+            fog: 1.0,
         };
         // 100 cd reaches about 45 m.
         assert!((reach(100.0) - 44.72).abs() < 0.01);
@@ -1139,6 +1153,7 @@ mod tests {
                 regions,
                 emission: Emission::Every,
                 shadows: true,
+                fog: 1.0,
             }
         };
         // Six hundred house lamps within 10 m (more than MAX_LAMPS), thirty street lamps 60 to
@@ -1187,6 +1202,7 @@ mod tests {
                 regions,
                 emission: Emission::STREET,
                 shadows: true,
+                fog: 1.0,
             }
         };
         // A street of a hundred lamps 25 m apart and a house lamp; the camera at its start.
@@ -1240,6 +1256,7 @@ mod tests {
                 regions: EVERY_REGION,
                 emission: Emission::Every,
                 shadows: true,
+                fog: 1.0,
             })
             .collect();
         let light = |camera: Vec3| {

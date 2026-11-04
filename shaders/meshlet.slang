@@ -784,7 +784,7 @@ public struct Lamp
     public float4 beam_edge;       // x: the cosine beyond which a cone's light is none; yzw: a flat
                                    // piece's turn and half sizes (`lamp_flat`), else 0; a
                                    // lantern's (`lamp_prism`): its shares up and down, -1, 0
-    public uint4 flags;            // x: LAMP_SHADOWLESS when it casts no shadow; yzw 0
+    public uint4 flags;            // x: LAMP_SHADOWLESS when it casts no shadow; y: the share of its light the fog does not scatter (float bits, D-099); zw 0
 };
 
 // `Lamp::flags.x` (lamps.rs, `LAMP_SHADOWLESS`): a lamp whose light casts no shadow (#386), an

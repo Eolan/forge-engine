@@ -1179,6 +1179,7 @@ fn glow_lamp(g: &Glow) -> Option<Lamp> {
         regions: EVERY_REGION,
         emission,
         shadows: true,
+        fog: 1.0,
     })
 }
 

@@ -222,6 +222,11 @@ pub trait Running: Send {
     fn fog_boxes(&self) -> Vec<forge_render::FogBox> {
         Vec::new()
     }
+    /// Its lamps that light only its fog (D-099), in the world frame: an authored scene's lights
+    /// for its fog alone. None by default.
+    fn fog_lamps(&self) -> Vec<forge_render::lamps::Lamp> {
+        Vec::new()
+    }
     /// A key pressed: whether the scene took it. An Enter it takes starts the app's liquid over
     /// too.
     fn key_pressed(&mut self, code: KeyCode, camera: &FlyCamera) -> bool;

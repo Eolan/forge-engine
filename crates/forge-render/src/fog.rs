@@ -34,6 +34,9 @@ const GROUP: u32 = 8;
 /// The most fog volumes a frame lays into its froxels: those nearest the camera that reach the
 /// volume.
 pub const MAX_FOG_BOXES: usize = 32;
+/// The most lamps of the fog alone a frame weighs: those nearest the camera whose reach meets the
+/// volume.
+pub const MAX_FOG_LAMPS: usize = 256;
 
 /// A fog volume: a box of fog in the scene frame.
 #[derive(Clone, Copy, Debug)]
@@ -123,6 +126,7 @@ struct GpuFog {
     sun_color: [f32; 4],
     frame: u64,
     boxes: u64,
+    fog_lamps: u64,
     box_count: u32,
     light: u32,
     light_sampled: u32,
@@ -132,7 +136,7 @@ struct GpuFog {
     color: u32,
     width: u32,
     height: u32,
-    pad: [u32; 3],
+    fog_lamp_count: u32,
 }
 
 /// What a frame's fog needs.
@@ -166,6 +170,7 @@ pub struct FogVolume {
     apply: Pipeline,
     params: Vec<Buffer>,
     boxes: Vec<Buffer>,
+    lamps: Vec<Buffer>,
 }
 
 impl FogVolume {
@@ -206,12 +211,18 @@ impl FogVolume {
                 std::mem::size_of::<GpuFogBox>() * MAX_FOG_BOXES,
                 "fog boxes",
             )?,
+            lamps: buffers(
+                std::mem::size_of::<crate::lamps::GpuLamp>() * MAX_FOG_LAMPS,
+                "fog lamps",
+            )?,
         })
     }
 
     /// Declares the three passes over `color` (the HDR image, read and written) behind and over
     /// what `depth` shows, the fog of `boxes` that reach the volume (the nearest
-    /// [`MAX_FOG_BOXES`]). Nothing when none does.
+    /// [`MAX_FOG_BOXES`]), lit by the frame's lamps (each by its [`crate::lamps::Lamp::fog`]
+    /// share) and by `fog_lamps`, lamps of the fog alone in the scene frame (the nearest
+    /// [`MAX_FOG_LAMPS`] whose reach meets the volume). Nothing when no box reaches it.
     #[allow(clippy::too_many_arguments)]
     pub fn draw<'f>(
         &'f self,
@@ -219,6 +230,7 @@ impl FogVolume {
         slot: FrameSlot,
         params: FogParams,
         boxes: &[FogBox],
+        fog_lamps: &[crate::lamps::Lamp],
         depth: ImageHandle,
         color: ImageHandle,
         extent: vk::Extent2D,
@@ -255,6 +267,24 @@ impl FogVolume {
             })
             .collect();
         self.boxes[slot.index].write(0, &gpu_boxes);
+        // The fog's own lamps whose reach meets the volume, the nearest first.
+        let mut lit: Vec<(f32, crate::lamps::GpuLamp)> = fog_lamps
+            .iter()
+            .filter(|l| l.candela > 0.0 && l.fog > 0.0)
+            .map(|l| {
+                let g = crate::lamps::gpu_lamp(l, 1.0);
+                (l.position.distance(params.camera) - g.colour_reach[3], g)
+            })
+            .filter(|(gap, _)| *gap < params.far)
+            .collect();
+        lit.sort_by(|a, b| a.0.total_cmp(&b.0));
+        lit.truncate(MAX_FOG_LAMPS);
+        let gpu_lamps: Vec<crate::lamps::GpuLamp> = lit.into_iter().map(|(_, g)| g).collect();
+        if !gpu_lamps.is_empty() {
+            self.lamps[slot.index].write(0, &gpu_lamps);
+        }
+        let fog_lamp_count = gpu_lamps.len() as u32;
+        let lamps_address = self.lamps[slot.index].address();
         let box_count = gpu_boxes.len() as u32;
         let boxes_address = self.boxes[slot.index].address();
         let compute = vk::PipelineStageFlags2::COMPUTE_SHADER;
@@ -291,6 +321,7 @@ impl FogVolume {
                         sun_color: params.sun_color.extend(params.anisotropy).to_array(),
                         frame: params.frame,
                         boxes: boxes_address,
+                        fog_lamps: lamps_address,
                         box_count,
                         light: resources.storage(light, 0).0,
                         light_sampled: resources.sampled(light).0,
@@ -300,7 +331,7 @@ impl FogVolume {
                         color: resources.storage(color, 0).0,
                         width: extent.width,
                         height: extent.height,
-                        pad: [0; 3],
+                        fog_lamp_count,
                     }],
                 );
                 commands.bind_pipeline(pipeline);
@@ -346,5 +377,6 @@ mod tests {
     fn the_records_keep_the_shaders_layout() {
         assert_eq!(std::mem::size_of::<GpuFogBox>(), 96);
         assert_eq!(std::mem::size_of::<GpuFog>(), 176);
+        assert_eq!(std::mem::offset_of!(GpuFog, fog_lamps), 128);
     }
 }

@@ -3,7 +3,9 @@
 // dust.slang), each froxel lit by the frame's lamps whose reach meets its column of the lamps'
 // grid (#386, `NearLamps`; unshadowed, as the source's raster mode lights its fog) and by the sun
 // through a shadow ray; integrated front to back and applied to the HDR image by each pixel's
-// depth. Driven by crates/forge-render/src/fog.rs.
+// depth. Each lamp lights the fog by its share (`Lamp::fog`: an authored scene keeps some out of it),
+// and a scene's lamps of the fog alone (lights that light no surface) come as a list of their own.
+// Driven by crates/forge-render/src/fog.rs.
 //
 // The patent rules D-099 keeps: one trilinear read of the volume a pixel (no finer grid built
 // from it), the lamps' lists per world column filled by their reach (never by resampling), their
@@ -30,6 +32,7 @@ struct Fog
     float4 sun_color;       // rgb: the sunlight's colour; a: the phase's anisotropy g
     Frame* frame;           // the resolve's frame: its lamps, their grid, the TLAS
     FogBox* boxes;
+    Lamp* fog_lamps;        // lamps that light the fog alone (an authored scene's), near the camera
     uint box_count;
     uint light;             // storage index of the lit froxels: rgb scattered light, a extinction
     uint light_sampled;
@@ -39,9 +42,7 @@ struct Fog
     uint color;             // storage index of the HDR colour (read and written)
     uint width;
     uint height;
-    uint pad0;
-    uint pad1;
-    uint pad2;
+    uint fog_lamp_count;
 };
 
 struct FogPush
@@ -160,9 +161,26 @@ void fog_light_main(uint3 id : SV_DispatchThreadID)
                     float window = saturate(1.0 - pow(dist / reach, 4.0));
                     float least = max(lamp.position_radius.w, half_size);
                     float3 lux = lamp.colour_reach.rgb / max(dist2, least * least) * window * window * lamp_beam(lamp, to_lamp);
-                    lamps += lux * fog_phase(dot(-direction, -to_lamp), anisotropy);
+                    float share = 1.0 - asfloat(lamp.flags.y);
+                    lamps += share * lux * fog_phase(dot(-direction, -to_lamp), anisotropy);
                 }
             }
+        }
+        // The lamps of the fog alone (an authored scene's lights that light no surface).
+        for (uint k = 0u; k < g[0].fog_lamp_count; k++)
+        {
+            Lamp lamp = g[0].fog_lamps[k];
+            float3 d = lamp.position_radius.xyz - world;
+            float dist2 = dot(d, d);
+            float reach = lamp.colour_reach.w;
+            if (dist2 >= reach * reach)
+                continue;
+            float dist = sqrt(dist2);
+            float3 to_lamp = d / max(dist, 1e-6);
+            float window = saturate(1.0 - pow(dist / reach, 4.0));
+            float least = max(lamp.position_radius.w, half_size);
+            float3 lux = lamp.colour_reach.rgb / max(dist2, least * least) * window * window * lamp_beam(lamp, to_lamp);
+            lamps += (1.0 - asfloat(lamp.flags.y)) * lux * fog_phase(dot(-direction, -to_lamp), anisotropy);
         }
         // The sun through a shadow ray.
         float3 sun = normalize(g[0].sun.xyz);

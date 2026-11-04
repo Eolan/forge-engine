@@ -10827,6 +10827,15 @@ live patent found reads on items 1–4 as written.
   faint. Five times thicker, by eye against the game's frame of the same benchmark moment, it fills
   the bar and glows round its lamps; the private viewer's default until the environment's own fog
   is read.
+- **The lamps' shares of the fog, the same evening** (the owner: "Follow recommendations"):
+  - **Each lamp now carries the share of its light the fog scatters** (`Lamp::fog`, the source's
+    `scaleVolFog`). 2,230 of the district's lit lamps take none, and they had lit the haze.
+  - **The source's lights for its fog alone** (`sceneDiffuse` 0, 620 at a full share; a green tube
+    over the bar among them) light the fog as a list of their own (`Running::fog_lamps`, the
+    nearest 256 whose reach meets the volume; up to 82 at once in the district). They had been
+    left out with the GI-only lights.
+  - **Measured at the bar:** `fog/light` 0.65 ms with 211 of them; a still camera's moving pixels
+    in the bathroom 0.44 % (0.23 % without them, 1.50 % without fog).
 - **Left:**
   - the glow the neon's own emission gives the game's fog (only lamps scatter here);
   - the ambient light (the volume's `ambientScale`);

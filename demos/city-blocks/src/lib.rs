@@ -1013,7 +1013,11 @@ struct Gallery {
     /// lights with, in its order.
     restir: Option<forge_render::LampRestir>,
     /// The scene's fog volumes in the scene frame and their passes (D-099), when it has some.
-    fog: Option<(forge_render::FogVolume, Vec<forge_render::FogBox>)>,
+    fog: Option<(
+        forge_render::FogVolume,
+        Vec<forge_render::FogBox>,
+        Vec<forge_render::lamps::Lamp>,
+    )>,
     kept_lamps: Vec<forge_render::lamps::GpuLamp>,
     /// `--day`: seconds into the day, the metered scene and the automatic exposure (issue #57).
     day_time: f32,
@@ -2139,16 +2143,34 @@ impl Gallery {
                     .map(|b| b.moved(offset))
                     .collect()
             });
+        // The scene's lamps of its fog alone (D-099), to the scene frame as its other lamps.
+        let fog_lamps: Vec<forge_render::lamps::Lamp> = running
+            .as_ref()
+            .filter(|_| !args.no_fog && !args.no_lamps && !fog_boxes.is_empty())
+            .map_or_else(Vec::new, |running| {
+                let origin = scene.origin();
+                running
+                    .fog_lamps()
+                    .into_iter()
+                    .map(|l| forge_render::lamps::Lamp {
+                        position: forge_render::CellPos::from_f64(l.position.as_dvec3())
+                            .relative_to(origin),
+                        ..l
+                    })
+                    .collect()
+            });
         let fog = if fog_boxes.is_empty() {
             None
         } else if ctx.device.features().ray_query && scene.rays().is_some() {
             tracing::info!(
                 boxes = fog_boxes.len(),
+                lamps = fog_lamps.len(),
                 "fog volumes lit by the lamps (D-099)"
             );
             Some((
                 forge_render::FogVolume::new(&ctx.device, &ctx.shaders)?,
                 fog_boxes,
+                fog_lamps,
             ))
         } else {
             tracing::warn!("fog volumes need ray queries: left out");
@@ -4600,7 +4622,7 @@ impl Demo for Gallery {
             reactive = reactive.or(Some(mask));
         }
         // The scene's fog (D-099), over the HDR scene before it is metered and upscaled.
-        if let Some((fog, boxes)) = &self.fog {
+        if let Some((fog, boxes, fog_lamps)) = &self.fog {
             fog.draw(
                 &mut frame.graph,
                 frame.slot,
@@ -4616,6 +4638,7 @@ impl Demo for Gallery {
                     movers: targets.movers,
                 },
                 boxes,
+                fog_lamps,
                 targets.depth,
                 taa_frame.color,
                 extent,
