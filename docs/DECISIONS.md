@@ -8598,6 +8598,12 @@ with the private data). Two engine changes came of it:
   `--time-of-day` and an environment map colour the sun themselves). The district's afternoon sun is golden: its
   sunlit streets' red over green 1.07 → 1.36 against the source's 1.49 (blue over green 0.88 →
   0.69, the source 0.65).
+- **A scene may give its sun's level** (`Look::sun_illuminance`, lux, the sky's light with it): an
+  authored world's lamps are set against its own sun. The district's interiors, at its source's
+  exposure floor, wanted 2.17 EV more lamp light than its lumens give under Forge's 128,000-lux
+  sun (six matched frames, ±0.24). Its lamps ×4.5 matched them but every lamp's reach (where it
+  falls to `LEAST_LUX`) grew 2.1 times, and the bar's fog pass with it (1.2 → 3.8 ms, the frame
+  10.7 → 14.0 ms there): a sun ÷ 4.5 gives the same picture, the lamps as their data gives them.
 
 ## D-084 — An environment map as the sky, its sun taken out of it ✅ (the owner's go, 2026-10-29)
 

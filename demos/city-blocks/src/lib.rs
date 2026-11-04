@@ -1297,6 +1297,15 @@ impl Gallery {
             ),
             None => {}
         }
+        // A scene's own sun level, its lamps set against it.
+        match look.sun_illuminance {
+            Some(lux) if lux.is_finite() && lux > 0.0 => renderer.sun_illuminance = lux,
+            Some(lux) => tracing::warn!(
+                lux,
+                "the scene's sun illuminance is not one: kept the app's"
+            ),
+            None => {}
+        }
         let space = (look.backdrop == Backdrop::Space)
             .then(|| SpaceSky::new(ctx, renderer.sun_illuminance))
             .transpose()?;

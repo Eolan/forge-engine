@@ -232,6 +232,7 @@ impl Scenario for LabScenario {
             },
             white_sun: matches!(kind, LabScene::Space | LabScene::TankBench | LabScene::Room),
             sun_color: None,
+            sun_illuminance: None,
             backdrop: match kind {
                 LabScene::Space => Backdrop::Space,
                 LabScene::TankBench => Backdrop::Card(BENCH_BACKGROUND),

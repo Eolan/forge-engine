@@ -48,6 +48,11 @@ pub struct Look {
     /// wins over it, and `--day`, `--time-of-day` or an environment map's sun, which colour the
     /// sun themselves, leave it unused.
     pub sun_color: Option<Vec3>,
+    /// The sun's illuminance at the ground, lux (the sky's light with it), the app's where none
+    /// (128,000): an authored world's lamps are set against its own sun, and dimming its sun
+    /// keeps them as their data gives them (their reach, and so their cost, unchanged). `--day`
+    /// and `--time-of-day` keep the app's.
+    pub sun_illuminance: Option<f32>,
     /// What surrounds the scene.
     pub backdrop: Backdrop,
     /// The spray of the scene's own splashes ([`Running::splashes`]), with or without water.
@@ -138,6 +143,7 @@ impl Default for Look {
             sun: None,
             white_sun: false,
             sun_color: None,
+            sun_illuminance: None,
             backdrop: Backdrop::Sky,
             splashes: false,
             particles: false,
