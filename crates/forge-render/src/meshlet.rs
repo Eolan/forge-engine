@@ -3792,7 +3792,7 @@ impl MeshletScene {
                         tracing::warn!(
                             bytes = bytes.len(),
                             room = NEAR_LAMPS_BYTES,
-                            "the lamps' grid by columns is past its room: the mirror rays weigh every lamp (#386)"
+                            "the lamps' grid by columns is past its room: every lamp weighed, ReSTIR's 16 candidates over them (#386)"
                         );
                     }
                 } else {

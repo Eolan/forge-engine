@@ -13,7 +13,8 @@
 //
 // - The candidates are `RestirFrame::candidates` points of the lamps of the pixel's place, its
 //   light lists (`lamp_place`): of lamps picked uniformly, or of every one in turn when there are
-//   no more.
+//   no more; `RestirFrame::column_candidates` where the place's lamps are its column's in the
+//   frame's grid (#386), whose reach meets the pixel's 8 m column.
 // - A lamp is a sphere sampled by solid angle, or a flat piece's rectangle sampled by area
 //   (`lamp_flat`); its sample's light is the lamp's luminance by the cosine, let go at its reach
 //   as `lamp_add` lets it go, and none where the lamp does not light the surface's place (its
@@ -52,7 +53,7 @@ struct RestirFrame
     uint history;                    // 1: the last frame's arrays hold what it wrote (not the first frame, a cut or a new size)
     uint outside_only;               // 1: the street lamps alone (`lamp_outside`), the light lists the rest; 0: every lamp
     uint first_lamp;                 // the frame's lamps from this one on, the lists the nearer (#372, `lamp_by_restir`); 0: every lamp
-    uint pad;
+    uint column_candidates;          // the initial candidates where the pixel's lamps are its grid column's (#386, `Frame::near_lamps`): all in reach
 };
 
 struct RestirPush
@@ -450,7 +451,8 @@ bool RAB_GetTemporalConservativeVisibility(RAB_Surface current, RAB_Surface prev
 
 // ---------------------------------------------------------------- the pass ---
 
-// The pixel's initial reservoir: `candidates` points of the lamps of its place, one kept by its
+// The pixel's initial reservoir: `candidates` (`column_candidates` from the grid's column, #386)
+// points of the lamps of its place, one kept by its
 // light (RIS), its shadow ray traced. Where the place has more lamps, each candidate a lamp picked
 // uniformly; where it has no more, the lamps in turn, each its share of the candidates (#372): with
 // one candidate a lamp, a room's single lamp (the Cornell box's) gave each pixel one point of it a
@@ -488,8 +490,12 @@ RTXDI_DIReservoir restir_initial(Frame* f, RestirFrame* r, LampPlace place, RAB_
         total += place.runs.run[k].y - place.runs.run[k].x;
     if (total == 0u)
         return state;
-    bool every = total <= r->candidates;
-    uint count = r->candidates;
+    // From the grid's column (#386) every candidate is a lamp whose reach meets the pixel's 8 m
+    // column, and fewer do: four of the column's lamps shimmered no more than sixteen of the
+    // frame's every lamp (the private
+    // district's bar and street at night, the Bistro's night) for 0.7–0.9 ms less.
+    uint count = place.runs.run[0].x >= LAMP_COLUMN ? r->column_candidates : r->candidates;
+    bool every = total <= count;
     for (uint c = 0u; c < count; c++)
     {
         // Entry `e` of the place's three runs, laid end to end; in turn, the entries before

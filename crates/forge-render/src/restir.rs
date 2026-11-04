@@ -16,8 +16,9 @@
 //! [`LampRestir::draw`] declares one pass, "shadow/lamp restir", before the resolve:
 //! - the pixel's surface, stored for the next frame's reuse;
 //! - its initial reservoir: [`RestirSettings::candidates`] points of the lamps of its place
-//!   (lamps picked uniformly, or every one in turn where it has no more), one kept by its light,
-//!   its shadow ray traced;
+//!   (lamps picked uniformly, or every one in turn where it has no more; from the frame's grid by
+//!   columns, #386, [`RestirSettings::column_candidates`] of the pixel's column's lamps), one kept
+//!   by its light, its shadow ray traced;
 //! - RTXDI's spatiotemporal resampling against the last frame's reservoirs (TAA's
 //!   reprojection) and three neighbours, its bias correction with visibility (`RayTraced`), its
 //!   permutation sampling and naive discount off (#372);
@@ -86,6 +87,14 @@ pub struct RestirSettings {
     /// frames of REBLUR's history, a still camera's shimmer at the Bistro's night 46,000 → 43,000
     /// pixels for 0.3 ms).
     pub candidates: u32,
+    /// The initial candidates where the pixel's lamps are those of its column in the frame's grid
+    /// (#386, made when no lamp has regions): lamps whose reach meets the pixel's 8 m column, so
+    /// fewer do. 4: on the private
+    /// district's benchmark path ReSTIR 4.34 → 3.45 ms, a still camera's shimmer (pixels moving
+    /// over 2 codes between frames ten apart) in its bar 1.235 → 1.202 %, its street at night
+    /// 2.492 → 2.464 %, the Bistro's night 1.769 → 1.747 % (4.62 → 3.96 ms), the light within
+    /// 0.2 %; 8 shimmered more in the street (2.587 %) and the Bistro (1.847 %).
+    pub column_candidates: u32,
     /// The most frames a reservoir's history counts (RTXDI's default, 20).
     pub max_history: u32,
     /// The last frame's reservoirs the reuse takes, the pixel's own (reprojected) first, and where
@@ -104,6 +113,7 @@ impl Default for RestirSettings {
     fn default() -> Self {
         Self {
             candidates: 16,
+            column_candidates: 4,
             max_history: 20,
             spatial_samples: [3, 3],
             radius: 32.0,
@@ -191,7 +201,7 @@ struct GpuRestirFrame {
     history: u32,
     outside_only: u32,
     first_lamp: u32,
-    pad: u32,
+    column_candidates: u32,
 }
 
 const _: () = assert!(std::mem::size_of::<GpuRestirFrame>() == 288);
@@ -519,7 +529,7 @@ impl LampRestir {
             history: u32::from(history),
             outside_only: u32::from(params.outside_only),
             first_lamp: params.first_lamp,
-            pad: 0,
+            column_candidates: s.column_candidates.max(1),
         };
         buffer.write(0, &[gpu]);
         buffer.write(TO_PREVIOUS, &to_previous);

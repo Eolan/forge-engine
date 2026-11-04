@@ -2845,6 +2845,22 @@ street 5.8 / 8.7. VRAM 3.9 GB (2.3 GB geometry: #387, pages about a tenth full).
   path, the still camera's shimmer 1.24 → 1.17 % in the bar, 2.49 → 2.74 % in the street at night):
   left as they were. With the lamps off the path takes 8.63 ms: the lamps cost 8.8 of its 17.4
   (`shadow/lamp restir` 4.65 and its REBLUR about 1.1, the bounce's hits 1.3, the probes' 1.05).
+- **ReSTIR's candidates from the column** (#386, 2026-11-04): the pixels' lamp places take the grid's
+  column too (the light lists' loops the same: 0 px at the Bistro's night), and ReSTIR DI draws
+  4 candidates where they come from a column (`RestirSettings::column_candidates`), lamps whose
+  reach meets the pixel's 8 m column, in place of 16 over the frame's every lamp. The benchmark path, alternating two
+  runs each: the frame 16.06 / 15.99 → 15.43 / 15.36 ms, `shadow/lamp restir` 4.28 → 3.52, p99
+  19.1 → 18.5. A still camera's shimmer (pixels moving over 2 codes between frames ten apart, the
+  frames repeat to the pixel): the district's bar 1.235 → 1.202 %, its street at night 2.492 →
+  2.464 %, the Bistro's night (ReSTIR) 1.769 → 1.747 % for 4.62 → 3.96 ms; the light within 0.2 %.
+  Measured beside it and left: 8 of the column's (more shimmer: 2.587 % in the street, 1.847 % in
+  the Bistro), 8 of every lamp's (1.294 % in the bar), one spatial sample (−0.8 ms, the bar 1.545 %),
+  and RTXDI's pairwise bias correction (−0.3 to −0.8 ms, but the Bistro's night 17 % darker: its
+  lamps round walls, #372).
+- **What else the path's gap could take** (the owner's choice; one run each, the same session):
+  D-097's baked probe rays (`FORGE_GI_BAKED=1`) 17.27 → 16.40 ms (`gi/probe rays` 2.75 → 2.02;
+  0.01 more error against the path tracer by D-097's measure); the per-pixel bounce off
+  (`r.gi.trace=0`) 14.18 ms, both 13.21 (the bounce brings the error from 0.043 to 0.034).
 
 ## Instances scaled per axis: the 96-byte record (#380, 2026-11-01)
 

@@ -626,13 +626,15 @@ uint2 lamp_run(Frame* f, uint key)
 // The lamps a surface in region `region` (across a doorway also `other`) takes: up to three runs
 // of the light lists, the lamps of every region's, `region`'s and `other`'s (`lamp_runs`); without
 // a region (REGION_NONE) or lists, every lamp of the frame, `direct`. A lamp under both `region`
-// and `other` counts under `region` only (`lamp_counted`). With `columns`, without a region and
-// within the grid of `Frame::near_lamps` (#386, made when no lamp has regions), every lamp is that
-// of the point at `world`'s column, marked LAMP_COLUMN: a lamp beyond its reach weighs nothing,
-// so an exact weighing's sums and picks are the same, without an authored district's hundreds of
-// lamps weighed twice at every mirror ray's hit. (Taken for the sampled hits and ReSTIR's candidates too, it drew lamps in
-// reach rather than nothing: more shadow rays, about 0.1 ms each for the bounce, the probes and
-// ReSTIR on the private district's path, and its still camera's shimmer up and down by view.)
+// and `other` counts under `region` only (`lamp_counted`). With `columns`, within the grid of
+// `Frame::near_lamps` (#386, made when no lamp has regions, so every lamp is under REGION_ANY),
+// every lamp is that of the point at `world`'s column, marked LAMP_COLUMN: a lamp beyond its
+// reach weighs nothing, so an exact weighing's sums and picks are the same (a mirror ray's hit,
+// the light lists' pixels) without an authored district's hundreds of lamps weighed at each, and
+// ReSTIR's candidates are lamps whose reach meets the column (`RestirFrame::column_candidates`). The sampled hits
+// (the bounce's, the probes') keep every lamp: drawn from the column, they met lamps in reach
+// rather than nothing and traced more shadow rays, about 0.1 ms each on the private district's
+// path, their still camera's shimmer up and down by view.
 struct LampRuns
 {
     uint2 run[3];
@@ -647,13 +649,11 @@ LampRuns lamp_runs(Frame* f, uint region, uint other, float3 world, bool columns
 {
     LampRuns r;
     r.region = region;
-    r.direct = region == REGION_NONE || f[0].lamp_lists == nullptr;
-    r.run[0] = r.direct ? uint2(0u, f[0].lamp_count) : lamp_run(f, REGION_ANY);
-    r.run[1] = r.direct ? uint2(0u, 0u) : lamp_run(f, region);
-    r.run[2] = r.direct || other == region ? uint2(0u, 0u) : lamp_run(f, other);
-    // Every lamp, by the point's column where the grid reaches it.
+    // Every lamp, by the point's column where the grid reaches it (the lists' REGION_ANY run, the
+    // regions' runs empty: no lamp has regions when the grid is made), before the lists' searches,
+    // which walk the REGION_ANY run's every entry.
     NearLamps* g = f[0].near_lamps;
-    if (columns && r.direct && g != nullptr && g[0].count == f[0].lamp_count)
+    if (columns && g != nullptr && g[0].count == f[0].lamp_count)
     {
         float2 c = floor((world.xz - g[0].origin) / g[0].cell);
         if (all(c >= 0.0) && all(c < float(g[0].side)))
@@ -663,8 +663,13 @@ LampRuns lamp_runs(Frame* f, uint region, uint other, float3 world, bool columns
             r.run[0] = uint2(LAMP_COLUMN + column.x, LAMP_COLUMN + column.x + column.y);
             r.run[1] = uint2(0u, 0u);
             r.run[2] = uint2(0u, 0u);
+            return r;
         }
     }
+    r.direct = region == REGION_NONE || f[0].lamp_lists == nullptr;
+    r.run[0] = r.direct ? uint2(0u, f[0].lamp_count) : lamp_run(f, REGION_ANY);
+    r.run[1] = r.direct ? uint2(0u, 0u) : lamp_run(f, region);
+    r.run[2] = r.direct || other == region ? uint2(0u, 0u) : lamp_run(f, other);
     return r;
 }
 
@@ -3805,7 +3810,7 @@ LampPlace lamp_place(Frame* f, ProbeField* probes, float3 world, float3 n, float
             place.other = at.other;
         }
     }
-    place.runs = lamp_runs(f, place.region, place.other, world, false);
+    place.runs = lamp_runs(f, place.region, place.other, world, true);
     return place;
 }
 

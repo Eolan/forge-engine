@@ -833,10 +833,10 @@ const _: () = assert!(std::mem::size_of::<GpuNearLamps>() == 48);
 /// The frame's lamps, all of every region ([`EVERY_REGION`]), by the columns of a grid of
 /// [`NEAR_SIDE`] × [`NEAR_SIDE`] columns of [`NEAR_CELL`] metres round the camera (#386): each
 /// column lists, in increasing order, the lamps whose reach (`colour_reach.w`, as the shader lets
-/// a lamp go) meets it across the ground. Made only when no lamp of the frame has regions: its
-/// one use, a mirror ray's hit, weighs every lamp of the frame. A ray's hit, a probe's or a pixel weighs its column's
-/// lamps alone rather than the frame's every one: an authored district's hundreds, most of them
-/// beyond reach, cost its reflections, its bounce and its probes milliseconds. A lamp beyond its
+/// a lamp go) meets it across the ground. Made only when no lamp of the frame has regions, so
+/// every lamp is under the lists' REGION_ANY: a mirror ray's hit and a pixel's lamp place (the
+/// light lists, ReSTIR's candidates) take their column's lamps rather than the frame's every one,
+/// an authored district's hundreds, most of them beyond reach. A lamp beyond its
 /// reach weighs nothing, and the distance across the ground is never more than the distance, so
 /// a column leaves out no lamp that lights a point in it, and the sums and picks are the same.
 pub(crate) struct NearLamps {
