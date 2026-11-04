@@ -10648,3 +10648,15 @@ nits are read as lumens until calibrated against its pictures (the private distr
 
 **For the owner:** take (c) as proposed, or keep the sharp mirror and narrow #306's fade (fewer
 rays on glossy rows: no speckle, but no reflection of the room either, the probes' sky instead).
+
+**Found the same day, after the proposal: the lobe alone does not mend it.** Aiming the rays of the
+0.30–0.42 band inside their lobe (a patch kept in the private district's notes) left the bar's
+metals as they were. What their rays bring back is the probes' light at the hits
+(`probe_irradiance_hit`): with the hits lit by their albedo alone the mirror image is clean; with
+the probes' light alone it is the speckle. The district's finest cascade is 4 m apart, larger than
+the bathroom, so few of the eight probes round a hit stand in its room and see it: in a room the
+lookup divides by that small coverage, outside it fills the rest with the open sky (the "horizon"
+seen in the metals). The surfaces seen directly hide it, lit near the camera by the per-pixel
+trace; the probes alone show the room dark, as it is. So the reflections' hits need light as good
+as the pixels': the room grids (D-078, 1 m) where a room has one, a floor on the coverage the
+lookup divides by, or the hits' own short trace, measured before the lobe and REBLUR.
