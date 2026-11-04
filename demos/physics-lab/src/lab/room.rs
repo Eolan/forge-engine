@@ -141,6 +141,7 @@ pub(super) fn lamps() -> Vec<forge_render::lamps::Lamp> {
         emission: forge_render::lamps::Emission::Every,
         shadows: true,
         fog: 1.0,
+        range: None,
     })
     .collect()
 }

@@ -316,7 +316,7 @@ impl FogVolume {
         // The fog's own lamps whose reach meets the volume, the nearest first.
         let mut lit: Vec<(f32, crate::lamps::GpuLamp)> = fog_lamps
             .iter()
-            .filter(|l| l.candela > 0.0 && l.fog > 0.0)
+            .filter(|l| l.candela > 0.0 && l.fog > 0.0 && l.reach() > 0.0)
             .map(|l| {
                 let g = crate::lamps::gpu_lamp(l, 1.0);
                 (l.position.distance(params.camera) - g.colour_reach[3], g)

@@ -3748,6 +3748,7 @@ fn home_lamps(
                     emission: forge_render::lamps::Emission::Every,
                     shadows: true,
                     fog: 1.0,
+                    range: None,
                 },
                 on,
                 kind: l.kind,

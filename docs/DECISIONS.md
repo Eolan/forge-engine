@@ -8604,6 +8604,13 @@ with the private data). Two engine changes came of it:
   sun (six matched frames, ±0.24). Its lamps ×4.5 matched them but every lamp's reach (where it
   falls to `LEAST_LUX`) grew 2.1 times, and the bar's fog pass with it (1.2 → 3.8 ms, the frame
   10.7 → 14.0 ms there): a sun ÷ 4.5 gives the same picture, the lamps as their data gives them.
+- **A lamp may end at its authored range** (`Lamp::range`, `Lamp::reach`): its light fades to
+  nothing there (the shaders' window), never past the reach to `LEAST_LUX`. The source's lights end
+  at their attenuation radius, 2 to 8 m for most of the bar's, where that reach ran 20 m and more:
+  the bar's frame at 1600 × 900 went 13.4 → 9.0 ms at night (`fog/light` 3.30 → 0.69, ReSTIR, the
+  probes' rays and the shading with it). Its lamps then light the bar in pools as the source's do,
+  and the balance against the sun was fitted again (its lamps about 5 EV over a physical balance
+  with the sun, near the exposure's own offset). No other scene gives one.
 
 ## D-084 — An environment map as the sky, its sun taken out of it ✅ (the owner's go, 2026-10-29)
 

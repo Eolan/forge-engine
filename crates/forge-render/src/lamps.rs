@@ -74,9 +74,24 @@ pub struct Lamp {
     /// The share of its light the fog scatters (D-099, [`crate::FogVolume`]): 1 for most, 0 for
     /// a lamp an authored scene keeps out of its fog (its `scaleVolFog`).
     pub fog: f32,
+    /// An authored light's own range, metres: its light fades to nothing there (the shaders'
+    /// window), never past its [`reach`]. None: its reach alone. A shipped city's lights end at
+    /// their attenuation radius, 2 to 8 m for most of its bar's, where the reach to [`LEAST_LUX`]
+    /// runs 20 m and more.
+    pub range: Option<f32>,
 }
 
 impl Lamp {
+    /// How far its light counts, metres: its [`reach`], its [`Self::range`] if shorter (a range
+    /// that is not a number counts as none).
+    pub fn reach(&self) -> f32 {
+        let reach = reach(self.candela);
+        match self.range {
+            Some(r) if !r.is_nan() => reach.min(r.max(0.0)),
+            _ => reach,
+        }
+    }
+
     /// Whether it is a street lamp: [`REGION_OUTSIDE`] its first region. It lights the street
     /// and not the rooms, the probes leave it out, and ReSTIR DI lights it
     /// ([`LampChoice::Streets`]). Which way its light goes is its [`Self::emission`].
@@ -426,6 +441,7 @@ pub fn street_lights(lamps: &[(Vec3, f32, f32, bool)]) -> Vec<Lamp> {
                 emission: Emission::STREET,
                 shadows: true,
                 fog: 1.0,
+                range: None,
             });
         }
     }
@@ -530,9 +546,10 @@ fn candidates(
     let mut near: Vec<(f32, usize)> = lamps
         .iter()
         .enumerate()
-        .filter(|(_, l)| l.candela > 0.0 && pick(l))
+        // A lamp of no reach (a range of 0) lights nothing: it takes no place.
+        .filter(|(_, l)| l.candela > 0.0 && l.reach() > 0.0 && pick(l))
         .map(|(i, l)| (l.position.distance(camera), i))
-        .filter(|&(d, i)| d < reach(lamps[i].candela) + margin)
+        .filter(|&(d, i)| d < lamps[i].reach() + margin)
         .collect();
     near.sort_by(|a, b| a.0.total_cmp(&b.0));
     near
@@ -549,7 +566,7 @@ fn faded<'a>(
     let next = near.get(kept).map(|c| c.0);
     near[..kept].iter().map(move |&(d, i)| {
         let out = |cut: f32| ((cut - d) / (FADE * cut).max(LEAST_FADE)).clamp(0.0, 1.0);
-        let edge = reach(lamps[i].candela) + margin;
+        let edge = lamps[i].reach() + margin;
         let share = next.map_or(1.0, out) * if edge.is_finite() { out(edge) } else { 1.0 };
         (d, i, share)
     })
@@ -566,7 +583,7 @@ pub(crate) fn gpu_lamp(l: &Lamp, share: f32) -> GpuLamp {
             l.position.z,
             l.radius.max(0.005),
         ],
-        colour_reach: [c.x, c.y, c.z, reach(l.candela)],
+        colour_reach: [c.x, c.y, c.z, l.reach()],
         regions: l.regions,
         beam,
         beam_edge,
@@ -593,6 +610,7 @@ pub const DARK: Lamp = Lamp {
     emission: Emission::Every,
     shadows: true,
     fog: 1.0,
+    range: None,
 };
 
 /// A set of lamps in a [`LampTable`].
@@ -727,7 +745,7 @@ impl FarLamps {
         }
         let mut columns: BTreeMap<(i32, i32), Vec<u32>> = BTreeMap::new();
         for (k, l) in street.iter().enumerate() {
-            let r = reach(l.candela);
+            let r = l.reach();
             let at = glam::Vec2::new(l.position.x, l.position.z);
             let (lo, hi) = (
                 ((at - r) / FAR_CELL).floor().as_ivec2(),
@@ -1103,6 +1121,26 @@ mod tests {
     }
 
     #[test]
+    fn a_range_shortens_the_reach_and_never_lengthens_it() {
+        let lamp = |range: Option<f32>| Lamp {
+            range,
+            candela: 100.0,
+            ..DARK
+        };
+        // 100 cd reaches about 45 m.
+        assert!((lamp(None).reach() - 44.72).abs() < 0.01);
+        assert_eq!(lamp(Some(4.0)).reach(), 4.0);
+        assert!((lamp(Some(100.0)).reach() - 44.72).abs() < 0.01);
+        assert_eq!(lamp(Some(-1.0)).reach(), 0.0);
+        assert!((lamp(Some(f32::NAN)).reach() - 44.72).abs() < 0.01);
+        assert_eq!(gpu_lamp(&lamp(Some(4.0)), 1.0).colour_reach[3], 4.0);
+        // A lamp of no reach takes no place among the frame's.
+        let kept = nearest(&[lamp(Some(0.0)), lamp(Some(4.0))], Vec3::ZERO);
+        assert_eq!(kept.len(), 1);
+        assert_eq!(kept[0].colour_reach[3], 4.0);
+    }
+
+    #[test]
     fn the_frame_keeps_the_nearest_lamps_that_reach_the_camera() {
         let bulb = |x: f32, candela: f32| Lamp {
             position: Vec3::new(x, 2.0, 0.0),
@@ -1114,6 +1152,7 @@ mod tests {
             emission: Emission::Every,
             shadows: true,
             fog: 1.0,
+            range: None,
         };
         // 100 cd reaches about 45 m.
         assert!((reach(100.0) - 44.72).abs() < 0.01);
@@ -1154,6 +1193,7 @@ mod tests {
                 emission: Emission::Every,
                 shadows: true,
                 fog: 1.0,
+                range: None,
             }
         };
         // Six hundred house lamps within 10 m (more than MAX_LAMPS), thirty street lamps 60 to
@@ -1203,6 +1243,7 @@ mod tests {
                 emission: Emission::STREET,
                 shadows: true,
                 fog: 1.0,
+                range: None,
             }
         };
         // A street of a hundred lamps 25 m apart and a house lamp; the camera at its start.
@@ -1257,6 +1298,7 @@ mod tests {
                 emission: Emission::Every,
                 shadows: true,
                 fog: 1.0,
+                range: None,
             })
             .collect();
         let light = |camera: Vec3| {
