@@ -10836,6 +10836,22 @@ live patent found reads on items 1–4 as written.
     left out with the GI-only lights.
   - **Measured at the bar:** `fog/light` 0.65 ms with 211 of them; a still camera's moving pixels
     in the bathroom 0.44 % (0.23 % without them, 1.50 % without fog).
+- **The environment's own fog, the same evening:**
+  - **The source.** The shipped game's master environment holds a volumetric fog everywhere: density
+    0.003 a metre, even up to 125 m and thinning by 0.01 a metre above, absorbing 4 %. It lets
+    0.75–1 % of the sun's light into the fog (`globalLightScale`), all of the lamps'
+    (`localLightScale` unset), with a phase of g 0.8.
+  - **In Forge.** These are `GlobalFog` and `FogParams::light_scales`, and the scenario's
+    `Running::fog_environment`. The boxes lay their medium over that fog.
+  - **The look.** With every value the data gives, the bar's haze is fainter than the game's. Some
+    factor is not in the extracted settings: perhaps the lamps' fog scale has a default other than 1,
+    or the neon's own emission lights the fog. The private viewer keeps its boxes five times
+    thicker, by eye.
+  - **The cost.** The fog everywhere puts every froxel in the lamps' loop: `fog/light` 0.65 →
+    1.21 ms at the bar, to bring down later (a coarser volume where only the global fog is).
+  - **Its limits (the review).** The volume ends 64 m from the camera, so a facade at 200 m and the
+    sky take only 64 m of the fog everywhere (the game's reaches 125 m and beyond). A box of no fog
+    cuts a hole in it (the source's `{F_fog_zero}` volumes). The values are clamped on upload.
 - **Left:**
   - the glow the neon's own emission gives the game's fog (only lamps scatter here);
   - the ambient light (the volume's `ambientScale`);

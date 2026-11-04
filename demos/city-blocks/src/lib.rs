@@ -74,6 +74,15 @@ use afloat::Barrels;
 use scenario::{Backdrop, Running, Scenario};
 use world::world;
 
+/// A scene's fog (D-099): its passes, its boxes and lamps of the fog alone in the scene frame, and
+/// its environment's fog everywhere.
+struct SceneFog {
+    volume: forge_render::FogVolume,
+    boxes: Vec<forge_render::FogBox>,
+    lamps: Vec<forge_render::lamps::Lamp>,
+    environment: Option<scenario::FogEnvironment>,
+}
+
 /// How far the fog's froxels reach from the camera, metres (D-099): a room and the street beyond.
 const FOG_FAR: f32 = 64.0;
 /// The fog's phase: a little forward scattering, so lamps seen through it glow.
@@ -1013,11 +1022,7 @@ struct Gallery {
     /// lights with, in its order.
     restir: Option<forge_render::LampRestir>,
     /// The scene's fog volumes in the scene frame and their passes (D-099), when it has some.
-    fog: Option<(
-        forge_render::FogVolume,
-        Vec<forge_render::FogBox>,
-        Vec<forge_render::lamps::Lamp>,
-    )>,
+    fog: Option<SceneFog>,
     kept_lamps: Vec<forge_render::lamps::GpuLamp>,
     /// `--day`: seconds into the day, the metered scene and the automatic exposure (issue #57).
     day_time: f32,
@@ -2143,10 +2148,26 @@ impl Gallery {
                     .map(|b| b.moved(offset))
                     .collect()
             });
+        // Its fog everywhere and its lights' scales (D-099), the fog's height to the scene frame.
+        let fog_environment = running
+            .as_ref()
+            .filter(|_| !args.no_fog)
+            .and_then(|running| running.fog_environment())
+            .map(|mut env| {
+                let lift = forge_render::CellPos::from_f64(glam::DVec3::ZERO)
+                    .relative_to(scene.origin())
+                    .y;
+                if let Some(g) = env.global.as_mut() {
+                    g.height += lift;
+                }
+                env
+            });
+        let fogged = !fog_boxes.is_empty()
+            || fog_environment.is_some_and(|e| e.global.is_some_and(|g| g.density > 0.0));
         // The scene's lamps of its fog alone (D-099), to the scene frame as its other lamps.
         let fog_lamps: Vec<forge_render::lamps::Lamp> = running
             .as_ref()
-            .filter(|_| !args.no_fog && !args.no_lamps && !fog_boxes.is_empty())
+            .filter(|_| fogged && !args.no_lamps)
             .map_or_else(Vec::new, |running| {
                 let origin = scene.origin();
                 running
@@ -2159,19 +2180,21 @@ impl Gallery {
                     })
                     .collect()
             });
-        let fog = if fog_boxes.is_empty() {
+        let fog = if !fogged {
             None
         } else if ctx.device.features().ray_query && scene.rays().is_some() {
             tracing::info!(
                 boxes = fog_boxes.len(),
                 lamps = fog_lamps.len(),
+                global = ?fog_environment.and_then(|e| e.global).map(|g| g.density),
                 "fog volumes lit by the lamps (D-099)"
             );
-            Some((
-                forge_render::FogVolume::new(&ctx.device, &ctx.shaders)?,
-                fog_boxes,
-                fog_lamps,
-            ))
+            Some(SceneFog {
+                volume: forge_render::FogVolume::new(&ctx.device, &ctx.shaders)?,
+                boxes: fog_boxes,
+                lamps: fog_lamps,
+                environment: fog_environment,
+            })
         } else {
             tracing::warn!("fog volumes need ray queries: left out");
             None
@@ -4622,8 +4645,14 @@ impl Demo for Gallery {
             reactive = reactive.or(Some(mask));
         }
         // The scene's fog (D-099), over the HDR scene before it is metered and upscaled.
-        if let Some((fog, boxes, fog_lamps)) = &self.fog {
-            fog.draw(
+        if let Some(SceneFog {
+            volume,
+            boxes,
+            lamps: fog_lamps,
+            environment,
+        }) = &self.fog
+        {
+            volume.draw(
                 &mut frame.graph,
                 frame.slot,
                 forge_render::FogParams {
@@ -4633,9 +4662,11 @@ impl Demo for Gallery {
                     sun_dir: self.renderer.sun_dir,
                     sun_color: self.renderer.sun_color,
                     sun_illuminance: self.renderer.sun_illuminance * exposure,
-                    anisotropy: FOG_ANISOTROPY,
+                    anisotropy: environment.map_or(FOG_ANISOTROPY, |e| e.anisotropy),
                     frame: self.renderer.frame_address(frame.slot),
                     movers: targets.movers,
+                    global: environment.and_then(|e| e.global),
+                    light_scales: environment.map_or([1.0, 1.0], |e| e.light_scales),
                 },
                 boxes,
                 fog_lamps,

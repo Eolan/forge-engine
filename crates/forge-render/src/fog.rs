@@ -124,6 +124,8 @@ struct GpuFog {
     camera: [f32; 4],
     sun: [f32; 4],
     sun_color: [f32; 4],
+    global: [f32; 4],
+    scales: [f32; 4],
     frame: u64,
     boxes: u64,
     fog_lamps: u64,
@@ -161,6 +163,25 @@ pub struct FogParams {
     pub frame: u64,
     /// The movers' structures, for the shadow rays.
     pub movers: Option<crate::MoversFrame>,
+    /// The scene's own fog everywhere, under its boxes (none: the boxes' alone).
+    pub global: Option<GlobalFog>,
+    /// How strongly the sun's light, then the lamps', scatter in the fog (1: whole). An authored
+    /// city's environment lets a hundredth of its sun into its fog.
+    pub light_scales: [f32; 2],
+}
+
+/// A scene's fog everywhere (D-099): an authored environment's volumetric fog, the boxes laid
+/// over it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct GlobalFog {
+    /// Its extinction, per metre.
+    pub density: f32,
+    /// The height in the scene frame up to which it is even, metres.
+    pub height: f32,
+    /// How fast it thins above that height, per metre.
+    pub falloff: f32,
+    /// The share of its extinction absorbed (0 to 1).
+    pub absorption: f32,
 }
 
 /// The passes' pipelines and the per-frame parameters and boxes.
@@ -222,7 +243,10 @@ impl FogVolume {
     /// what `depth` shows, the fog of `boxes` that reach the volume (the nearest
     /// [`MAX_FOG_BOXES`]), lit by the frame's lamps (each by its [`crate::lamps::Lamp::fog`]
     /// share) and by `fog_lamps`, lamps of the fog alone in the scene frame (the nearest
-    /// [`MAX_FOG_LAMPS`] whose reach meets the volume). Nothing when no box reaches it.
+    /// [`MAX_FOG_LAMPS`] whose reach meets the volume), over the scene's fog everywhere
+    /// ([`FogParams::global`]). A box of no fog cuts a hole in that fog. Nothing when there is no
+    /// fog to draw. The volume ends [`FogParams::far`] from the camera: past it, the fog
+    /// everywhere adds no more.
     #[allow(clippy::too_many_arguments)]
     pub fn draw<'f>(
         &'f self,
@@ -242,9 +266,10 @@ impl FogVolume {
         let mut near: Vec<(usize, &FogBox)> = boxes
             .iter()
             .enumerate()
-            .filter(|(_, b)| b.density > 0.0 && gap(b) < params.far)
+            .filter(|(_, b)| b.density >= 0.0 && gap(b) < params.far)
             .collect();
-        if near.is_empty() {
+        let global_fog = params.global.is_some_and(|g| g.density > 0.0);
+        if (near.is_empty() || !near.iter().any(|(_, b)| b.density > 0.0)) && !global_fog {
             return;
         }
         near.sort_by(|a, b| gap(a.1).total_cmp(&gap(b.1)));
@@ -260,7 +285,12 @@ impl FogVolume {
                         m.y_axis.to_array(),
                         m.z_axis.to_array(),
                     ],
-                    medium: [b.density, b.height_falloff, b.absorption, b.priority],
+                    medium: [
+                        b.density.max(0.0),
+                        b.height_falloff.max(0.0),
+                        b.absorption.clamp(0.0, 1.0),
+                        b.priority,
+                    ],
                     shape: [b.height, b.blend, 0.0, 0.0],
                     tint: b.tint.extend(0.0).to_array(),
                 }
@@ -319,6 +349,15 @@ impl FogVolume {
                             .extend(params.sun_illuminance)
                             .to_array(),
                         sun_color: params.sun_color.extend(params.anisotropy).to_array(),
+                        global: params.global.map_or([0.0; 4], |g| {
+                            [
+                                g.density.max(0.0),
+                                g.height,
+                                g.falloff.max(0.0),
+                                g.absorption.clamp(0.0, 1.0),
+                            ]
+                        }),
+                        scales: [params.light_scales[0], params.light_scales[1], 0.0, 0.0],
                         frame: params.frame,
                         boxes: boxes_address,
                         fog_lamps: lamps_address,
@@ -376,7 +415,7 @@ mod tests {
     #[test]
     fn the_records_keep_the_shaders_layout() {
         assert_eq!(std::mem::size_of::<GpuFogBox>(), 96);
-        assert_eq!(std::mem::size_of::<GpuFog>(), 176);
-        assert_eq!(std::mem::offset_of!(GpuFog, fog_lamps), 128);
+        assert_eq!(std::mem::size_of::<GpuFog>(), 208);
+        assert_eq!(std::mem::offset_of!(GpuFog, fog_lamps), 160);
     }
 }

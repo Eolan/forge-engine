@@ -205,6 +205,17 @@ pub trait Scenario: Send {
     ) -> Result<(MeshletScene, Box<dyn Running>)>;
 }
 
+/// A scene's fog everywhere and how its lights scatter in it ([`Running::fog_environment`]).
+#[derive(Clone, Copy, Debug)]
+pub struct FogEnvironment {
+    /// Its fog everywhere, its height in the world frame (none: the boxes alone).
+    pub global: Option<forge_render::GlobalFog>,
+    /// How strongly the sun's light, then the lamps', scatter in the fog (1: whole).
+    pub light_scales: [f32; 2],
+    /// The phase's anisotropy g.
+    pub anisotropy: f32,
+}
+
 /// A built scene, frame by frame.
 pub trait Running: Send {
     /// Its water, made once after the build (none by default).
@@ -226,6 +237,12 @@ pub trait Running: Send {
     /// for its fog alone. None by default.
     fn fog_lamps(&self) -> Vec<forge_render::lamps::Lamp> {
         Vec::new()
+    }
+    /// Its fog everywhere and how its lights scatter in it (D-099): an authored scene's
+    /// environment, its height in the world frame. None by default: the boxes alone, the sun and
+    /// the lamps whole.
+    fn fog_environment(&self) -> Option<FogEnvironment> {
+        None
     }
     /// A key pressed: whether the scene took it. An Enter it takes starts the app's liquid over
     /// too.

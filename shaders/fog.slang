@@ -30,6 +30,8 @@ struct Fog
     float4 camera;          // xyz: the camera in the scene frame; w: the volume's far end (m)
     float4 sun;             // xyz: towards the sun; w: the sun's pre-exposed illuminance
     float4 sun_color;       // rgb: the sunlight's colour; a: the phase's anisotropy g
+    float4 global;          // the scene's own fog everywhere: x density (1/m), y the height it thins above (the scene frame), z its falloff (1/m), w the share absorbed
+    float4 scales;          // x: the sun's light into the fog, y: the lamps', zw: 0
     Frame* frame;           // the resolve's frame: its lamps, their grid, the TLAS
     FogBox* boxes;
     Lamp* fog_lamps;        // lamps that light the fog alone (an authored scene's), near the camera
@@ -85,8 +87,9 @@ float fog_phase(float cos_theta, float g)
 // under them.
 void fog_medium(Fog* g, float3 world, out float extinction, out float albedo, out float3 tint)
 {
-    extinction = 0.0;
-    albedo = 1.0;
+    // The scene's own fog under the boxes: even up to its height, thinning above it.
+    extinction = g[0].global.x * exp(-g[0].global.z * max(world.y - g[0].global.y, 0.0));
+    albedo = 1.0 - saturate(g[0].global.w);
     tint = float3(1.0);
     for (uint k = 0u; k < g[0].box_count; k++)
     {
@@ -195,7 +198,7 @@ void fog_light_main(uint3 id : SV_DispatchThreadID)
             visible = f[0].tlas != 0 && ray_blocked(f, ray) ? 0.0 : 1.0;
         }
         float3 sunlight = g[0].sun.w * g[0].sun_color.rgb * fog_phase(dot(-direction, -sun), anisotropy) * visible;
-        scattered = extinction * albedo * tint * (lamps * f[0].exposure + sunlight);
+        scattered = extinction * albedo * tint * (lamps * (f[0].exposure * g[0].scales.y) + sunlight * g[0].scales.x);
     }
     g_storage_images_rgba16f[NonUniformResourceIndex(g[0].light)][uint2(id.z * FOG_FROXELS_X + id.x, id.y)] = float4(scattered, extinction);
 }

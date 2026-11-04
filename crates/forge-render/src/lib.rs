@@ -85,7 +85,7 @@ pub use display::{Display, HdrOutput, OutputEncoding, ToneTables, Tonemap};
 pub use dust::{DustParams, DustVolume};
 pub use exposure::{AutoExposure, LuminanceHistogram, LuminanceMeter, exposure_from_ev100};
 pub use ffx_upscale::FfxUpscaler;
-pub use fog::{FogBox, FogParams, FogVolume};
+pub use fog::{FogBox, FogParams, FogVolume, GlobalFog};
 pub use forge_gpu::DlssMode;
 pub use fsr::{FsrGroup, FsrMode, FsrUpscaler};
 pub use glass::{Glass, GlassCapacity, GlassLook, GlassPanes, GlassParams, NO_LAMP, PaneSetId};
