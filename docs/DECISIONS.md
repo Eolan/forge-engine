@@ -10944,3 +10944,13 @@ took a shell 3 to 5 times too bright at night.
   0.028 (the street). The neon's own glow in the game's haze is still missing: the probes stand
   1.8 m apart in the bar's hall and blur it. `--fog-ambient 0` turns it off.
 
+**The lamps' phase apart from the sun's (2026-11-04).** An authored environment's anisotropy is
+its global light's (the shipped city's `globalLightAnisotropy`, 0.8), and it was the fog's for
+every light. At 0.8 a lamp seen through the fog scatters 45 times its light scattered every way
+alike towards the camera: each strong lamp of the district's bar lit a ball of haze round it (a
+green one at the neon, a blue one at the bull's skull). The lamps now take their own anisotropy
+(`FogParams::lamp_anisotropy`, Forge's 0.2), the sun keeps the environment's. The bar's haze is
+even and warm as the source's frame shows it: in the benchmark's frame 21 its colour reads red over
+green 1.31 and blue over green 0.55 (the source 1.20 and 0.41; with 0.8, 0.93 and 0.61). The
+village and the Bistro have no fog volumes and are unchanged.
+

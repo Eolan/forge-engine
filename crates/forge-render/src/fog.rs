@@ -131,6 +131,7 @@ struct GpuFog {
     sun_color: [f32; 4],
     global: [f32; 4],
     scales: [f32; 4],
+    phase: [f32; 4],
     frame: u64,
     boxes: u64,
     fog_lamps: u64,
@@ -163,8 +164,13 @@ pub struct FogParams {
     pub sun_color: Vec3,
     /// The sun's illuminance times the frame's exposure.
     pub sun_illuminance: f32,
-    /// The phase's anisotropy g (0: every way alike).
+    /// The phase's anisotropy g for the sun's light (0: every way alike).
     pub anisotropy: f32,
+    /// The phase's anisotropy g for the lamps' light. An authored environment gives its sun's
+    /// (`globalLightAnisotropy`, 0.8 in a shipped city's), not its lamps': at 0.8 for them too,
+    /// every strong lamp seen through the fog lit a ball of haze round it, 45 times its light
+    /// scattered every way alike. Both are held within ±0.95 (at 1 the phase is no longer one).
+    pub lamp_anisotropy: f32,
     /// The resolve's frame record ([`crate::MeshletRenderer::frame_address`]): its lamps, their
     /// grid, the TLAS.
     pub frame: u64,
@@ -383,7 +389,10 @@ impl FogVolume {
                         .normalize_or(Vec3::Y)
                         .extend(params.sun_illuminance)
                         .to_array(),
-                    sun_color: params.sun_color.extend(params.anisotropy).to_array(),
+                    sun_color: params
+                        .sun_color
+                        .extend(params.anisotropy.clamp(-0.95, 0.95))
+                        .to_array(),
                     global: params.global.map_or([0.0; 4], |g| {
                         [
                             g.density.max(0.0),
@@ -398,6 +407,7 @@ impl FogVolume {
                         params.ambient[1].max(0.0),
                         params.ambient[0].max(0.0),
                     ],
+                    phase: [params.lamp_anisotropy.clamp(-0.95, 0.95), 0.0, 0.0, 0.0],
                     frame: params.frame,
                     boxes: boxes_address,
                     fog_lamps: lamps_address,
@@ -457,9 +467,10 @@ mod tests {
     #[test]
     fn the_records_keep_the_shaders_layout() {
         assert_eq!(std::mem::size_of::<GpuFogBox>(), 96);
-        assert_eq!(std::mem::size_of::<GpuFog>(), 224);
-        assert_eq!(std::mem::offset_of!(GpuFog, fog_lamps), 160);
-        assert_eq!(std::mem::offset_of!(GpuFog, sky), 176);
-        assert_eq!(std::mem::offset_of!(GpuFog, box_count), 184);
+        assert_eq!(std::mem::size_of::<GpuFog>(), 240);
+        assert_eq!(std::mem::offset_of!(GpuFog, frame), 160);
+        assert_eq!(std::mem::offset_of!(GpuFog, fog_lamps), 176);
+        assert_eq!(std::mem::offset_of!(GpuFog, sky), 192);
+        assert_eq!(std::mem::offset_of!(GpuFog, box_count), 200);
     }
 }

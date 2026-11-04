@@ -29,9 +29,10 @@ struct Fog
     float4x4 inv_view_proj; // clip → camera-relative (the drawing camera, jitter included; D-004)
     float4 camera;          // xyz: the camera in the scene frame; w: the volume's far end (m)
     float4 sun;             // xyz: towards the sun; w: the sun's pre-exposed illuminance
-    float4 sun_color;       // rgb: the sunlight's colour; a: the phase's anisotropy g
+    float4 sun_color;       // rgb: the sunlight's colour; a: the sun's phase anisotropy g
     float4 global;          // the scene's own fog everywhere: x density (1/m), y the height it thins above (the scene frame), z its falloff (1/m), w the share absorbed
     float4 scales;          // x: the sun's light into the fog, y: the lamps', z: the probes' in the boxes (times each one's share), w: the probes' in the fog everywhere
+    float4 phase;           // x: the lamps' phase anisotropy g; yzw 0
     Frame* frame;           // the resolve's frame: its lamps, their grid, the TLAS
     FogBox* boxes;
     Lamp* fog_lamps;        // lamps that light the fog alone (an authored scene's), near the camera
@@ -154,7 +155,7 @@ void fog_light_main(uint3 id : SV_DispatchThreadID)
     float3 scattered = float3(0.0);
     if (extinction > 0.0)
     {
-        float anisotropy = g[0].sun_color.a;
+        float sun_anisotropy = g[0].sun_color.a;
         // The lamps whose reach meets the froxel's column (every lamp beyond the grid), their
         // light as the light lists weigh it at a surface facing each (lux).
         float3 lamps = float3(0.0);
@@ -177,7 +178,7 @@ void fog_light_main(uint3 id : SV_DispatchThreadID)
                     float least = max(lamp.position_radius.w, half_size);
                     float3 lux = lamp.colour_reach.rgb / max(dist2, least * least) * window * window * lamp_beam(lamp, to_lamp);
                     float share = 1.0 - asfloat(lamp.flags.y);
-                    lamps += share * lux * fog_phase(dot(-direction, -to_lamp), anisotropy);
+                    lamps += share * lux * fog_phase(dot(-direction, -to_lamp), g[0].phase.x);
                 }
             }
         }
@@ -195,7 +196,7 @@ void fog_light_main(uint3 id : SV_DispatchThreadID)
             float window = saturate(1.0 - pow(dist / reach, 4.0));
             float least = max(lamp.position_radius.w, half_size);
             float3 lux = lamp.colour_reach.rgb / max(dist2, least * least) * window * window * lamp_beam(lamp, to_lamp);
-            lamps += (1.0 - asfloat(lamp.flags.y)) * lux * fog_phase(dot(-direction, -to_lamp), anisotropy);
+            lamps += (1.0 - asfloat(lamp.flags.y)) * lux * fog_phase(dot(-direction, -to_lamp), g[0].phase.x);
         }
         // The sun through a shadow ray.
         float3 sun = normalize(g[0].sun.xyz);
@@ -209,7 +210,7 @@ void fog_light_main(uint3 id : SV_DispatchThreadID)
             ray.TMax = 1e5;
             visible = f[0].tlas != 0 && ray_blocked(f, ray) ? 0.0 : 1.0;
         }
-        float3 sunlight = g[0].sun.w * g[0].sun_color.rgb * fog_phase(dot(-direction, -sun), anisotropy) * visible;
+        float3 sunlight = g[0].sun.w * g[0].sun_color.rgb * fog_phase(dot(-direction, -sun), sun_anisotropy) * visible;
         // The probes' light (D-099's item 3): the sky's and the scene's bounce, glowing surfaces'
         // included, as a white surface facing up and one facing down take it, in the region the
         // froxel stands in, the mean radiance taken as (E_up + E_down) / 2π, scattered every way

@@ -4711,6 +4711,7 @@ impl Demo for Gallery {
                     sun_color: self.renderer.sun_color,
                     sun_illuminance: self.renderer.sun_illuminance * exposure,
                     anisotropy: environment.map_or(FOG_ANISOTROPY, |e| e.anisotropy),
+                    lamp_anisotropy: FOG_ANISOTROPY,
                     frame: self.renderer.frame_address(frame.slot),
                     movers: targets.movers,
                     global: environment.and_then(|e| e.global),
