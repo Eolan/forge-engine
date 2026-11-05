@@ -11408,3 +11408,47 @@ volumes are a second step, under the rules above.
   14 +0.7, the landing −1.1).
 - **So:** the volumes wait for a scene whose look they would change: a place graded by area whose
   lights were not fitted on its graded frames. The rules above stand for then.
+
+## D-101 — The open city's distance: a hazier sky and a distance fog beyond the froxels 🟡 (proposed 2026-11-05; D-032, D-083, D-094, D-099)
+
+**The need.** The private district's open streets (its source's benchmark frames 36, 37, 41 and 44)
+show a paler sky, a whitish distance (the far city fading into haze) and, in frame 41, a white glow
+round the sun. Forge draws a deep-blue clear sky and a crisp far city. Beyond the froxel volume's
+64 m (D-032, D-099), only the physical air hazes what lies behind.
+- **The source's model:** its master environment's distance fog.
+  - It starts at 200 m and ends at its far distance (1.5–5.5 km over the day).
+  - It has two density layers, falling off with height (0.5 and 1), and colours near and far by
+    the hour.
+  - A simple fog alongside: one colour and 0.00025 a metre.
+  - The sky is fogged up to an altitude.
+- **A test (2026-11-05):** the physical air in the aerial perspective, made 20 times denser.
+  - Frame 41 went from −0.72 to −0.43 EV and frame 44 from +0.10 to +0.38; the 14 frames' rms
+    from 0.57 to 0.56.
+  - The distance turned blue (the air's Rayleigh share is blue) where the source's is white. So
+    the gap is aerosols and an authored fog, not more air.
+
+**Options.**
+1. **Aerosols only:** a scene's atmosphere with more aerosol (Mie) scattering.
+   - The sky pales, the sun gets its glow and the distance whitens, with one setting.
+   - The sky's light changes with it (the probes', the shade's), so the sun's share and the
+     meter's compensation are fitted again after.
+2. **A distance fog beyond the froxels:** an analytic exponential height fog.
+   - Two layers, a start distance and a colour, lit by the sky's light and the sun's through a
+     phase, as Unreal's exponential height fog is (Flax's is open source).
+   - Applied in `fog/apply` to the pixels beyond the froxel volume, and on the sky up to an
+     altitude. A few instructions a pixel in a pass that exists.
+3. **Both (recommended):** the aerosols for the sky and the sun's glow, the fog for the
+   authored distance. In the district, the viewer reads the source's curves for the scene.
+
+**Patents** (searched 2026-11-05): none found for exponential height fog or distance fog.
+- **Prior art:** Legakis's layered fog (SIGGRAPH 1998 sketch); Unreal Engine 3's exponential height
+  fog (its UDK documentation); Quilez's closed form for height fog (2010).
+- **The aerosols:** the atmosphere model's own (Bruneton and Neyret 2008, Hillaire 2020).
+
+**Done when:**
+- The open streets' frames match the source's in the sky's colour, the far city's contrast and
+  frame 41's light near the sun.
+- The 14 frames' EV and colour rms are no worse once the sun's share and the meter are refitted.
+
+**Recommendation:** option 3, built in steps. Aerosols first (one setting, then its refits), then
+the distance fog.
