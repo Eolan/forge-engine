@@ -4948,7 +4948,7 @@ downloaded sets stay out unless the owner says otherwise.
   `steam-vent` in `data/particles.toml`, appended after the blood spray so the other effects
   keep their indices.
   - **A column:** a sewer grate's, a manhole's, a tall vent's plume. Four puffs a second, lit as
-    the smoke. Each is 0.9 m in radius at birth and swells to 3.2 m over 4–6.5 s, 7 % opaque at
+    the smoke, procedural (no flipbook). Each is 0.9 m in radius at birth and swells to 3.2 m over 4–6.5 s, 7 % opaque at
     birth. Together they read as one body of haze, and the wind takes it.
     - They rise at about 0.65 m/s (the lift against the drag), their middles 2.5–5 m. The
       source's tallest plumes (20 m) come out lower; an emitter has no scale, so a taller one
@@ -4960,6 +4960,9 @@ downloaded sets stay out unless the owner says otherwise.
   - **First tuning, left out:** fewer, denser puffs (12 % opaque, up to 2.2 m in radius). Beside the
     source's frames they read as a stack of balls, each puff's rim lit by the sun. Fainter, wider
     puffs blend.
+  - **The baked flipbook, left out:** with the smoke's flipbook, a column a few metres from the
+    camera along the source's path drew a coil of lit rims, one per puff. A still view hid it.
+    Procedural puffs have no rim and read as one soft shaft, as the source's do.
   - **In the district:** its viewer places the source's steam emitters and emits those within
     60 m of the camera. The cost is in `docs/PROFILE.md`.
 

@@ -2893,8 +2893,10 @@ street 5.8 / 8.7. VRAM 3.9 GB (2.3 GB geometry: #387, pages about a tenth full).
 - **The steam** (D-064's `steam-column` and `steam-vent`, 2026-11-05): the source's steam emitters
   within 60 m of the camera. Measured on the path by day (DLSS Quality, 5,000 frames), with and
   without steam, one run each, back to back:
-  - **Cost:** the frame goes from 14.353 to 14.652 ms (p99 16.87 → 17.18), and `particles/draw`
-    takes 0.351 ms. The puffs are fill-bound: wide, faint and overlapping.
+  - **Cost:** the frame goes from 14.353 to 14.625 ms, and `particles/draw` takes 0.238 ms. The
+    puffs are fill-bound: wide, faint and overlapping.
+  - **The same puffs from the baked flipbook:** 14.652 ms (p99 16.87 → 17.18), `particles/draw`
+    0.351 ms (four reads a pixel). They also drew a coil of lit rims.
   - **First tuning:** fewer, denser and smaller puffs drew in 0.187 ms, but read as balls.
   - **Earlier forms:** denser ones, or ones emitted over the whole district, cost up to +1.24 ms.
 
