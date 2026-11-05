@@ -5037,9 +5037,16 @@ one pops a lot", "same for other smoke/fog emitters outside".
       1.0–1.8 m/s, six a second. The vents take a fifth of the sun too, 8.6 % opaque.
   - **The 14 frames:** geometric mean +0.12 → +0.08 EV, RMS 0.77 → 0.75 (0.63 without steam).
     `particles/draw` on the path 0.23 → 0.135 ms, the narrower puffs covering fewer pixels.
-  - **Left open:** a column at a street grate in frame 37's view, where the source shows none
-    (its emitter may run only under some condition), and the tallest plumes (20 m) drawn as
-    columns.
+  - **Sizes, by the source's names** (the same evening): two more effects, appended so the others
+    keep their indices.
+    - **`steam-column-small`:** wisps up to 0.8 m, for steam a metre wide or less, a sewer lid's
+      holes and grates (`*_0p5x2m`, the 89 `*_sewer_spouting_4_holes`, `*_sewer_grate`). Drawn
+      as the column, they laid frame 37's band across the street.
+    - **`steam-plume`:** puffs up to 4 m rising about 2 m/s for 6–10 s, for the 10–65 m
+      plumes. The district's viewer emits them out to 200 m (the rest to 60 m).
+    - **The result:** the 14 frames' rms 0.57 → 0.56. `particles/draw` on the path 0.135 →
+      0.107 ms, with 3,846 particles alive at most (1,867).
+    - **Left open:** the source's 67 kinds of steam come down to four effects.
 
 ## D-065 — Lighting the insides: lamps by clustered lists until ReSTIR's patents are settled ✅ (proposed 2026-10-16, #270; the owner's go 2026-10-17: both, compared)
 

@@ -1014,7 +1014,9 @@ mod tests {
                 "fire",
                 "blood-spray",
                 "steam-column",
-                "steam-vent"
+                "steam-vent",
+                "steam-column-small",
+                "steam-plume"
             ]
         );
         assert!(effects[1].burst);
@@ -1022,6 +1024,8 @@ mod tests {
         assert_eq!(effects[0].sun, 1.0);
         assert_eq!(effects[6].sun, 0.2);
         assert_eq!(effects[7].sun, 0.2);
+        assert_eq!(effects[8].sun, 0.2);
+        assert_eq!(effects[9].sun, 0.2);
         assert_eq!(effects[2].draw, DrawKind::Glow);
         // The sparks meet the scene and streak: a glow (1), a bounce of 0.35 (89 of 255), both
         // flags.

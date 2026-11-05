@@ -155,3 +155,39 @@ curl = [0.35, 1.0]
 colour = [[0.86, 0.86, 0.88, 0.086], [0.90, 0.90, 0.92, 0.0]]
 sun = 0.2
 draw = "smoke"
+
+# Small steam: a sewer lid's holes, a grate's slots, a column half a metre to a metre wide (the
+# private district's `*_0p5x2m`, `*_sewer_spouting_*`, `*_sewer_grate`): thin wisps, lit as the
+# columns are. Drawn as the column, they laid wide bands over the streets.
+[steam-column-small]
+rate = 6.0
+life = [2.5, 4.0]
+radius = [0.3, 0.8]
+speed = [0.8, 1.4]
+cone = 12.0
+spread = 0.4
+gravity = -0.04
+drag = 0.6
+wind = 0.6
+curl = [0.4, 1.2]
+colour = [[0.86, 0.86, 0.88, 0.10], [0.90, 0.90, 0.92, 0.0]]
+sun = 0.2
+draw = "smoke"
+
+# A tall plume: a rooftop's or a chimney's, 10 to 65 m tall in the private district's source
+# (`*_3x3x20m`, `*_5x5x65`): wide puffs that rise about 2 m/s (the lift against the drag) for 6 to
+# 10 s, lit as the columns are.
+[steam-plume]
+rate = 4.0
+life = [6.0, 10.0]
+radius = [1.5, 4.0]
+speed = [2.0, 3.0]
+cone = 8.0
+spread = 1.5
+gravity = -0.06
+drag = 0.3
+wind = 0.4
+curl = [1.0, 4.0]
+colour = [[0.86, 0.86, 0.88, 0.07], [0.90, 0.90, 0.92, 0.0]]
+sun = 0.2
+draw = "smoke"
