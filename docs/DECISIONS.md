@@ -4935,7 +4935,7 @@ downloaded sets stay out unless the owner says otherwise.
   - DLAA keeps its own handling of the particles. The attempt is not in the tree.
 - **A blood spray** (2026-10-19, asked by an out-of-tree town for its rifle's hits): `blood-spray`
   in `data/particles.toml`.
-  - A burst of 36 dark red droplets, lit puffs 3–4.5 cm across, launched at 1.5–3.5 m/s within
+  - A burst of 36 dark red droplets, lit puffs 3–4.5 cm in radius, launched at 1.5–3.5 m/s within
     35° of the shot.
   - They fall under full gravity and stay where they meet the scene (a bounce of 0) until they
     fade, in 0.6–1.2 s.
@@ -4944,6 +4944,24 @@ downloaded sets stay out unless the owner says otherwise.
   - Appended last, so the other effects keep their indices: the smoke yard's captures are at
     0 pixels.
   - A spatter that stays waits for decals (#304).
+- **Steam** (2026-11-05, for the private district's steam, D-083 step 4): `steam-column` and
+  `steam-vent` in `data/particles.toml`, appended after the blood spray so the other effects
+  keep their indices.
+  - **A column:** a sewer grate's, a manhole's, a tall vent's plume. Four puffs a second, lit as
+    the smoke. Each is 0.9 m in radius at birth and swells to 3.2 m over 4–6.5 s, 7 % opaque at
+    birth. Together they read as one body of haze, and the wind takes it.
+    - They rise at about 0.65 m/s (the lift against the drag), their middles 2.5–5 m. The
+      source's tallest plumes (20 m) come out lower; an emitter has no scale, so a taller one
+      would be its own effect.
+  - **A vent:** an air conditioner's, a pipe's, a kitchen's. Eight short wisps a second over
+    1.5–3 s, 0.35 to 1.6 m in radius and 6 % opaque.
+  - **Tuned by eye** against the source's frames, not physically: the column is born over a
+    disc 2.4 m wide and takes 0.6 of the wind, and the vents' last wisps are wide but faint.
+  - **First tuning, left out:** fewer, denser puffs (12 % opaque, up to 2.2 m in radius). Beside the
+    source's frames they read as a stack of balls, each puff's rim lit by the sun. Fainter, wider
+    puffs blend.
+  - **In the district:** its viewer places the source's steam emitters and emits those within
+    60 m of the camera. The cost is in `docs/PROFILE.md`.
 
 ## D-065 — Lighting the insides: lamps by clustered lists until ReSTIR's patents are settled ✅ (proposed 2026-10-16, #270; the owner's go 2026-10-17: both, compared)
 

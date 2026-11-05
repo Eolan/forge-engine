@@ -115,3 +115,39 @@ colour = [[0.1, 0.004, 0.003, 1.0], [0.06, 0.002, 0.002, 0.0]]
 draw = "smoke"
 burst = true
 bounce = 0.0
+
+# Steam rising from a street: a sewer grate's or a manhole's, a tall vent's plume (the private
+# district's steam columns; the puffs rise about 0.65 m/s, their middles 2.5 to 5 m, lower than
+# the source's tallest 20 m plumes). Wide, faint puffs (7 % opaque at birth, so they blend into
+# one body of haze rather than a stack of balls), lit as smoke, swelling as they rise and fade; the
+# wind takes them.
+[steam-column]
+rate = 4.0
+life = [4.0, 6.5]
+radius = [0.9, 3.2]
+speed = [0.6, 1.2]
+cone = 12.0
+spread = 1.2
+gravity = -0.04
+drag = 0.6
+wind = 0.6
+curl = [0.6, 2.5]
+colour = [[0.86, 0.86, 0.88, 0.07], [0.90, 0.90, 0.92, 0.0]]
+draw = "smoke"
+texture = "smoke"
+
+# Steam from a small vent: an air conditioner's, a pipe's, a kitchen's wok. Short wisps.
+[steam-vent]
+rate = 8.0
+life = [1.5, 3.0]
+radius = [0.35, 1.6]
+speed = [0.3, 0.8]
+cone = 25.0
+spread = 0.3
+gravity = -0.03
+drag = 1.2
+wind = 1.0
+curl = [0.35, 1.0]
+colour = [[0.86, 0.86, 0.88, 0.06], [0.90, 0.90, 0.92, 0.0]]
+draw = "smoke"
+texture = "smoke"

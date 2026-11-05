@@ -862,7 +862,9 @@ mod tests {
                 "embers",
                 "sparks",
                 "fire",
-                "blood-spray"
+                "blood-spray",
+                "steam-column",
+                "steam-vent"
             ]
         );
         assert!(effects[1].burst);
