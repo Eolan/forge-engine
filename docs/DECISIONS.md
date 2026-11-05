@@ -11369,4 +11369,24 @@ volumes are a second step, under the rules above.
   against 5.19 / 1.12 with AgX and 2.20 / 0.31 through the table; frame 19 1.94 / 0.47 against
   3.72 / 1.22 and 2.09 / 0.51; frame 21 1.25 / 0.44 against 0.71 / 0.35 and 1.09 / 0.46.
 
-**Next:** the grading volumes (the bar's own grading and its fixed exposure), under the rules above.
+**The grading volumes, measured before building (2026-11-05):** not built.
+- **The method:** the bar's six matched frames rendered under the scene table, with and without the
+  source's bar settings. The settings were applied in five forms, gain then gamma each time:
+  1. on the log-encoded value, the gamma as a power;
+  2. the same, the gamma inverted;
+  3. on the linear scene, pivoted at mid grey;
+  4. on the displayed sRGB value;
+  5. on the log value pivoted at the source's 0.435, both ways.
+
+  The measure: the log₂ RMS of the frames' R/G and B/G against the source's.
+- **Colour:** without the area, R/G 0.35 and B/G 0.40. The closest form (2) gave R/G 0.30 but B/G
+  0.67, 0.46 EV darker; the rest did worse on both.
+- **Why:** the district's light was fitted on these same frames: the lamps' coloured lumens, and
+  the fog's lamp phase checked on frame 21. Their colour already holds the area's grading, and
+  applying it again counts it twice.
+- **Exposure:** a fixed camera exposure (`--fixed-exposure`) leaves the bar frames' spread against
+  the source's where it was: 0.62 EV standard deviation, metered or fixed. The metering's clamp
+  already holds the bar's exposure steady. What spreads them is what is lit differently (frame
+  14 +0.7, the landing −1.1).
+- **So:** the volumes wait for a scene whose look they would change: a place graded by area whose
+  lights were not fitted on its graded frames. The rules above stand for then.
