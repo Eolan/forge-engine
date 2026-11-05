@@ -82,23 +82,21 @@ pub struct Lamp {
 }
 
 impl Lamp {
-    /// How far from its position its light counts, metres: its [`reach`] (a tube's past its ends,
-    /// [`Emission::extent`]), its [`Self::range`] if shorter (a range that is not a number counts as
-    /// none).
+    /// How far from its position its light counts, metres: its [`reach`], its [`Self::range`] if
+    /// shorter (a range that is not a number counts as none); a tube's from its line, so its half
+    /// length more from its position ([`Emission::extent`]).
     pub fn reach(&self) -> f32 {
-        // A tube's from its middle (#396): its light's reach past its ends. An authored range is a
-        // sphere about its middle, as an imported light's attenuation radius is (the private
-        // district's: with their ranges taken past their ends, its tubes cost 0.2 ms more in
-        // ReSTIR's pass and lit its sign alike). A lamp that lights nothing reaches nothing.
         let reach = reach(self.candela);
-        let reach = if reach > 0.0 {
-            reach + self.emission.extent()
-        } else {
-            0.0
-        };
-        match self.range {
+        let own = match self.range {
             Some(r) if !r.is_nan() => reach.min(r.max(0.0)),
             _ => reach,
+        };
+        // A tube's runs from its line (#396, `lamp_tube_window`), so from its middle past its
+        // ends. A lamp that lights nothing reaches nothing.
+        if own > 0.0 {
+            own + self.emission.extent()
+        } else {
+            0.0
         }
     }
 
@@ -1132,8 +1130,8 @@ mod tube_tests {
             range: Some(25.0),
             ..DARK
         };
-        // Its range a sphere about its middle; without one, its light's reach past its ends.
-        assert_eq!(lamp.reach(), 25.0);
+        // Its range past its line, and so without one its light's reach.
+        assert_eq!(lamp.reach(), 29.5);
         let unranged = Lamp {
             range: None,
             ..lamp
@@ -1142,6 +1140,8 @@ mod tube_tests {
         let g = gpu_lamp(&lamp, 1.0);
         assert_eq!(g.beam, [0.0, 0.0, 1.0, 0.0]);
         assert_eq!(g.beam_edge, [4.5, 0.0, -2.0, 0.0]);
+        // Its range from its line, as `lamp_tube_window` reads it back.
+        assert_eq!(g.colour_reach[3] - g.beam_edge[0], 25.0);
         // Any other lamp's reach is its own.
         assert_eq!(
             Lamp {

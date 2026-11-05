@@ -2953,11 +2953,16 @@ street 5.8 / 8.7. VRAM 3.9 GB (2.3 GB geometry: #387, pages about a tenth full).
 - **Tubes** (#396, 2026-11-05; the same path, interleaved after a warm-up, the evening's runs
   ±0.3 to 0.5 ms apart): the private district's two-sided strips of a metre or more as one tube
   each (`Emission::Tube`), against their flat pieces (from 4 m) and points.
-  - **Kept, its range a sphere about its middle:** 16.99 and 16.80 ms; flat pieces 16.90 and
-    16.71; points 16.33 and 17.38. `shadow/lamp restir` 3.20 and 3.18 against 3.02 and 3.07
-    (flat pieces) and 3.03 and 3.29 (points).
-  - **Its range taken past its ends:** 17.63 and 17.05 ms, `shadow/lamp restir` 3.45 and 3.32: more
-    pixels in a strip's reach took a sample and a shadow ray. The sign lit alike.
+  - **Kept, its range from its line (`lamp_tube_window`):** 16.30 and 15.74 ms; flat pieces 16.10
+    and 15.56; points 15.88 and 15.30. `shadow/lamp restir` 3.26 and 3.11 against 3.10 and 2.96
+    (flat pieces) and 3.17 and 3.08 (points).
+  - **Its range a sphere about its middle** (1cc2f749, since corrected): 16.99 and 16.80 ms, flat
+    pieces 16.90 and 16.71 in that batch (+0.09 over them, where the kept form is +0.2); it left long
+    strips with short ranges dark beyond 1 to 3 m of their middles.
+  - **A sphere of its range plus its half length:** 17.63 and 17.05 ms in that batch,
+    `shadow/lamp restir` 3.45 and 3.32: the light reached well past the capsule beside the strip.
+  - **Not quite like for like:** one-sided strips of 4 m or more stay flat pieces in that viewer, their
+    ranges still spheres about their middles, so the flat pieces' runs light less.
   - **The tubes' number** does not count: from 4 m and from 1 m, 17.30 and 17.35 ms on average
     over two pairs each (before the review's fixes, their ranges past their ends).
 

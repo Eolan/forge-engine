@@ -877,6 +877,16 @@ float3 lamp_tube_point(Lamp lamp, float3 world, float3 r)
     return axis * (2.0 * half_length * saturate(t) - half_length);
 }
 
+// How a tube's light lets go at `d`, the way to its middle (#396): between 80 % and all of its range
+// from its line, as a lamp's from its point (`Lamp::range` is its reach past the line;
+// `colour_reach.w`, the sphere the lists take it by, is that plus its half length).
+float lamp_tube_window(Lamp lamp, float3 d)
+{
+    float half_length = lamp.beam_edge.x;
+    float3 nearest = d + lamp.beam.xyz * clamp(-dot(d, lamp.beam.xyz), -half_length, half_length);
+    return saturate(1.0 - pow(length(nearest) / max(lamp.colour_reach.w - half_length, 1e-3), 4.0));
+}
+
 // The share of a tube's light its highlight takes, the whole line's light put at its point nearest
 // the mirror ray (`lamp_tube_point`): a lobe narrower than the line, seen from `dist` away, takes
 // only the part of it within the lobe. Karis 2013's line normalization, the lobe's α (`alpha`)
@@ -4309,7 +4319,7 @@ void lamp_add<let SHADOWS : int>(Frame* f, Lamp lamp, uint i, float scale, float
             return;
     }
     // Let go between 80 % and all of its reach, so its edge does not show.
-    float window = saturate(1.0 - pow(dist / reach, 4.0));
+    float window = lamp_tube(lamp) ? lamp_tube_window(lamp, d) : saturate(1.0 - pow(dist / reach, 4.0));
     float to_units = 1.0 / max(f[0].sun_illuminance, 1e-9);
     // A tube (#396): its line's diffuse light, and its highlight from its point nearest the mirror
     // ray, as a bulb of its radius there lit by the line's light (its sine over the distance squared
@@ -7154,7 +7164,7 @@ float lamp_weight(Lamp lamp, float3 world, float3 n, float near = 0.0)
     // beside a small bright piece it reached π/2 times its luminance.
     if (lamp_flat(lamp) || lamp_tube(lamp))
     {
-        float w = saturate(1.0 - pow(dist / reach, 4.0));
+        float w = lamp_tube(lamp) ? lamp_tube_window(lamp, lamp.position_radius.xyz - world) : saturate(1.0 - pow(dist / reach, 4.0));
         float share = lamp_flat(lamp) ? lamp_rect_share(lamp, world, n) : lamp_tube_share(lamp, world, n);
         if (near > 0.0)
             share = min(share, 1.0 / (near * near));
@@ -9268,7 +9278,7 @@ float3 lamp_lux(Lamp lamp, float3 world, float3 n)
     float dist = sqrt(dist2);
     float ndl = dot(n, d / max(dist, 1e-6));
     float radius = lamp.position_radius.w;
-    float window = saturate(1.0 - pow(dist / lamp.colour_reach.w, 4.0));
+    float window = lamp_tube(lamp) ? lamp_tube_window(lamp, d) : saturate(1.0 - pow(dist / lamp.colour_reach.w, 4.0));
     if (lamp_flat(lamp))
         return lamp.colour_reach.rgb * (lamp_rect_share(lamp, world, n) * window * window);
     if (lamp_tube(lamp))

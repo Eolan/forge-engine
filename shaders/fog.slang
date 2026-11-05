@@ -369,7 +369,7 @@ void fog_light_main(uint3 id : SV_DispatchThreadID)
                         continue;
                     float dist = sqrt(dist2);
                     float3 to_lamp = d / max(dist, 1e-6);
-                    float window = saturate(1.0 - pow(dist / reach, 4.0));
+                    float window = lamp_tube(lamp) ? lamp_tube_window(lamp, d) : saturate(1.0 - pow(dist / reach, 4.0));
                     float least = max(lamp.position_radius.w, half_size);
                     // A tube's light along its line, its phase from its nearest point (#396).
                     if (lamp_tube(lamp))
@@ -460,7 +460,7 @@ void fog_light_main(uint3 id : SV_DispatchThreadID)
                 continue;
             float dist = sqrt(dist2);
             float3 to_lamp = d / max(dist, 1e-6);
-            float window = saturate(1.0 - pow(dist / reach, 4.0));
+            float window = lamp_tube(lamp) ? lamp_tube_window(lamp, d) : saturate(1.0 - pow(dist / reach, 4.0));
             float least = max(lamp.position_radius.w, half_size);
             // A tube's light along its line, its phase from its nearest point (#396).
             if (lamp_tube(lamp))

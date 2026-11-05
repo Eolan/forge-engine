@@ -5864,8 +5864,13 @@ intensity is its candela across its axis times the sine from it; its flux is π�
     estimate averages to the closed form.
   - *The fog:* its line's light without the surface's cosine; the phase and the shadow ray from
     its nearest point.
-  - *Reach:* its light's past its ends (`Emission::extent`). An authored range is a sphere about
-    its middle, as an imported light's attenuation radius is.
+  - *Reach:* its range runs from its line: its light lets go between 80 % and all of it from the
+    segment's nearest point (`lamp_tube_window`). The lists take it by a sphere of that plus its
+    half length (`Emission::extent`).
+    - **First built otherwise** (1cc2f749): a range as a sphere about its middle, chosen because it
+      cost less over the flat pieces and a sign looked alike. The private district's bar strips, 7 and
+      8 m long with ranges of 1 to 3 m, then lit only 1 to 3 m round their middles, and the shelves
+      under them stayed dark.
 - **Patents** (searched 2026-11-05):
   - **Pixar's US 7,872,649** (live to about 2029) projects a line light onto a plane through the
     shaded point. This shape is not taken: the line is integrated in space and clipped at the
@@ -5883,11 +5888,11 @@ intensity is its candela across its axis times the sine from it; its flux is π�
 - **The numbers:**
   - **The sign** (the private district's viewer): as with the flat pieces, a band along the strip
     by day and at night in place of one hot spot (above).
-  - **The district's path** (2560 × 1440, DLSS Quality, interleaved after a warm-up): 16.99 and
-    16.80 ms against 16.90 and 16.71 with the flat pieces, at a lamp a strip. With the ranges taken
-    past the ends, 17.63 and 17.05 (`docs/PROFILE.md`).
-  - **Its 14 frames against the source's:** geo mean +0.03, rms 0.47 (the flat pieces' +0.02,
-    0.48).
+  - **The district's path** (2560 × 1440, DLSS Quality, interleaved after a warm-up): 16.30 and
+    15.74 ms against 16.10 and 15.56 with the flat pieces and 15.88 and 15.30 with points, at a lamp
+    a strip (`docs/PROFILE.md`).
+  - **Its 14 frames against the source's:** the bar's landing −0.44 → −0.32 EV with the ranges from
+    the line, the shelves under its strips lit; their rms 0.45 either way.
   - **The Bistro's night** (no tubes; its lanterns' test changed): the 16 × 9 tiles' mean |log2|
     0.000 against the build before, the frame ×1.000.
   - **The village's map-check views:** as before this work (every view's mean at most 0.002 from
