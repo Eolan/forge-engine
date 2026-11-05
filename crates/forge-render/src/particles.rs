@@ -143,10 +143,11 @@ pub fn parse(text: &str) -> std::result::Result<Vec<Effect>, String> {
                 .texture
                 .as_deref()
                 .is_none_or(|t| t == "smoke" || t == "fire")
-            && effect.bounce.is_none_or(|b| (0.0..=1.0).contains(&b));
+            && effect.bounce.is_none_or(|b| (0.0..=1.0).contains(&b))
+            && effect.sun >= 0.0;
         if !positive {
             return Err(format!(
-                "{name}: a rate, lives, radii and a drag of 0 or more, ranges in order, a cone of 0–180°, no texture but \"smoke\" or \"fire\", a bounce of 0–1"
+                "{name}: a rate, lives, radii and a drag of 0 or more, ranges in order, a cone of 0–180°, no texture but \"smoke\" or \"fire\", a bounce of 0–1, a sun's share of 0 or more"
             ));
         }
         effects.push(effect);
@@ -1017,6 +1018,10 @@ mod tests {
             ]
         );
         assert!(effects[1].burst);
+        // The sun's share: whole where unset (the smoke), a fifth for the steam (D-064's amendment).
+        assert_eq!(effects[0].sun, 1.0);
+        assert_eq!(effects[6].sun, 0.2);
+        assert_eq!(effects[7].sun, 0.2);
         assert_eq!(effects[2].draw, DrawKind::Glow);
         // The sparks meet the scene and streak: a glow (1), a bounce of 0.35 (89 of 255), both
         // flags.

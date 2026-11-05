@@ -4946,7 +4946,8 @@ downloaded sets stay out unless the owner says otherwise.
   - A spatter that stays waits for decals (#304).
 - **Steam** (2026-11-05, for the private district's steam, D-083 step 4): `steam-column` and
   `steam-vent` in `data/particles.toml`, appended after the blood spray so the other effects
-  keep their indices.
+  keep their indices. (The numbers below are the first tuning's; the columns and vents were
+  retuned on 2026-11-05: see "The steam's look" in this entry's amendment.)
   - **A column:** a sewer grate's, a manhole's, a tall vent's plume. Four puffs a second, lit as
     the smoke, procedural (no flipbook). Each is 0.9 m in radius at birth and swells to 3.2 m over 4–6.5 s, 7 % opaque at
     birth. Together they read as one body of haze, and the wind takes it.
