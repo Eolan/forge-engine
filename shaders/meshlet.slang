@@ -411,6 +411,9 @@ public struct DecalKind
     public uint normal;      // a colour decal's tangent-space normal map, TEXTURE_NONE without
     public float normal_strength; // its slopes times this
     public float4 uv_rect;   // the part of its texture it shows: u, v of its corner, its width and height
+    public uint roughness;   // a colour decal's roughness map (its red plus `roughness_bias`), TEXTURE_NONE without
+    public float roughness_bias;
+    public uint2 pad;
 };
 
 // How a decal kind's texture gives its colour and coverage (`DecalAlpha`): its colour premultiplied
@@ -4744,7 +4747,9 @@ uint2 column_run(uint4* slots, uint slot_mask, float cell, float3 world)
 // surface ends, its mips and anisotropy whole. A colour decal's normal map (`DecalKind::normal`)
 // adds its slopes, along the box's x and z laid on the surface, times its coverage, to `bend`:
 // the caller bends its final normal by it (`decal_bent`), its own map's or the row's.
-void apply_decals(Frame* f, Surface s, inout float3 albedo, inout float3 n, inout float3 bend, bool rows)
+// `rough`: the roughness the colour decals lay (x) and the share of the surface's own they leave
+// (y), from (0, 1): the surface's roughness r becomes r * y + x, as their colour covers its colour.
+void apply_decals(Frame* f, Surface s, inout float3 albedo, inout float3 n, inout float3 bend, inout float2 rough, bool rows)
 {
     DecalGrid* g = f[0].decals;
     if (g == nullptr)
@@ -4797,6 +4802,19 @@ void apply_decals(Frame* f, Surface s, inout float3 albedo, inout float3 n, inou
                 B -= s.n * dot(s.n, B);
                 bend += (slope.x * T - slope.y * B) * (k.normal_strength * t.a * strength);
             }
+            float cover = saturate(t.a * strength);
+            if (k.roughness != TEXTURE_NONE && cover > 0.0)
+            {
+                // The roughness it lays over what lies under it, where it covers.
+                float laid = saturate(sample_image_grad(k.roughness, k.sampler, uv, gx, gy).r + k.roughness_bias);
+                rough = float2(rough.x * (1.0 - cover) + laid * cover, rough.y * (1.0 - cover));
+            }
+            else if (cover > 0.0 && rough.y < 1.0)
+            {
+                // Without a map it covers a roughness laid under it with the surface's own, as it
+                // covers the relief (a poster over a wet stain); (0, 1) stays as it is, to the bit.
+                rough = float2(rough.x * (1.0 - cover), rough.y * (1.0 - cover) + cover);
+            }
             continue;
         }
         float mask = t.a * strength;
@@ -4817,20 +4835,36 @@ float3 decal_bent(float3 n, float3 bend)
 }
 
 // `apply_decals` for the layered class: its row decals' normals in `n`, the colour decals' slopes
-// bending it after them.
+// bending it after them. Their roughness is not taken yet (#393).
 void apply_decals(Frame* f, Surface s, inout float3 albedo, inout float3 n, bool rows)
 {
     float3 bend = float3(0.0);
-    apply_decals(f, s, albedo, n, bend, rows);
+    float2 rough = float2(0.0, 1.0);
+    apply_decals(f, s, albedo, n, bend, rough, rows);
     n = decal_bent(n, bend);
 }
 
-// `apply_decals` for a class without row decals: their colour, and their slopes in `bend` for the
-// caller's final normal (`decal_bent`).
-void apply_colour_decals(Frame* f, Surface s, inout float3 albedo, inout float3 bend)
+// `apply_decals` for a class without row decals: their colour, their slopes in `bend` for the
+// caller's final normal (`decal_bent`), and their roughness in `rough` (from (0, 1)) for its
+// final roughness (`r * rough.y + rough.x`, or `decal_power`).
+void apply_colour_decals(Frame* f, Surface s, inout float3 albedo, inout float3 bend, inout float2 rough)
 {
     float3 n = s.n;
-    apply_decals(f, s, albedo, n, bend, false);
+    apply_decals(f, s, albedo, n, bend, rough, false);
+}
+
+// A specular power (`RenderLayer::specular_power`) under the colour decals' roughness
+// (`apply_colour_decals`'s `rough`): its roughness (RenderLayer::roughness_for_power, inverted, as
+// `uv_mapped_light` maps it), the decals' laid over it, and back to a power. The power as it was,
+// to the bit, where none lies.
+float decal_power(float power, float2 rough)
+{
+    if (rough.y >= 1.0)
+        return power;
+    float roughness = sqrt(sqrt(2.0 / (power + 2.0)));
+    float alpha = clamp(roughness * rough.y + rough.x, 0.02, 1.0);
+    alpha *= alpha;
+    return max(2.0 / (alpha * alpha) - 2.0, 0.001);
 }
 
 // The albedo and the normal a standard row gives the surface: the row's two colours mixed by
@@ -4998,7 +5032,8 @@ LightInputs uv_mapped_light(Frame* f, Material mat, Surface s)
     if (leaves)
         base = leaf_underside(base, mat.scattering, s);
     float3 decal_bend = float3(0.0);
-    apply_colour_decals(f, s, base, decal_bend);
+    float2 decal_rough = float2(0.0, 1.0);
+    apply_colour_decals(f, s, base, decal_bend, decal_rough);
     float roughness = mat.roughness;
     float metal = mat.metallic;
     bool levels = (mat.flags & MATERIAL_FLAG_LEVELS) != 0u;
@@ -5059,6 +5094,8 @@ LightInputs uv_mapped_light(Frame* f, Material mat, Surface s)
         n = normalize(mul(s.normal_frame, bent));
     }
     n = decal_bent(n, decal_bend);
+    // The decals' roughness over the surface's (`apply_decals`): as it was where none lies.
+    roughness = roughness * decal_rough.y + decal_rough.x;
     float alpha = clamp(roughness, 0.02, 1.0);
     alpha *= alpha;
     // RenderLayer::specular_power, kept over 0: at roughness 1 the exponent is 0, and pow(0, 0) is NaN
@@ -5408,9 +5445,11 @@ StandardInputs standard_inputs(Frame* f, Material mat, Surface s)
         {
             standard_surface(mat, s, albedo, n);
             float3 decal_bend = float3(0.0);
-            apply_colour_decals(f, s, albedo, decal_bend);
+            float2 decal_rough = float2(0.0, 1.0);
+            apply_colour_decals(f, s, albedo, decal_bend, decal_rough);
             li.albedo = albedo;
             li.n = decal_bent(n, decal_bend);
+            li.power = decal_power(li.power, decal_rough);
             li.emissive = emission(f, mat);
         }
     }

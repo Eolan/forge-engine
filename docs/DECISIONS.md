@@ -7219,7 +7219,7 @@ now):
 - **The private district:** 132 of its 329 decal kinds carry a normal map (40 of their 47 maps are
   in the archives). Its broken concrete and rubble now show relief under a low sun (0.02–0.08 % of
   a street view's pixels).
-- **Still waiting:** the decals' roughness and parallax maps.
+- **Still waiting:** the decals' parallax maps (the roughness maps: below).
 
 **32 decals a column** (2026-11-05, #393): the private district's dense walls and pavements had
 more than 16 decals over some 4 m columns. A decal is listed in every column its box spans, and
@@ -7229,6 +7229,25 @@ the 4 m edge). At 32, 77 are.
   (the same path read 2.207 ms an hour before).
 - **Elsewhere:** the village's thirteen map-check views log no column over 16, so its tables are
   the same.
+
+**The colour decals' roughness maps** (2026-11-05, #393: "an optional normal and roughness",
+decided above):
+- **The fields:** `DecalKind::roughness` and `roughness_bias`. The map is read as the kind's
+  texture is. Its red plus the bias, clamped to 0 to 1, is the roughness the decal lays where it
+  covers (its alpha times its strength): a stain of wet blood glossy on dry asphalt.
+- **Painter's order:** each decal's roughness covers what lies under it, as its colour does. The
+  walk keeps the roughness laid and the share of the surface's own left, so the surface's
+  roughness r becomes `r × kept + laid`. A decal without a map lays the surface's own back where
+  it covers (a poster over a wet stain), as it covers the relief under it.
+- **Where:** a UV-mapped row takes it before its roughness becomes a specular power, and so does
+  each layer of a layered material (each walks the decals, #393's point 3). A row without UVs has
+  only a power: `decal_power` turns it back into a roughness, lays the decals' over it and makes
+  the power again. The layered ground does not take it yet.
+- **Without a roughness map nothing changes:** `r × 1 + 0` in the UV path, and the power left as it
+  is in the other.
+- **The private district:** 114 of its 329 decal kinds carry one (24 of their 30 maps are in the
+  archives), most with a bias (blood −0.7, asphalt +0.25, plaster +0.2). Its wet patches and stains
+  catch the sky: 3.3 % of an alley view's pixels change, 1.5 % of a street's.
 
 *(research: decals.md; D-007, D-013, D-021, D-026, D-028, D-047, D-065; issue #304)*
 

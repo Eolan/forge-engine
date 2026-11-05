@@ -1830,6 +1830,10 @@ something stands out). Two things to watch:
     (p99 16.41 → 16.47). The bar's views at 1600 × 900: `fog/light` +0.05 to 0.07 ms.
   - *2026-11-05, 32 decals a column (D-074, #393):* the same path: `shading/standard` 2.225 →
     2.234 ms, the decals' places left out of their columns 749 → 77.
+  - *2026-11-05, the colour decals' roughness maps (D-074, #393):* the same path, two runs each
+    way alternating (114 of the 329 decal kinds with a map): the frame 15.082 / 15.087 → 15.102 /
+    15.084 ms, `shading/standard` 2.271 / 2.262 → 2.264 / 2.268, no measurable cost. The machine
+    swung the whole path by 0.4 ms between runs of one setting that hour.
   - *2026-10-19, the street lamps beyond the set (#284):* the village at 22:00 under DLAA, EV 3,
     receding from the junction 12 m up for 100 m (3 000 frames, the mean): `shading/standard`
     1.026 → 1.072 ms and the frame 4.916 → 4.955 ms with the far lamps (`--no-far-lamps` the

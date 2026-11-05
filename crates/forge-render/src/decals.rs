@@ -86,6 +86,16 @@ pub struct DecalKind {
     pub normal: Option<TextureId>,
     /// The slopes of [`Self::normal`] times this (1: as the map gives them).
     pub normal_strength: f32,
+    /// A colour decal's roughness map (D-074, #393), read as its texture is: its red plus
+    /// [`Self::roughness_bias`], clamped to 0 to 1, is the (perceptual) roughness it lays where it
+    /// covers the surface (its alpha times its strength), painted over the surface's own as its
+    /// colour is: a stain of wet blood glossy on dry asphalt, a logo's paint on a matt wall. The
+    /// map is linear (uploaded with `srgb` false). The layered ground does not take it yet.
+    /// `None`: the surface's own roughness where it covers (Forge's own decals): it covers a
+    /// roughness another decal laid under it, as it covers that decal's relief.
+    pub roughness: Option<TextureId>,
+    /// Added to [`Self::roughness`]'s red before it is clamped (0: as the map gives it).
+    pub roughness_bias: f32,
 }
 
 /// A decal: a box in the scene's frame and its kind.
@@ -150,9 +160,13 @@ struct GpuDecalKind {
     normal: u32,
     normal_strength: f32,
     uv_rect: [f32; 4],
+    /// Its roughness map, `TEXTURE_NONE` without one, and the bias added to its red.
+    roughness: u32,
+    roughness_bias: f32,
+    pad: [u32; 2],
 }
 
-const _: () = assert!(std::mem::size_of::<GpuDecalKind>() == 80);
+const _: () = assert!(std::mem::size_of::<GpuDecalKind>() == 96);
 
 /// Mirrors `DecalGrid` in `meshlet.slang`: where the tables stand and the hash's size.
 #[repr(C)]
@@ -267,6 +281,13 @@ impl DecalSet {
                     0.0
                 },
                 uv_rect: k.uv_rect,
+                roughness: k.roughness.map_or(crate::material::TEXTURE_NONE, &sampled),
+                roughness_bias: if k.roughness.is_some() {
+                    k.roughness_bias
+                } else {
+                    0.0
+                },
+                pad: [0; 2],
             })
             .collect();
         let mut bytes: Vec<u8> = Vec::new();
@@ -303,6 +324,8 @@ mod tests {
             row: None,
             normal: None,
             normal_strength: 1.0,
+            roughness: None,
+            roughness_bias: 0.0,
         }
     }
 
@@ -407,5 +430,25 @@ mod tests {
             (crate::material::TEXTURE_NONE, 0.0)
         );
         assert_eq!((kinds[1].normal, kinds[1].normal_strength), (107, 0.5));
+    }
+
+    #[test]
+    fn a_kind_without_a_roughness_map_lays_none() {
+        let glossy = DecalKind {
+            roughness: Some(TextureId(9)),
+            roughness_bias: -0.7,
+            ..kind(1)
+        };
+        let set = DecalSet {
+            kinds: vec![kind(0), glossy],
+            decals: vec![decal(0.0, 0.0, 1)],
+        };
+        let t = set.tables(|id| id.0 + 100).expect("tables");
+        let kinds: &[GpuDecalKind] = bytemuck::cast_slice(&t.bytes[t.kinds as usize..]);
+        assert_eq!(
+            (kinds[0].roughness, kinds[0].roughness_bias),
+            (crate::material::TEXTURE_NONE, 0.0)
+        );
+        assert_eq!((kinds[1].roughness, kinds[1].roughness_bias), (109, -0.7));
     }
 }
