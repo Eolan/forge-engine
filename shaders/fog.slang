@@ -63,6 +63,12 @@ struct Fog
     uint bound_sampled;      // its sampled index (fog_culled)
     uint pad0;
     uint pad1;
+    // The distance fog (D-101, `DistanceFog` in fog.rs; distance_phase.y 0: none).
+    float4 distance_range;   // x: its start (m), y: where its colour is the far one (m), z: the height its layers are given at (the scene frame), w: the elevation its cover of the sky ends at (radians; 0: the layers' own)
+    float4 distance_layers;  // x, y: the first layer's extinction (1/m) at that height and its falloff (1/m); z, w: the second's
+    float4 distance_near;    // rgb: its colour at its start; a: the sun's light into it
+    float4 distance_far;     // rgb: its colour from `far` on; a: the sky's light into it, times the sun's pre-exposed illuminance over 2π
+    float4 distance_phase;   // x: the sun's phase anisotropy g; y: 1 when on; zw 0
 };
 
 // A froxel's own offset added to the frame's (pcg3d, Jarzynski and Olano 2020), so that
@@ -548,8 +554,65 @@ float4 fog_at(Fog* g, float2 uv, float distance)
     return lerp(a, b, s);
 }
 
+// The distance fog's optical depth (D-101) along `direction` from the camera, `s0` to `s1` metres:
+// each layer's extinction, density * exp(-falloff * (y - height)), integrated in closed form (the
+// mirror of `DistanceFog::optical_depth`). Each end's exponent held within -80 and 20 (deep under a
+// layer's height, it no longer thickens); a ray crossing less than a thousandth of an e-fold taken
+// as level.
+float distance_fog_depth(Fog* g, float3 direction, float s0, float s1)
+{
+    float y0 = g[0].camera.y - g[0].distance_range.z;
+    float span = max(s1 - s0, 0.0);
+    float tau = 0.0;
+    [unroll]
+    for (uint k = 0u; k < 2u; k++)
+    {
+        float density = k == 0u ? g[0].distance_layers.x : g[0].distance_layers.z;
+        float falloff = max(k == 0u ? g[0].distance_layers.y : g[0].distance_layers.w, 0.0);
+        if (density <= 0.0)
+            continue;
+        float a = falloff * direction.y;
+        float near = clamp(-falloff * y0 - a * s0, -80.0, 20.0);
+        if (abs(a * span) < 1e-3)
+            tau += density * exp(near) * span;
+        else
+            tau += density * max((exp(near) - exp(clamp(-falloff * y0 - a * s1, -80.0, 20.0))) / a, 0.0);
+    }
+    return tau;
+}
+
+// How far a sky pixel's ray runs through the distance fog, metres: as far as its layers reach
+// (`DistanceFog`'s test integrates to it).
+static const float DISTANCE_FOG_SKY = 1e6;
+
+// The colour `c` seen at `s1` metres along `direction` (the sky's: `sky`) through the distance fog
+// (D-101): dimmed by it and lit by what it scatters, the sun's light through its phase and the
+// sky's every way alike (the mean of its irradiance up and down over 2π, as the froxels' without
+// probes), unshadowed, its colour from the near one at its start to the far one at `far`. On the
+// sky, its cover fades from the horizon to the elevation `distance_range.w`.
+float3 distance_fog(Fog* g, float3 c, float3 direction, float s1, bool sky)
+{
+    float s0 = g[0].distance_range.x;
+    if (s1 <= s0)
+        return c;
+    float cover = 1.0 - exp(-distance_fog_depth(g, direction, s0, s1));
+    if (sky && g[0].distance_range.w > 0.0)
+        cover *= 1.0 - smoothstep(0.0, g[0].distance_range.w, asin(clamp(direction.y, -1.0, 1.0)));
+    float3 sun = normalize(g[0].sun.xyz);
+    // The sun's light where it stands above the horizon (as the froxels', which also trace it).
+    float3 light = sun.y > -0.1
+        ? g[0].sun.w * g[0].sun_color.rgb * fog_phase(dot(direction, sun), g[0].distance_phase.x) * g[0].distance_near.a
+        : float3(0.0);
+    if (g[0].sky != nullptr && g[0].distance_far.a > 0.0)
+        light += (sh_irradiance(g[0].sky, float3(0.0, 1.0, 0.0)) + sh_irradiance(g[0].sky, float3(0.0, -1.0, 0.0))) * g[0].distance_far.a;
+    float far = g[0].distance_range.y;
+    float3 colour = lerp(g[0].distance_near.rgb, g[0].distance_far.rgb, saturate((min(s1, far) - s0) / max(far - s0, 1e-3)));
+    return lerp(c, colour * light, cover);
+}
+
 // A thread per pixel: the colour dimmed by the fog in front of it and brightened by what the fog
-// scatters; empty pixels (the sky) see the whole volume.
+// scatters; empty pixels (the sky) see the whole volume. Beyond the froxels, the distance fog
+// (D-101) first: the froxels' fog lies in front of it.
 [shader("compute")]
 [numthreads(8, 8, 1)]
 void fog_apply_main(uint3 id : SV_DispatchThreadID)
@@ -568,5 +631,7 @@ void fog_apply_main(uint3 id : SV_DispatchThreadID)
     float4 fog = fog_at(g, uv, distance);
     RWTexture2D<float4> color = g_storage_images_rgba16f[NonUniformResourceIndex(g[0].color)];
     float4 c = color[id.xy];
+    if (g[0].distance_phase.y > 0.0)
+        c.rgb = distance_fog(g, c.rgb, fog_view_direction(g, uv), depth > 0.0 ? distance : DISTANCE_FOG_SKY, depth <= 0.0);
     color[id.xy] = float4(c.rgb * fog.a + fog.rgb, c.a);
 }

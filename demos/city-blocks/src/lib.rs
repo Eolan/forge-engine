@@ -1217,8 +1217,17 @@ impl Gallery {
             auto_exposure.band = band;
         }
         let ao_on = !args.no_ao;
-        // The sun at `--sun-elevation`, from the default sun's azimuth, through the air.
-        let atmosphere_params = AtmosphereParams::earth();
+        // The scene's own look (#216): its sun, white where no air reddens it, and what surrounds
+        // it; space's sky (the owner's ask of 2026-10-03) is the stars, the sun's disc and a
+        // planet below.
+        let look = scenario.as_ref().map(|s| s.look()).unwrap_or_default();
+        // The sun at `--sun-elevation`, from the default sun's azimuth, through the air: the
+        // scene's aerosols (D-101) in it.
+        let mut atmosphere_params = AtmosphereParams::earth();
+        if let Some(k) = look.aerosols.filter(|k| k.is_finite() && *k > 0.0) {
+            atmosphere_params.mie_scattering = atmosphere_params.mie_scattering.map(|m| m * k);
+            atmosphere_params.mie_absorption = atmosphere_params.mie_absorption.map(|m| m * k);
+        }
         let default_elevation = if args.island.is_some() { 30.0 } else { 63.4 };
         let elevation = args.sun_elevation.unwrap_or(default_elevation).to_radians();
         renderer.sun_dir = Vec3::new(
@@ -1283,10 +1292,6 @@ impl Gallery {
         }
         let atmosphere = Atmosphere::new(&ctx.device, &ctx.shaders, atmosphere_params)?;
         let sky = GroundSky::new(&ctx.device, &ctx.shaders)?;
-        // The scene's own look (#216): its sun, white where no air reddens it, and what surrounds
-        // it; space's sky (the owner's ask of 2026-10-03) is the stars, the sun's disc and a
-        // planet below.
-        let look = scenario.as_ref().map(|s| s.look()).unwrap_or_default();
         // Local exposure on where the look asks for it (D-067, #275: the owner's look of
         // 2026-10-19, a room seen from a lit hall through its door pitch black without it),
         // with the meter keyed on a lower band and the shadows lifted a little more, which a game
@@ -2226,10 +2231,15 @@ impl Gallery {
                 if let Some(g) = env.global.as_mut() {
                     g.height += lift;
                 }
+                if let Some(d) = env.distance.as_mut() {
+                    d.height += lift;
+                }
                 env
             });
         let fogged = !fog_boxes.is_empty()
-            || fog_environment.is_some_and(|e| e.global.is_some_and(|g| g.density > 0.0));
+            || fog_environment.is_some_and(|e| {
+                e.global.is_some_and(|g| g.density > 0.0) || e.distance.is_some_and(|d| d.active())
+            });
         // The scene's lamps of its fog alone (D-099), to the scene frame as its other lamps.
         let fog_lamps: Vec<forge_render::lamps::Lamp> = running
             .as_ref()
@@ -4757,6 +4767,7 @@ impl Demo for Gallery {
                     history: !self.args.no_fog_history,
                     exposure,
                     cull: !self.args.no_fog_cull,
+                    distance: environment.and_then(|e| e.distance),
                 },
                 boxes,
                 fog_lamps,

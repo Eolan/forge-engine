@@ -11442,7 +11442,7 @@ volumes are a second step, under the rules above.
 - **So:** the volumes wait for a scene whose look they would change: a place graded by area whose
   lights were not fitted on its graded frames. The rules above stand for then.
 
-## D-101 — The open city's distance: a hazier sky and a distance fog beyond the froxels 🟡 (proposed 2026-11-05; D-032, D-083, D-094, D-099)
+## D-101 — The open city's distance: a hazier sky and a distance fog beyond the froxels ✅ (proposed 2026-11-05; the owner's go the same day: "Go for D-101, follow your recommendation"; D-032, D-083, D-094, D-099)
 
 **The need.** The private district's open streets (its source's benchmark frames 36, 37, 41 and 44)
 show a paler sky, a whitish distance (the far city fading into haze) and, in frame 41, a white glow
@@ -11491,3 +11491,70 @@ round the sun. Forge draws a deep-blue clear sky and a crisp far city. Beyond th
 
 **Recommendation:** option 3, built in steps. Aerosols first (one setting, then its refits), then
 the distance fog.
+
+**Built (2026-11-05, both steps):**
+- **Step 1, the aerosols:** `Look::aerosols` (city-blocks) multiplies the atmosphere's Mie
+  scattering and absorption (`AtmosphereParams::mie_scattering`, `mie_absorption`) for the scene's
+  sky, its aerial perspective and its sun's transmittance; the air's Rayleigh share stays. None:
+  Earth's clear day, so every other scene is drawn as before.
+- **Step 2, the distance fog:** `DistanceFog` (forge-render, `FogParams::distance`, a scene's
+  `FogEnvironment::distance`), laid by `fog/apply` before the froxels' fog: no pass of its own.
+  - **The medium:** two exponential height layers, each an extinction at a height and a falloff
+    above it, integrated in closed form from the start distance to the pixel's surface (the sky's
+    to 1,000 km). Each end's exponent is held within −80 and 20, and a ray crossing less than a
+    thousandth of an e-fold is taken as level. `DistanceFog::optical_depth` is its CPU mirror; a
+    test checks it against a numeric integral up, level, down, over a thin ground layer seen from
+    200 m and along near-level rays to the sky.
+  - **The start:** never nearer than the froxel volume's far end (64 m), which holds the near fog.
+  - **The light:** the sun's through a Henyey–Greenstein phase, above the horizon, and the sky's
+    every way alike (its irradiance up and down over 2π, as the froxels' without probes),
+    unshadowed. Its colour runs from a near albedo at its start to a far one at its far distance.
+  - **The sky:** its cover fades from the horizon to an elevation (`sky_end`); 0 leaves the
+    layers' own integral.
+  - **A distance fog alone** (no boxes, no fog everywhere) runs the froxels' passes over an empty
+    volume.
+- **The cost:** `fog/apply` about +0.01 ms on the private district's path at 2560 × 1440 (DLSS
+  Quality); the frame within the runs' spread (`docs/PROFILE.md`).
+- **The private district** (its viewer):
+  - **Aerosols ×24,** fitted on frame 41's sky, the pixels both frames show as sky on the sun's
+    side:
+
+    | aerosols | sky EV | R/G (source 0.71–0.77) | B/G (source 1.13–1.19) | 14 frames' EV rms |
+    |---|---|---|---|---|
+    | ×1 | −1.41 | 0.28 | 1.80 | 0.56 |
+    | ×6 | −0.95 | 0.48 | 1.57 | 0.53 |
+    | ×12 | −0.57 | 0.67 | 1.37 | 0.52 |
+    | ×24 | −0.09 | 0.84 | 1.18 | 0.51 |
+    | ×40 | +0.39 | 0.94 | 1.07 | 0.53 |
+
+    The source's sky has a turbidity of 3 by day, about ×40 by Preetham's definition at 550 nm.
+    At ×24 frame 41 gets its white glow round the sun, and the open streets' colour error (the
+    log₂ rms of R/G and B/G over frames 36, 37, 41 and 44) goes from 0.233 and 0.304 to 0.132 and
+    0.233.
+  - **The distance fog** reads the source's distant fog at the hour: near 200 m, far 3.35 km at
+    16:20, densities 1.24 and 0.05 taken as the layers' optical depths from near to far at sea
+    level, falloffs 0.5 and 1 per kilometre, colours near and far, the sky to 8.35°.
+    - **Why per km:** per 100 m, a building 300 m away took 4 % fog and the far towers' tops stayed
+      clear. The source's frame 41 shows them pale from top to bottom.
+    - **The numbers:** few pixels lie that far, so the 14 frames' numbers barely move (frame 41
+      +0.04 → +0.17 EV, the colour rms unchanged). The far ends of streets 36 and 37 and the towers
+      in 41 now fade into a pale haze.
+  - **The refits:** the whiter sky lit the open streets' shade, and at the old sun share (1/22 of
+    Forge's) they read +0.06, +0.23, +0.17 and +0.62 EV (mean +0.27).
+
+    | sun share | 14 frames' EV mean, rms | R/G, B/G log₂ rms |
+    |---|---|---|
+    | before D-101 (1/22, ×1, no distance fog) | −0.06, 0.56 | 0.262, 0.366 |
+    | 1/22 | +0.06, 0.52 | 0.240, 0.367 |
+    | **1/24 (kept)** | **+0.02, 0.51** | **0.243, 0.371** |
+    | 1/26 | −0.02, 0.50 | 0.247, 0.377 |
+    | 1/28 | −0.05, 0.50 | 0.249, 0.380 |
+
+    - **Why 1/24:** a dimmer sun centres the open streets and moves their colour further from the
+      source's at each step, so 1/24 sits between. Streets 36, 37 and 41 read −0.07, +0.09 and
+      +0.03; frame 44 +0.47.
+    - **Against this morning:** the EV rms and R/G are better. B/G is 0.005 worse, the one number
+      that rose.
+    - **The meter:** its frames moved −0.03 EV on average, inside its flat optimum, so its −0.5 stays.
+- **Elsewhere nothing changes:** the village's thirteen map-check views are 0 px from this
+  morning's run. No scene in the repository sets aerosols or a distance fog.

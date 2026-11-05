@@ -121,6 +121,13 @@ pub struct Look {
     /// The scene's own grading table (D-100), shown under [`Tonemap::SceneLut`]: an authored
     /// scene graded by its source's table. Held for the program's life.
     pub grading: Option<&'static forge_render::Grading>,
+    /// The air's aerosols against a clear day's (D-101): its Mie scattering and absorption
+    /// times this, when the scene sets it (a finite value above 0). A city's haze: a paler sky,
+    /// a whitish distance and a glow round the sun, the air's blue (Rayleigh) unchanged. The
+    /// sun reaches the ground through it dimmer and warmer: `sun_color` sets its hue alone, at
+    /// that luminance, and `sun_illuminance` the light above the air (a scene fitted to its
+    /// sun's level is fitted again). None: Earth's clear day (`AtmosphereParams::earth`).
+    pub aerosols: Option<f32>,
 }
 
 /// An environment map as a scene's sky and sun (D-084): the light its authors set, for
@@ -167,6 +174,7 @@ impl Default for Look {
             environment: None,
             tonemap: None,
             grading: None,
+            aerosols: None,
         }
     }
 }
@@ -241,6 +249,9 @@ pub struct FogEnvironment {
     /// The phase's anisotropy g for its sun's (its global light's) light; the lamps' keep the
     /// app's (`FogParams::lamp_anisotropy`).
     pub anisotropy: f32,
+    /// Its distance fog beyond the froxels (D-101), its height in the world frame (none: the
+    /// froxels' fog alone).
+    pub distance: Option<forge_render::DistanceFog>,
 }
 
 /// A built scene, frame by frame.

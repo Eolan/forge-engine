@@ -6849,6 +6849,7 @@ impl Scenario for PlanScenario {
             environment: None,
             tonemap: None,
             grading: None,
+            aerosols: None,
             // A room beyond the room grids' reach takes this share of the open sky (D-078, the
             // probes' far room rule), set against the rooms the grids light: from the owner's
             // view down to the houses, the windows' band matched them at 0.35 in the afternoon

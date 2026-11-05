@@ -2928,6 +2928,13 @@ street 5.8 / 8.7. VRAM 3.9 GB (2.3 GB geometry: #387, pages about a tenth full).
   - **`fog/light`'s zone** reads 0.47–0.50 ms beside the particles' draw, which runs at the same
     time with no barrier between them; with no particle alive it reads 0.91 ms (the street at
     1280 × 720). The zones quoted above for it (0.45–0.56 ms) are short in the same way.
+- **The distance fog** (D-101, 2026-11-05; the same path and runs, the private district reading its
+  source's distant fog: two layers from 200 m, on surfaces and the sky up to 8°): `fog/apply`
+  0.072 and 0.086 ms without, 0.086 and 0.092 with, about +0.01 ms (two exponential integrals, a
+  phase and two sky lookups a pixel in the pass that was there). The frame 15.65 and 15.70 ms
+  without, 16.00 and 15.71 with: within the runs' spread (the 16.00 run's probe rays read 0.7 ms
+  slow on their own). The aerosols (`Look::aerosols`) change the atmosphere's tables, not their
+  cost.
 
 ## Instances scaled per axis: the 96-byte record (#380, 2026-11-01)
 

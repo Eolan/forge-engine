@@ -17,7 +17,8 @@
 //!   the camera moves averaged away; without it, at the froxel's middle);
 //! - `fog/integrate`: per froxel column, the light gathered and the transmittance to each slice;
 //! - `fog/apply`: per pixel, the colour dimmed by the fog in front of it and brightened by what
-//!   it scatters, by the pixel's depth (one trilinear read of the volume).
+//!   it scatters, by the pixel's depth (one trilinear read of the volume); beyond the froxels,
+//!   first the distance fog ([`DistanceFog`], D-101), analytic: no volume of its own.
 //!
 //! The patent rules D-099 keeps (its search, 2026-11-04): one read of the volume a pixel, the
 //! lamps' lists per world column filled by their reach, their weights analytic, one colour a
@@ -207,6 +208,9 @@ struct GpuFog {
     bound: u32,
     bound_sampled: u32,
     pad: [u32; 2],
+    /// The distance fog ([`DistanceFog`]): its range and height, layers, near colour and the
+    /// sun's scale, far colour and the sky's, phase and on (`distance_*` in `fog.slang`).
+    distance: [[f32; 4]; 5],
 }
 
 /// What a frame's fog needs.
@@ -268,6 +272,72 @@ pub struct FogParams {
     /// one (uncovered as the camera moves) is lit afresh rather than taking stale light. Off: every
     /// froxel lit, as before (the A/B).
     pub cull: bool,
+    /// The scene's distance fog beyond the froxels (D-101), none: the froxels' alone.
+    pub distance: Option<DistanceFog>,
+}
+
+/// A scene's distance fog (D-101): an exponential height fog beyond the froxels, two layers
+/// integrated in closed form along each pixel's ray from [`Self::start`] to its surface (the sky's
+/// as far as the layers reach), lit by the sun through a phase and by the sky's light, unshadowed:
+/// the haze over an authored city's far streets and skyline, the near fog left to the froxels.
+/// The exponential height fog of games (Unreal Engine's: a start distance, a second layer as its
+/// fourth version's; the closed form after Quilez's "Fog" article), lit here by the sun through a
+/// Henyey–Greenstein phase; applied by `fog/apply` under the froxels' fog.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct DistanceFog {
+    /// Where it starts, metres from the camera: nothing nearer, and never nearer than the
+    /// froxel volume's far end ([`FogParams::far`]: the froxels' fog is there).
+    pub start: f32,
+    /// Where its colour has become [`Self::far_color`], metres from the camera.
+    pub far: f32,
+    /// The height in the scene frame its layers' densities are given at, metres.
+    pub height: f32,
+    /// Its two layers: each its extinction per metre at [`Self::height`] and how fast it thins
+    /// above it, per metre (thicker below). A layer of density 0 is none.
+    pub layers: [[f32; 2]; 2],
+    /// The colour its scattering takes at its start (an albedo per channel)...
+    pub near_color: Vec3,
+    /// ...and from [`Self::far`] on, linear between.
+    pub far_color: Vec3,
+    /// How strongly the sun's light, then the sky's, scatter in it (1: whole).
+    pub light_scales: [f32; 2],
+    /// The phase's anisotropy g for the sun's light (held within ±0.95).
+    pub anisotropy: f32,
+    /// The elevation, radians, its cover of the sky fades out at, from the horizon (an authored
+    /// sky's band of haze); 0: as far as its layers reach.
+    pub sky_end: f32,
+}
+
+impl DistanceFog {
+    /// Whether it fogs anything: a layer with a density.
+    pub fn active(&self) -> bool {
+        self.layers.iter().any(|l| l[0] > 0.0)
+    }
+
+    /// Its optical depth along `direction` (normalized) from a camera at `camera_height` in the
+    /// scene frame, `from` to `to` metres: each layer's extinction integrated in closed form, each
+    /// end's exponent (the layer's thinning to that point's height) held within −80 and 20 (deep
+    /// under a layer's height it thickens no further), and a ray that crosses less than a
+    /// thousandth of an e-fold taken as level (`distance_fog_depth` in `fog.slang`).
+    pub fn optical_depth(&self, camera_height: f32, direction: Vec3, from: f32, to: f32) -> f32 {
+        let y0 = camera_height - self.height;
+        let length = (to - from).max(0.0);
+        self.layers
+            .iter()
+            .filter(|l| l[0] > 0.0)
+            .map(|&[density, falloff]| {
+                let falloff = falloff.max(0.0);
+                let a = falloff * direction.y;
+                let near = (-falloff * y0 - a * from).clamp(-80.0, 20.0);
+                if (a * length).abs() < 1e-3 {
+                    density * near.exp() * length
+                } else {
+                    let far = (-falloff * y0 - a * to).clamp(-80.0, 20.0);
+                    density * ((near.exp() - far.exp()) / a).max(0.0)
+                }
+            })
+            .sum()
+    }
 }
 
 /// A scene's fog everywhere (D-099): an authored environment's volumetric fog, the boxes laid
@@ -410,7 +480,12 @@ impl FogVolume {
             .filter(|(_, b)| b.density >= 0.0 && gap(b) < params.far)
             .collect();
         let global_fog = params.global.is_some_and(|g| g.density > 0.0);
-        if (near.is_empty() || !near.iter().any(|(_, b)| b.density > 0.0)) && !global_fog {
+        // The distance fog alone runs the froxels' passes too (empty): `fog/apply` lays both.
+        let distance = params.distance.filter(DistanceFog::active);
+        if (near.is_empty() || !near.iter().any(|(_, b)| b.density > 0.0))
+            && !global_fog
+            && distance.is_none()
+        {
             // No fog this frame: the history, when it comes back, starts afresh.
             self.last.set(None);
             return;
@@ -496,10 +571,14 @@ impl FogVolume {
         let pipeline = &self.light;
         // The probes' light needs both the probes and the sky's (their lookup's fallback).
         // The sky's light (without probes, the open sky's alone, as surfaces take it).
-        let sky = params
+        // The distance fog's sky light needs the sky alone, never the probes.
+        let froxel_sky = params
             .sky
             .filter(|_| params.ambient.iter().any(|&a| a > 0.0));
-        let probes = params.probes.filter(|_| sky.is_some());
+        let sky = froxel_sky.or(params
+            .sky
+            .filter(|_| distance.is_some_and(|d| d.light_scales[1] > 0.0)));
+        let probes = params.probes.filter(|_| froxel_sky.is_some());
         // The froxel columns' farthest surfaces and last slices lit, for the cull (`FogParams::cull`).
         let bound = params.cull.then(|| {
             let tiles = graph.transient(TransientDesc {
@@ -659,6 +738,25 @@ impl FogVolume {
                 bound: 0,
                 bound_sampled: 0,
                 pad: [0; 2],
+                distance: distance.map_or([[0.0; 4]; 5], |d| {
+                    [
+                        [d.start.max(params.far), d.far, d.height, d.sky_end.max(0.0)],
+                        [
+                            d.layers[0][0],
+                            d.layers[0][1],
+                            d.layers[1][0],
+                            d.layers[1][1],
+                        ],
+                        d.near_color.extend(d.light_scales[0].max(0.0)).to_array(),
+                        d.far_color
+                            .extend(
+                                d.light_scales[1].max(0.0) * params.sun_illuminance
+                                    / std::f32::consts::TAU,
+                            )
+                            .to_array(),
+                        [d.anisotropy.clamp(-0.95, 0.95), 1.0, 0.0, 0.0],
+                    ]
+                }),
             }],
         );
         pass.run(move |_, commands| {
@@ -689,21 +787,25 @@ impl FogVolume {
                 Ok(())
             });
         let pipeline = &self.apply;
-        graph
+        let mut pass = graph
             .pass("fog/apply")
             .image(volume, ImageAccess::Sampled(compute))
             .image(depth, ImageAccess::Sampled(compute))
-            .image(color, ImageAccess::StorageReadWrite(compute))
-            .run(move |_, commands| {
-                commands.bind_pipeline(pipeline);
-                commands.push_constants(pipeline, &address);
-                commands.dispatch(
-                    extent.width.div_ceil(GROUP),
-                    extent.height.div_ceil(GROUP),
-                    1,
-                );
-                Ok(())
-            });
+            .image(color, ImageAccess::StorageReadWrite(compute));
+        // The distance fog's sky light.
+        if let Some(sky) = sky.filter(|_| distance.is_some()) {
+            pass = pass.buffer(sky.buffer, BufferAccess::ShaderRead(compute));
+        }
+        pass.run(move |_, commands| {
+            commands.bind_pipeline(pipeline);
+            commands.push_constants(pipeline, &address);
+            commands.dispatch(
+                extent.width.div_ceil(GROUP),
+                extent.height.div_ceil(GROUP),
+                1,
+            );
+            Ok(())
+        });
     }
 }
 
@@ -744,7 +846,8 @@ mod tests {
     #[test]
     fn the_records_keep_the_shaders_layout() {
         assert_eq!(std::mem::size_of::<GpuFogBox>(), 96);
-        assert_eq!(std::mem::size_of::<GpuFog>(), 384);
+        assert_eq!(std::mem::size_of::<GpuFog>(), 464);
+        assert_eq!(std::mem::offset_of!(GpuFog, distance), 384);
         assert_eq!(std::mem::offset_of!(GpuFog, tiles), 356);
         assert_eq!(std::mem::offset_of!(GpuFog, bound), 368);
         assert_eq!(std::mem::offset_of!(GpuFog, prev_view_proj), 240);
@@ -753,6 +856,82 @@ mod tests {
         assert_eq!(std::mem::offset_of!(GpuFog, fog_lamps), 176);
         assert_eq!(std::mem::offset_of!(GpuFog, sky), 192);
         assert_eq!(std::mem::offset_of!(GpuFog, box_count), 200);
+    }
+
+    #[test]
+    fn the_distance_fogs_closed_form_matches_its_integral() {
+        let fog = DistanceFog {
+            start: 200.0,
+            far: 3000.0,
+            height: 10.0,
+            layers: [[4e-4, 0.002], [1e-4, 0.01]],
+            near_color: Vec3::ONE,
+            far_color: Vec3::ONE,
+            light_scales: [1.0, 1.0],
+            anisotropy: 0.6,
+            sky_end: 0.0,
+        };
+        // Midpoint sums along rays up, level and down from a camera 30 m up.
+        for y in [0.3f32, 0.05, 0.0, -0.01] {
+            let direction = Vec3::new((1.0 - y * y).sqrt(), y, 0.0);
+            let (from, to) = (200.0, 2500.0);
+            let steps = 20_000;
+            let ds = (to - from) / steps as f32;
+            let sum: f32 = (0..steps)
+                .map(|i| {
+                    let h = 30.0 + direction.y * (from + (i as f32 + 0.5) * ds) - fog.height;
+                    fog.layers
+                        .iter()
+                        .map(|l| l[0] * (-l[1] * h).exp())
+                        .sum::<f32>()
+                        * ds
+                })
+                .sum();
+            let closed = fog.optical_depth(30.0, direction, from, to);
+            assert!(
+                (closed - sum).abs() < 2e-3 * sum,
+                "{y}: {closed} against {sum}"
+            );
+        }
+        // A thin ground layer seen from 200 m above it, looking down to the ground: each end's
+        // exponent is large, the two of opposite signs (held apart, the fog was lost).
+        let ground = DistanceFog {
+            height: 0.0,
+            layers: [[0.02, 0.5], [0.0, 0.0]],
+            ..fog
+        };
+        let down = Vec3::new(0.8, -0.6, 0.0);
+        let (from, to) = (100.0, 200.0 / 0.6);
+        let steps = 20_000;
+        let ds = f64::from(to - from) / f64::from(steps);
+        let sum: f64 = (0..steps)
+            .map(|i| {
+                let s = f64::from(from) + (f64::from(i) + 0.5) * ds;
+                0.02 * (-0.5 * (200.0 + f64::from(down.y) * s)).exp() * ds
+            })
+            .sum();
+        let closed = f64::from(ground.optical_depth(200.0, down, from, to));
+        assert!((closed - sum).abs() < 1e-3 * sum, "{closed} against {sum}");
+        // A near-level ray to the sky (as far as `DISTANCE_FOG_SKY`): no jump where the closed form
+        // gives way to the level one.
+        let sky =
+            |y: f32| fog.optical_depth(30.0, Vec3::new((1.0 - y * y).sqrt(), y, 0.0), 200.0, 1e6);
+        let level = sky(0.0);
+        for y in [1e-9f32, 1e-8, 1e-7, 5e-7] {
+            let t = sky(y);
+            assert!(t <= level && t > 0.4 * level, "{y}: {t} against {level}");
+        }
+        // Longer rays reach deeper, none without a density.
+        assert!(
+            fog.optical_depth(30.0, Vec3::X, 200.0, 900.0)
+                > fog.optical_depth(30.0, Vec3::X, 200.0, 400.0)
+        );
+        assert_eq!(fog.optical_depth(30.0, Vec3::X, 400.0, 200.0), 0.0);
+        let none = DistanceFog {
+            layers: [[0.0, 0.01]; 2],
+            ..fog
+        };
+        assert!(!none.active() && none.optical_depth(30.0, Vec3::X, 200.0, 900.0) == 0.0);
     }
 
     #[test]

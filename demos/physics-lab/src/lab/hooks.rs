@@ -294,6 +294,7 @@ impl Scenario for LabScenario {
                 .authored()
                 .map(|_| forge_render::Tonemap::AcesNarkowicz),
             grading: None,
+            aerosols: None,
         }
     }
 

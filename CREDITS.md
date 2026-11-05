@@ -266,6 +266,10 @@ files (`docs/research/`) and the decisions (`docs/DECISIONS.md`).
   Physically-Based Volumetric Lighting in Frostbite", SIGGRAPH 2015: the froxel volume and its
   integration. The phase function is Louis G. Henyey and Jesse L. Greenstein's, "Diffuse
   Radiation in the Galaxy", 1941.
+- **The distance fog** (D-101). Inigo Quilez, ["Fog"](https://iquilezles.org/articles/fog/): the
+  closed-form integral of an exponential height fog along a view ray. The exponential height fog
+  itself as games use it, after Unreal Engine's: a start distance, and a second layer as its
+  fourth version's. Forge lights it by the sun through Henyey and Greenstein's phase.
 - **Ambient occlusion.** Jorge Jimenez, Xian-Chun Wu, Angelo Pesce, Adrian Jarabo, "Practical
   Real-Time Strategies for Accurate Indirect Occlusion", SIGGRAPH 2016: GTAO and its
   multi-bounce fit. Forge ports Intel's implementation, XeGTAO (Filip Strugar and
