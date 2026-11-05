@@ -7332,6 +7332,59 @@ decided above):
   archives), most with a bias (blood −0.7, asphalt +0.25, plaster +0.2). Its wet patches and stains
   catch the sky: 3.3 % of an alley view's pixels change, 1.5 % of a street's.
 
+**Puddles mirror** (2026-11-05, #395): a puddle decal on rough ground showed no reflection.
+- **Why:** a pixel traced a mirror ray (#52, #306) only when its material row was smooth
+  (`wants_mirror_ray` reads the row's power). A decal's roughness lowers the pixel's inside the
+  shading, after that choice, so a puddle took the probes' dimmed sky alone. The private district's
+  puddles (their source's `decal_puddle.mt`) also laid their roughness at their colour's strength,
+  0.3 to 0.9, their source's `DiffuseAlpha`.
+- **The change:**
+  - `DecalKind::roughness_strength`: the share of its coverage its roughness takes. None keeps its
+    strength, as before.
+  - A standard pixel whose colour decals made it smoother (`LightInputs::laid`, their share
+    where they lowered its roughness) and whose final power reaches the mirror rays'
+    (`RAY_REFLECTION_POWER`) traces one. Its traced share is scaled by that share, so a puddle's
+    edge fades from the probes' sky to its ray's, and a decal that roughens a glossy row leaves
+    no ring (the review). It traces only where its ray carries half its reflection or more,
+    fading in up to 0.8 (`DECAL_MIRROR_LEAST`, `_WHOLE`): the district's glossy paint decals
+    (logos, graffiti, roughness 0.3 to 0.4) otherwise took rays for a few percent of theirs, and
+    cost 0.5 to 0.7 ms. Its roughness rides in the request image's spare channel, so
+    `reflections_main` traces at the puddle's roughness, not the row's.
+  - Where the reflections pass will visit a tile, each standard pixel that asked for no ray gets
+    a request of none, so the pass never reads an earlier frame's.
+  - The standard class alone: the layered ground and ice keep their rows' reflections.
+  - `MeshletRenderer::decal_mirrors`, `r.reflections.decals` (on): the A/B. Only a scene with a
+    decal kind that lays a roughness map turns the frame's option on; elsewhere the shaders take
+    their old paths, to the bit.
+- **The private district** (its puddles' roughness at their full mask):
+  - **Frame 30:** its puddle mirrors the gap of sky between the buildings, as the source's does.
+    The puddle's mean luminance goes from 3.26 EV under the source's to 0.15 under. Without the
+    rays it read as grey ground.
+  - **The 14 frames** with the rays against without, by geometric mean, median and mean:
+
+    | rays | geo mean, rms | median mean, rms | mean mean, rms |
+    |---|---|---|---|
+    | off | +0.02, 0.51 | +0.02, 0.61 | −0.05, 0.48 |
+    | on | +0.01, 0.54 | −0.07, 0.70 | +0.00, 0.44 |
+
+    Frame 30 moves alone: −0.81 → −1.02 (geo), −0.42 → −1.41 (median), −0.88 → −0.33 (mean); with
+    the traced share scaled at the edges, −0.93, −1.07 and −0.45 (and the long tubes as flat
+    lamps, the viewer's since: the 14 frames +0.00, 0.54; −0.03, 0.68; −0.03, 0.45).
+    Its puddle's dark reflections (the alley's walls) are darker than the source's dark puddle.
+    The whole frame sits 0.8 EV under the source's, and our camera there looks less steeply down
+    than the source's.
+  - **Motion:** the share of the alley clip's ground pixels that flash or dip for one frame stays
+    2.3 %.
+- **Cost** (the district's benchmark path, 2560 × 1440, DLSS Quality, interleaved after a warm-up):
+  - **Every decal-smoothed pixel traced:** the frame 15.63–15.74 → 16.28–16.49 ms (the rays
+    contend with the probes' rays on the async queue: `gi/probe rays` +0.28, `shading/standard`
+    +0.16, `shading/reflections` +0.14).
+  - **From half their reflection:** 15.67 and 15.81 ms without, 15.71 and 15.86 with;
+    `shading/reflections` 0.22–0.24 → 0.26, `shading/standard` +0.03.
+  - Only a scene with a decal kind that lays a roughness map pays either.
+- **Elsewhere:** the village's decals carry no roughness map, so its option is off: its thirteen
+  map-check views are 0 px from the build before.
+
 *(research: decals.md; D-007, D-013, D-021, D-026, D-028, D-047, D-065; issue #304)*
 
 ## D-075 — Forests as a ladder per tree, grass as a GPU pass near the camera ✅ (proposed 2026-10-19, #302, #300; the owner's go the same day: "follow your recommendations")

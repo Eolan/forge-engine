@@ -452,6 +452,15 @@ pub fn ray_reflections(default: bool) -> Spec<bool> {
     )
 }
 
+/// The decals' mirror rays (#395).
+pub fn decal_reflections(default: bool) -> Spec<bool> {
+    Spec::bool(
+        "r.reflections.decals",
+        default,
+        "Mirror rays from the surfaces decals make smooth (puddles); off, their sky's light alone.",
+    )
+}
+
 /// The mirrors' motion vectors moved towards their reflections.
 pub fn reflection_motion(default: bool) -> Spec<bool> {
     Spec::bool(

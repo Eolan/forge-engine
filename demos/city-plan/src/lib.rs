@@ -7706,6 +7706,7 @@ impl Scenario for PlanScenario {
                 normal_strength: 1.0,
                 roughness: None,
                 roughness_bias: 0.0,
+                roughness_strength: None,
             };
             builder.set_decals(forge_render::DecalSet {
                 kinds: vec![
@@ -7723,6 +7724,7 @@ impl Scenario for PlanScenario {
                         normal_strength: 1.0,
                         roughness: None,
                         roughness_bias: 0.0,
+                        roughness_strength: None,
                     },
                     stamp(stain, 1.0, 1),
                     stamp(cracks, 0.9, 2),

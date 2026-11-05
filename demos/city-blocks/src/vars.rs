@@ -49,6 +49,8 @@ pub(crate) struct RenderVars {
     wireframe: Var<bool>,
     /// The mirrors' motion vectors moved towards their reflections (`r.reflections.motion`).
     reflection_motion: Var<bool>,
+    /// The decals' mirror rays (`r.reflections.decals`, #395).
+    decal_reflections: Var<bool>,
     /// The settings that are a bit of the culling flags: shadows, reflections, culling, LOD and
     /// the debug views.
     bits: Vec<(Var<bool>, u32)>,
@@ -291,6 +293,11 @@ impl Gallery {
                 true,
                 self.reflection_motion,
             ),
+            decal_reflections: s.add_from(
+                rs::decal_reflections(true),
+                true,
+                self.renderer.decal_mirrors,
+            ),
             bits,
             denoiser,
             shadow_history: (!self.sun_shadows.is_empty()).then(|| {
@@ -469,6 +476,9 @@ impl Gallery {
         }
         if changed(v.reflection_motion) {
             self.reflection_motion = s.get(v.reflection_motion);
+        }
+        if changed(v.decal_reflections) {
+            self.renderer.decal_mirrors = s.get(v.decal_reflections);
         }
         if changed(v.sky_light) {
             self.sky_light = s.get(v.sky_light);

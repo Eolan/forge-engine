@@ -726,7 +726,9 @@ struct GpuFrame {
     /// skips the movers' structure, which it walks otherwise even when it can hit none of them
     /// (an authored city's 549 turning fans, 0.4 ms of its night's rays).
     movers_rays: u32,
-    movers_pad: u32,
+    /// More switches than `flags` holds (`OPTION_*` in `meshlet.slang`): bit 0 the decals' mirror
+    /// rays ([`MeshletRenderer::decal_mirrors`]).
+    options: u32,
     /// The ground window (#197): min x, min z, max x, max z in the scene's frame, where the
     /// windowed ground draws no fragment (min > max: none).
     ground_window: [f32; 4],
@@ -2770,6 +2772,7 @@ impl MeshletSceneBuilder {
             rays.set_materials(materials.address());
         }
         // The decals' tables, then the record the frame points at (D-074).
+        let decals_smooth = self.decals.kinds.iter().any(|k| k.roughness.is_some());
         let decals = match self.decals.tables(|id| {
             self.textures
                 .as_ref()
@@ -2938,6 +2941,7 @@ impl MeshletSceneBuilder {
                 .collect::<Result<Vec<_>>>()?,
             lamp_counts: std::array::from_fn(|_| Cell::new([0; 2])),
             near_lamps: std::array::from_fn(|_| Cell::new(false)),
+            decals_smooth: decals_smooth && decals.is_some(),
             decals,
             far_lamps,
             far_retired: Vec::new(),
@@ -3166,6 +3170,9 @@ pub struct MeshletScene {
     /// Its decals' tables and the record pointing into them (D-074, [`MeshletSceneBuilder::set_decals`]),
     /// none without decals.
     decals: Option<(Buffer, Buffer)>,
+    /// Whether a kind of its decals lays a roughness map: only then may a decal smooth a pixel into
+    /// the mirror rays' reach (#395, [`MeshletRenderer::decal_mirrors`]).
+    decals_smooth: bool,
     /// The street lamps lit beyond each frame's set (#284, [`MeshletSceneBuilder::set_far_lamps`]),
     /// none without.
     far_lamps: Option<FarLampBuffers>,
@@ -4478,6 +4485,12 @@ pub struct MeshletRenderer {
     /// D-088's diffuse bounce traced per pixel before the resolve (`r.gi.trace`,
     /// [`MeshletRenderer::trace_diffuse`]), in place of the probes' light and GTAO.
     pub gi_trace: bool,
+    /// A standard pixel whose colour decals smooth it into the mirror rays' reach (a puddle on
+    /// rough ground) traces a mirror ray at that roughness, as a smooth row's pixel does (#395,
+    /// `r.reflections.decals`). On by default, for a scene one of whose decal kinds lays a
+    /// roughness map (the others draw as before, to the bit); off, it takes the probes' dimmed sky
+    /// as before.
+    pub decal_mirrors: bool,
 }
 
 /// What to draw this frame.
@@ -5071,6 +5084,7 @@ impl MeshletRenderer {
             show_input: 0,
             gi_reference: 0,
             gi_trace: false,
+            decal_mirrors: true,
         })
     }
 
@@ -5575,7 +5589,7 @@ impl MeshletRenderer {
             skin_vertices: scene.skins.as_ref().map_or(0, SceneSkins::vertices_address),
             skin_joints: scene.skins.as_ref().map_or(0, SceneSkins::joints_address),
             movers_rays: scene.movers_rays(),
-            movers_pad: 0,
+            options: u32::from(self.decal_mirrors && scene.decals_smooth),
             ground_window: scene.ground_window.get(),
             planet: scene.planet.get().camera,
             planet_axis: scene.planet.get().axis,

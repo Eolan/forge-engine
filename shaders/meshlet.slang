@@ -413,7 +413,8 @@ public struct DecalKind
     public float4 uv_rect;   // the part of its texture it shows: u, v of its corner, its width and height
     public uint roughness;   // a colour decal's roughness map (its red plus `roughness_bias`), TEXTURE_NONE without
     public float roughness_bias;
-    public uint2 pad;
+    public float roughness_strength; // the share of its coverage its roughness map takes (its texture's alpha times this, with its fades)
+    public uint pad;
 };
 
 // How a decal kind's texture gives its colour and coverage (`DecalAlpha`): its colour premultiplied
@@ -546,7 +547,7 @@ public struct Frame
     public SkinVertex* skin_vertices;  // their vertices in the bind pose, from which their textures are projected (#166)
     public float4* skin_joints;        // this frame's joints' matrices, three rows each: they turn the textures' relief with the body
     public uint movers_rays;        // the worlds of rays (RAY_*) some mover is met by: the others skip their structure (`movers_tlas`)
-    public uint movers_pad;
+    public uint options;            // more switches than `flags` holds: OPTION_*
     public float4 ground_window;    // the ground window (#197): min x, min z, max x, max z in the scene's frame, where MESH_WINDOWED_GROUND meshes draw no fragment (min > max: none)
     public float4 planet;           // the planet the scene stands on (#220): the camera from its centre, world axes (xyz), and its height over the sea (w), metres
     public float4 planet_axis;      // its north (xyz) and its radius at the sea's level (w, metres; 0: none)
@@ -3743,6 +3744,14 @@ static float4 g_reflection_request;
 // the ray's light: with the luminance alone, the chart's smooth gold balls reflected grey, red
 // 0.85 of Falcor's and blue 1.35 (the owner, 2026-10-31).
 static float3 g_reflection_tint = float3(1.0);
+// The share of the traced reflection a pixel takes (`sky_reflection`): 1, or for a pixel its decals
+// smoothed into the mirror rays' reach (#395) the share they laid, so that a puddle's edge fades
+// from the probes' sky to its ray's.
+static float g_traced_scale = 1.0;
+// The share of its reflection a decal-smoothed pixel's ray must carry to be traced, and from which
+// it carries all of it (#395): a puddle's middle, 1; the edge fades in between.
+static const float DECAL_MIRROR_LEAST = 0.5;
+static const float DECAL_MIRROR_WHOLE = 0.8;
 
 // Set by `lamps_at` for the pixel being shaded (D-065): the lamps' light on it in the resolve's
 // units (a white Lambertian surface facing the sun is 1), and their highlights; `sun_light` adds
@@ -4319,7 +4328,7 @@ float3 sky_reflection(float4* sky, float3 irradiance, float3 n, float3 view, flo
     float3 forward = sky[SH_COEFFICIENTS + 1].xyz;
     // Luminance per unit of sun illuminance, times π: the resolve's units. The traced share
     // takes the open sky, which its ray's hit replaces; the rest the probes' share of it.
-    float traced_share = traced ? mirror_ray_share(roughness) : 0.0;
+    float traced_share = traced ? mirror_ray_share(roughness) * g_traced_scale : 0.0;
     float3 open = sky_view_luminance(uint(up_table.w + 0.5), up_table.xyz, forward, r) * 3.14159265;
     float3 mirror = open * lerp(sky_share, float3(1.0), traced_share);
     float blend = saturate(2.0 * roughness * roughness);
@@ -4803,11 +4812,14 @@ void apply_decals(Frame* f, Surface s, inout float3 albedo, inout float3 n, inou
                 bend += (slope.x * T - slope.y * B) * (k.normal_strength * t.a * strength);
             }
             float cover = saturate(t.a * strength);
-            if (k.roughness != TEXTURE_NONE && cover > 0.0)
+            // Its roughness at its own share (`DecalKind::roughness_strength`, #395: a puddle's
+            // colour a third over the ground, its smoothness whole).
+            float rough_cover = saturate(t.a * (facing * depth * k.roughness_strength));
+            if (k.roughness != TEXTURE_NONE && rough_cover > 0.0)
             {
                 // The roughness it lays over what lies under it, where it covers.
                 float laid = saturate(sample_image_grad(k.roughness, k.sampler, uv, gx, gy).r + k.roughness_bias);
-                rough = float2(rough.x * (1.0 - cover) + laid * cover, rough.y * (1.0 - cover));
+                rough = float2(rough.x * (1.0 - rough_cover) + laid * rough_cover, rough.y * (1.0 - rough_cover));
             }
             else if (cover > 0.0 && rough.y < 1.0)
             {
@@ -4985,6 +4997,7 @@ struct LightInputs
     float metal;        // its metalness (the debug views)
     float variance;     // its normal map's spread under the pixel, Toksvig's (the debug views)
     float bumps;        // the share of a light its normal map's bumps keep, in `albedo` (#373)
+    float laid;         // the share of its roughness its colour decals laid where they made it smoother (#395): 0 where none
 };
 
 // A debug view of a standard row's shading input (D-086, `r.show.input`): 1 the diffuse albedo,
@@ -5085,6 +5098,7 @@ LightInputs uv_mapped_light(Frame* f, Material mat, Surface s)
     }
     n = decal_bent(n, decal_bend);
     // The decals' roughness over the surface's (`apply_decals`): as it was where none lies.
+    float undecaled = roughness;
     roughness = roughness * decal_rough.y + decal_rough.x;
     float alpha = clamp(roughness, 0.02, 1.0);
     alpha *= alpha;
@@ -5107,6 +5121,8 @@ LightInputs uv_mapped_light(Frame* f, Material mat, Surface s)
     li.metal = metal;
     li.variance = variance;
     li.bumps = bumps;
+    // Their share where they made it smoother (a puddle), none where they roughened it.
+    li.laid = roughness < undecaled ? 1.0 - decal_rough.y : 0.0;
     return li;
 }
 
@@ -5200,6 +5216,7 @@ LightInputs multilayer_light(Frame* f, Material mat, Surface s)
         li.metal = lerp(li.metal, l.metal, w);
         li.variance = lerp(li.variance, l.variance, w);
         li.bumps = lerp(li.bumps, l.bumps, w);
+        li.laid = lerp(li.laid, l.laid, w);
     }
     return li;
 }
@@ -5388,6 +5405,7 @@ StandardInputs row_inputs(Material mat, Surface s)
     si.li.metal = 0.0;
     si.li.variance = 0.0;
     si.li.bumps = 1.0;
+    si.li.laid = 0.0;
     si.n = s.n;
     si.uv = false;
     si.interior = false;
@@ -5413,6 +5431,7 @@ StandardInputs standard_inputs(Frame* f, Material mat, Surface s)
     li.metal = 0.0;
     li.variance = 0.0;
     li.bumps = 1.0;
+    li.laid = 0.0;
     bool uv = false;
     bool interior = false;
     if (!debug_albedo(f, s.meshlet_index, s.lod_level, albedo))
@@ -5439,7 +5458,9 @@ StandardInputs standard_inputs(Frame* f, Material mat, Surface s)
             apply_colour_decals(f, s, albedo, decal_bend, decal_rough);
             li.albedo = albedo;
             li.n = decal_bent(n, decal_bend);
+            float undecaled = li.power;
             li.power = decal_power(li.power, decal_rough);
+            li.laid = li.power > undecaled ? 1.0 - decal_rough.y : 0.0;
             li.emissive = emission(f, mat);
         }
     }
@@ -7561,16 +7582,32 @@ float3 shade_jelly(Frame* f, Material mat, Surface s, uint instance, bool traced
 // traces (issue #52), and the bit `shade_pixel` returns for such a pixel.
 static const uint REFLECTION_LIST = MATERIAL_CLASSES;
 static const uint REFLECT_BIT = 0x100u;
+// ...and for a standard row's pixel that asked for no ray where the reflections pass may read its
+// request (#395): its tile, if listed, writes it a request of none.
+static const uint UNASKED_BIT = 0x200u;
 
-// Whether a pixel of `mat` traces a mirror ray: the smooth rows, under a sky, with a scene
-// structure and both reflection flags.
-bool wants_mirror_ray<let SHADOWS : int>(Frame* f, Material mat)
+// `Frame::options`: the pixels its colour decals smoothed trace mirror rays too (#395,
+// `MeshletRenderer::decal_mirrors`, `r.reflections.decals`), where a decal kind of the scene lays a
+// roughness map: only then do its standard pixels write a request of none and `reflections_main`
+// read theirs, so that a scene without one draws as before.
+static const uint OPTION_DECAL_MIRRORS = 1u;
+
+// Whether the frame traces mirror rays from the pixels of `mat`, however smooth: under a sky, with
+// a scene structure and both reflection flags.
+bool mirror_rays_on<let SHADOWS : int>(Frame* f, Material mat)
 {
     const uint flags = FLAG_SKY_REFLECTIONS | FLAG_RAY_REFLECTIONS;
     return SHADOWS != 0 && f[0].tlas != 0 && f[0].rt_scene != nullptr && resolve_push.sky != nullptr
-        && (f[0].flags & flags) == flags && mat.specular_power >= RAY_REFLECTION_POWER
+        && (f[0].flags & flags) == flags
         && mat.class_index != MATERIAL_CLASS_JELLY // it traces its own, from its surface (#180)
         && (f[0].flags & FLAG_SHOW_GI) == 0;
+}
+
+// Whether a pixel of `mat` traces a mirror ray: the smooth rows (`mirror_rays_on`). A standard
+// pixel its decals smoothed traces one too (`shade_pixel`, #395).
+bool wants_mirror_ray<let SHADOWS : int>(Frame* f, Material mat)
+{
+    return mirror_rays_on<SHADOWS>(f, mat) && mat.specular_power >= RAY_REFLECTION_POWER;
 }
 
 // The turn the skin gives a bind-pose vertex `v` this frame: its joints' matrices (`base` the
@@ -7944,6 +7981,28 @@ uint shade_pixel<let SHADOWS : int>(uint class_index, uint2 pixel, uint vis)
     // normal, lobe and reflectance, where they took the row's factors (on a mapped row roughness
     // 1: the Bistro's scooter matte under its lamps). The other classes, their rows' factors.
     StandardInputs si = class_index == MATERIAL_CLASS_STANDARD ? standard_inputs(f, mat, s) : row_inputs(mat, s);
+    // A standard pixel its colour decals smoothed into the mirror rays' reach (a puddle on rough
+    // ground, #395) traces one too, at its own roughness, which the request's lower half carries
+    // to `reflections_main` (0 there: the row's). By its row alone it took the probes' dimmed sky.
+    float laid_roughness = 0.0;
+    g_traced_scale = 1.0;
+    if (!mirror_ray && !grass && class_index == MATERIAL_CLASS_STANDARD && si.li.laid > 1e-3
+        && si.li.power >= RAY_REFLECTION_POWER && (f[0].options & OPTION_DECAL_MIRRORS) != 0u
+        && mirror_rays_on<SHADOWS>(f, mat))
+    {
+        // Its ray's share (the row's at that roughness, times what the decals laid), from
+        // DECAL_MIRROR_LEAST, faded in up to DECAL_MIRROR_WHOLE: a decal's glossy paint (a logo, a
+        // graffiti's, roughness 0.3 to 0.4) took rays for a few percent of its reflection.
+        float rough = sqrt(sqrt(2.0 / (si.li.power + 2.0)));
+        float share = mirror_ray_share(rough) * saturate(si.li.laid);
+        if (share > DECAL_MIRROR_LEAST)
+        {
+            mirror_ray = true;
+            s.traced = resolve_push.request_image != 0xFFFFFFFFu;
+            laid_roughness = rough;
+            g_traced_scale = saturate(si.li.laid) * smoothstep(DECAL_MIRROR_LEAST, DECAL_MIRROR_WHOLE, share);
+        }
+    }
     // D-088's references for the diffuse light (`r.gi.reference`), or its bounce traced before
     // the resolve (`diffuse_trace_main`, the high half of the sun shadow's word).
     uint bounce_image = resolve_push.sun_shadow >> 16;
@@ -8028,10 +8087,15 @@ uint shade_pixel<let SHADOWS : int>(uint class_index, uint2 pixel, uint vis)
     {
         RWTexture2D<float4> requests = g_storage_images_rgba16f[NonUniformResourceIndex(resolve_push.request_image)];
         requests[pixel] = g_reflection_request;
-        // Its colour in the image's lower half (the image is twice the frame's height).
-        requests[pixel + uint2(0u, resolve_push.height)] = float4(g_reflection_tint, 0.0);
+        // Its colour in the image's lower half (the image is twice the frame's height), and the
+        // roughness its decals laid (0: its row's).
+        requests[pixel + uint2(0u, resolve_push.height)] = float4(g_reflection_tint, laid_roughness);
     }
-    return class_index | (mirror_ray ? REFLECT_BIT : 0u);
+    // No ray asked where `reflections_main` may read one (a standard row's pixel, #395):
+    // `resolve_standard` writes it a request of none if its tile is listed.
+    bool unasked = !s.traced && (f[0].options & OPTION_DECAL_MIRRORS) != 0u && class_index == MATERIAL_CLASS_STANDARD
+        && !grass && resolve_push.request_image != 0xFFFFFFFFu && mirror_rays_on<SHADOWS>(f, mat);
+    return class_index | (mirror_ray ? REFLECT_BIT : 0u) | (unasked ? UNASKED_BIT : 0u);
 }
 
 // One thread per pixel of an 8×8 tile: empty pixels get the background (when there is one),
@@ -8045,12 +8109,13 @@ void resolve_standard<let SHADOWS : int>(uint3 group, uint3 thread, uint index)
     GroupMemoryBarrierWithGroupSync();
     uint2 pixel = group.xy * 8 + thread.xy;
     uint others = 0;
+    uint shaded = 0u;
     if (pixel.x < resolve_push.width && pixel.y < resolve_push.height)
     {
         uint vis = g_sampled_images_u32[NonUniformResourceIndex(resolve_push.vis_image)].Load(int3(pixel, 0));
         if (vis != VISIBILITY_EMPTY)
         {
-            uint shaded = shade_pixel<SHADOWS>(MATERIAL_CLASS_STANDARD, pixel, vis);
+            shaded = shade_pixel<SHADOWS>(MATERIAL_CLASS_STANDARD, pixel, vis);
             uint class_index = shaded & 0xFFu;
             if (class_index != MATERIAL_CLASS_STANDARD)
                 others = 1u << class_index;
@@ -8066,6 +8131,10 @@ void resolve_standard<let SHADOWS : int>(uint3 group, uint3 thread, uint index)
     if (WaveIsFirstLane() && others != 0)
         InterlockedOr(g_tile_classes, others);
     GroupMemoryBarrierWithGroupSync();
+    // A request of none where the reflections pass will visit and no ray was asked (#395): every
+    // pixel it may read in a listed tile then holds this frame's.
+    if ((shaded & UNASKED_BIT) != 0u && ((g_tile_classes >> REFLECTION_LIST) & 1u) != 0u)
+        g_storage_images_rgba16f[NonUniformResourceIndex(resolve_push.request_image)][pixel] = float4(0.0);
     if (index > MATERIAL_CLASS_STANDARD && index <= REFLECTION_LIST && ((g_tile_classes >> index) & 1u) != 0)
     {
         uint slot;
@@ -8154,13 +8223,18 @@ void reflections_main(uint3 group : SV_GroupID, uint3 thread : SV_GroupThreadID)
     Instance inst = f[0].instances[record.x];
     Meshlet m = f[0].meshlets[record.y & MESHLET_INDEX_MASK];
     Material mat = f[0].materials[inst.material + triangle_section(m, tri)];
-    if (!wants_mirror_ray<1>(f, mat))
+    // A smooth row's pixel, or a standard row's its decals may have smoothed (#395): its request
+    // says (every such pixel writes one, none where no ray is asked), with the decals' roughness.
+    bool row_traced = wants_mirror_ray<1>(f, mat);
+    if (!row_traced && !((f[0].options & OPTION_DECAL_MIRRORS) != 0u && mat.class_index == MATERIAL_CLASS_STANDARD
+        && mirror_rays_on<1>(f, mat)))
     {
         carry_reflection(pixel);
         return;
     }
     float4 request = g_storage_images_rgba16f[NonUniformResourceIndex(resolve_push.request_image)][pixel];
-    if (request.w <= 0.0)
+    float laid_roughness = row_traced ? 0.0 : g_storage_images_rgba16f[NonUniformResourceIndex(resolve_push.request_image)][pixel + uint2(0u, resolve_push.height)].a;
+    if (request.w <= 0.0 || (!row_traced && laid_roughness <= 0.0))
     {
         carry_reflection(pixel);
         return;
@@ -8194,7 +8268,7 @@ void reflections_main(uint3 group : SV_GroupID, uint3 thread : SV_GroupThreadID)
     // as finely as a mirror's would bring back #306's hatch of streaks.
     float spread = f[0].texture_lod_scale / (f[0].p11 * 0.5 * f[0].viewport_height);
     float travelled = length(mul(frame, object_position) + relative);
-    float rough = sqrt(sqrt(2.0 / (mat.specular_power + 2.0)));
+    float rough = laid_roughness > 0.0 ? laid_roughness : sqrt(sqrt(2.0 / (mat.specular_power + 2.0)));
     float4 hit = trace_reflection_seen(f, sky, resolve_push.probes, world + n * 0.05, request.xyz, uint(pixel.x) * 0x8DA6B343u ^ uint(pixel.y) * 0xD8163841u, mirror_start(f, inst, m), spread, travelled, 2.0 * rough * rough, distance, mover);
     ReflectionHistory* history = resolve_push.reflection_history;
     // The pixel's motion vector moved towards its reflection's virtual point (`r.reflections.motion`,

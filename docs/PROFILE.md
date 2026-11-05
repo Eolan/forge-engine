@@ -2935,6 +2935,15 @@ street 5.8 / 8.7. VRAM 3.9 GB (2.3 GB geometry: #387, pages about a tenth full).
   without, 16.00 and 15.71 with: within the runs' spread (the 16.00 run's probe rays read 0.7 ms
   slow on their own). The aerosols (`Look::aerosols`) change the atmosphere's tables, not their
   cost.
+- **The puddles' mirror rays** (#395, 2026-11-05; the same path and runs, `r.reflections.decals`
+  0 against 1):
+  - **Every pixel its decals smoothed traced:** the frame 15.63 and 15.74 ms → 16.28 and 16.49
+    (`gi/probe rays` +0.28, the rays contending on the async queue; `shading/standard` +0.16,
+    `shading/reflections` +0.14). The district's glossy paint decals (logos, graffiti, roughness
+    0.3 to 0.4) took rays for a few percent of their reflection.
+  - **From half its reflection** (`DECAL_MIRROR_LEAST`, faded in to 0.8; kept): 15.67 and 15.81 ms
+    without, 15.71 and 15.86 with; `shading/reflections` 0.220 and 0.240 → 0.260 and 0.263,
+    `shading/standard` +0.03. Only scenes whose decals lay a roughness map run either.
 
 ## Instances scaled per axis: the 96-byte record (#380, 2026-11-01)
 

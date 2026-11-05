@@ -88,14 +88,22 @@ pub struct DecalKind {
     pub normal_strength: f32,
     /// A colour decal's roughness map (D-074, #393), read as its texture is: its red plus
     /// [`Self::roughness_bias`], clamped to 0 to 1, is the (perceptual) roughness it lays where it
-    /// covers the surface (its alpha times its strength), painted over the surface's own as its
-    /// colour is: a stain of wet blood glossy on dry asphalt, a logo's paint on a matt wall. The
-    /// map is linear (uploaded with `srgb` false). Every class takes it, the layered ground too.
+    /// covers the surface (its alpha times [`Self::roughness_strength`], with its fades), painted
+    /// over the surface's own as its colour is: a stain of wet blood glossy on dry asphalt, a
+    /// logo's paint on a matt wall. The map is linear (uploaded with `srgb` false). Every class
+    /// takes it, the layered ground too.
     /// `None`: the surface's own roughness where it covers (Forge's own decals): it covers a
     /// roughness another decal laid under it, as it covers that decal's relief.
     pub roughness: Option<TextureId>,
     /// Added to [`Self::roughness`]'s red before it is clamped (0: as the map gives it).
     pub roughness_bias: f32,
+    /// The share of its coverage [`Self::roughness`] takes: its texture's alpha times this, with
+    /// its facing and depth fades (#395: a puddle's colour a third over the ground, its smoothness
+    /// whole, as the source's material gives it). None: its strength (`tint`'s alpha), as its
+    /// colour's. A standard row's pixel whose decals lower its roughness into the mirror rays'
+    /// reach traces one, its share by how much they laid (#395, `r.reflections.decals`); the
+    /// layered ground and the other classes keep their rows' reflections.
+    pub roughness_strength: Option<f32>,
 }
 
 /// A decal: a box in the scene's frame and its kind.
@@ -160,10 +168,12 @@ struct GpuDecalKind {
     normal: u32,
     normal_strength: f32,
     uv_rect: [f32; 4],
-    /// Its roughness map, `TEXTURE_NONE` without one, and the bias added to its red.
+    /// Its roughness map, `TEXTURE_NONE` without one, the bias added to its red, and the share of
+    /// its coverage it takes.
     roughness: u32,
     roughness_bias: f32,
-    pad: [u32; 2],
+    roughness_strength: f32,
+    pad: u32,
 }
 
 const _: () = assert!(std::mem::size_of::<GpuDecalKind>() == 96);
@@ -287,7 +297,12 @@ impl DecalSet {
                 } else {
                     0.0
                 },
-                pad: [0; 2],
+                roughness_strength: k
+                    .roughness_strength
+                    .filter(|s| s.is_finite())
+                    .unwrap_or(k.tint[3])
+                    .max(0.0),
+                pad: 0,
             })
             .collect();
         let mut bytes: Vec<u8> = Vec::new();
@@ -326,6 +341,7 @@ mod tests {
             normal_strength: 1.0,
             roughness: None,
             roughness_bias: 0.0,
+            roughness_strength: None,
         }
     }
 
@@ -450,5 +466,41 @@ mod tests {
             (crate::material::TEXTURE_NONE, 0.0)
         );
         assert_eq!((kinds[1].roughness, kinds[1].roughness_bias), (109, -0.7));
+    }
+
+    #[test]
+    fn a_kind_lays_its_roughness_at_its_own_share() {
+        // Its strength by default, its own when given (#395).
+        let glossy = DecalKind {
+            roughness: Some(TextureId(9)),
+            roughness_bias: -0.7,
+            ..kind(1)
+        };
+        let set = DecalSet {
+            kinds: vec![glossy],
+            decals: vec![decal(0.0, 0.0, 0)],
+        };
+        let t = set.tables(|id| id.0).expect("tables");
+        let kinds: &[GpuDecalKind] = bytemuck::cast_slice(&t.bytes[t.kinds as usize..]);
+        assert_eq!(kinds[0].roughness_strength, 1.0);
+        let puddle = DecalKind {
+            tint: [0.02, 0.02, 0.02, 0.3],
+            roughness_strength: Some(1.0),
+            ..glossy
+        };
+        let faint = DecalKind {
+            tint: [1.0, 1.0, 1.0, 0.3],
+            ..glossy
+        };
+        let set = DecalSet {
+            kinds: vec![puddle, faint],
+            decals: vec![decal(0.0, 0.0, 1)],
+        };
+        let t = set.tables(|id| id.0).expect("tables");
+        let kinds: &[GpuDecalKind] = bytemuck::cast_slice(&t.bytes[t.kinds as usize..]);
+        assert_eq!(
+            (kinds[0].roughness_strength, kinds[1].roughness_strength),
+            (1.0, 0.3)
+        );
     }
 }
