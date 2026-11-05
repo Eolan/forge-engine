@@ -2921,6 +2921,10 @@ street 5.8 / 8.7. VRAM 3.9 GB (2.3 GB geometry: #387, pages about a tenth full).
     with (one run without had the lamps' ReSTIR 0.3 ms faster too).
   - **Left out:** the particles drawn after DLSS at the window's size (16.57 and 17.17 ms against
     16.13 and 16.12, p99 20.0–20.3), and `fog/light` on the async queue (16.47 ms).
+  - **The fog's cull** (`FogParams::cull`, D-099's amendment): `fog/tiles` 0.002 ms and
+    `fog/bound` 0.001 ms, zones that may overlap other work. The bar's clip at 1280 × 720 7.52 →
+    7.18 ms, the street's 7.72 → 7.51. On the path at 2560 × 1440, `fog/light`'s zone 0.49 →
+    0.37; the frame's gain is inside the runs' spread (ReSTIR alone moved 0.26 ms).
   - **`fog/light`'s zone** reads 0.47–0.50 ms beside the particles' draw, which runs at the same
     time with no barrier between them; with no particle alive it reads 0.91 ms (the street at
     1280 × 720). The zones quoted above for it (0.45–0.56 ms) are short in the same way.

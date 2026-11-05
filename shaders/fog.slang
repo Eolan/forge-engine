@@ -56,9 +56,13 @@ struct Fog
     uint history_read;       // sampled index of last frame's history (0xFFFFFFFF: none)
     uint history_write;      // storage index of this frame's history
     uint parity;             // this frame's turn: its history's slot
+    uint tiles;              // storage index of the froxel columns' farthest surfaces (fog_tiles_main)
+    uint tiles_sampled;      // its sampled index (fog_bound_main)
+    uint cull;               // 1: froxels behind every surface in view are not lit (fog_culled)
+    uint bound;              // storage index of each column's last slice lit (fog_bound_main)
+    uint bound_sampled;      // its sampled index (fog_culled)
     uint pad0;
     uint pad1;
-    uint pad2;
 };
 
 // A froxel's own offset added to the frame's (pcg3d, Jarzynski and Olano 2020), so that
@@ -203,11 +207,85 @@ bool fog_history(Fog* g, Frame* f, float2 uv, float t, out float4 previous)
     float4 a = history.SampleLevel(linear, (inside + float2(k * FOG_FROXELS_X, 0.0)) / atlas_size, 0.0);
     float4 b = history.SampleLevel(linear, (inside + float2((k + 1.0) * FOG_FROXELS_X, 0.0)) / atlas_size, 0.0);
     previous = lerp(a, b, s);
-    if (!all(isfinite(previous)))
+    // Not finite (a fault kept in a history would never clear), or reaching a culled froxel.
+    if (!all(isfinite(previous)) || previous.a < 0.0)
         return false;
     float last_exposure = g[0].last_exposure;
     previous.rgb = min(previous.rgb * (last_exposure > 0.0 ? g[0].exposure / last_exposure : 1.0), 65000.0);
     return true;
+}
+
+// The farthest surface each froxel column shows: the largest distance from the camera of the
+// depth's pixels in its screen tile, the sky's (no depth) infinite. Read by fog_light_main's cull.
+[shader("compute")]
+[numthreads(8, 8, 1)]
+void fog_tiles_main(uint3 id : SV_DispatchThreadID)
+{
+    if (id.x >= FOG_FROXELS_X || id.y >= FOG_FROXELS_Y)
+        return;
+    Fog* g = fog_push.fog;
+    float2 size = float2(g[0].width, g[0].height);
+    uint2 lo = uint2(floor(float2(id.xy) * size / float2(FOG_FROXELS_X, FOG_FROXELS_Y)));
+    uint2 hi = min(uint2(ceil(float2(id.xy + 1u) * size / float2(FOG_FROXELS_X, FOG_FROXELS_Y))), uint2(size));
+    Texture2D<float4> depth = g_sampled_images[NonUniformResourceIndex(g[0].depth)];
+    float farthest = 0.0;
+    for (uint y = lo.y; y < hi.y; y++)
+    {
+        for (uint x = lo.x; x < hi.x; x++)
+        {
+            float z = depth.Load(int3(int2(x, y), 0)).r;
+            if (z <= 0.0)
+            {
+                farthest = 1e30;
+                break;
+            }
+            float2 uv = (float2(x, y) + 0.5) / size;
+            float4 p = mul(g[0].inv_view_proj, float4(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, z, 1.0));
+            farthest = max(farthest, length(p.xyz / p.w));
+        }
+        if (farthest >= 1e30)
+            break;
+    }
+    g_storage_images_r32f[NonUniformResourceIndex(g[0].tiles)][id.xy] = farthest;
+}
+
+// A culled froxel's extinction (fog_light_main): far below any real one, so that a history read
+// blending it in at any weight comes out negative and is refused.
+static const float FOG_CULLED = -10000.0;
+
+// Each froxel column's last slice lit: two past the farthest surface its column and the two
+// columns round it each way show (fog/apply reads a pixel's slice and the one before, across one
+// column each way; a history read reaches one slice on and, the jitter shifting it, one column
+// further). Every slice where any of them shows the sky or the volume's end.
+[shader("compute")]
+[numthreads(8, 8, 1)]
+void fog_bound_main(uint3 id : SV_DispatchThreadID)
+{
+    if (id.x >= FOG_FROXELS_X || id.y >= FOG_FROXELS_Y)
+        return;
+    Fog* g = fog_push.fog;
+    Texture2D<float4> tiles = g_sampled_images[NonUniformResourceIndex(g[0].tiles_sampled)];
+    float farthest = 0.0;
+    for (int dy = -2; dy <= 2; dy++)
+    {
+        for (int dx = -2; dx <= 2; dx++)
+        {
+            int2 at = clamp(int2(id.xy) + int2(dx, dy), int2(0), int2(FOG_FROXELS_X - 1, FOG_FROXELS_Y - 1));
+            farthest = max(farthest, tiles.Load(int3(at, 0)).r);
+        }
+    }
+    float last = farthest < g[0].camera.w
+        ? floor(float(FOG_SLICES) * sqrt(farthest / g[0].camera.w)) + 2.0
+        : float(FOG_SLICES);
+    g_storage_images_r32f[NonUniformResourceIndex(g[0].bound)][id.xy] = last;
+}
+
+// Whether froxel `id` lies past its column's last slice lit (fog_bound_main): no pixel's fog reads
+// it, so it is not lit.
+bool fog_culled(Fog* g, uint3 id)
+{
+    Texture2D<float4> bound = g_sampled_images[NonUniformResourceIndex(g[0].bound_sampled)];
+    return float(id.z) > bound.Load(int3(int2(id.xy), 0)).r;
 }
 
 [shader("compute")]
@@ -221,7 +299,14 @@ void fog_light_main(uint3 id : SV_DispatchThreadID)
     float2 middle_uv = (float2(id.xy) + 0.5) / float2(FOG_FROXELS_X, FOG_FROXELS_Y);
     float near = fog_slice_distance(g, float(id.z));
     float far = fog_slice_distance(g, float(id.z) + 1.0);
-    // The history first: last frame's volume where this froxel's middle stood then.
+    // Behind every surface in view: not lit, marked (FOG_CULLED) so that the integration skips it and
+    // a history read reaching it is refused (the froxel then lit afresh: no stale light fading in).
+    if (g[0].cull != 0u && fog_culled(g, id))
+    {
+        g_storage_images_rgba16f[NonUniformResourceIndex(g[0].history_write)][uint2(id.z * FOG_FROXELS_X + id.x, id.y)] = float4(0.0, 0.0, 0.0, FOG_CULLED);
+        return;
+    }
+    // The history: last frame's volume where this froxel's middle stood then.
     float4 previous;
     bool remembered = fog_history(g, f, middle_uv, 0.5 * (near + far), previous);
     // With it, a point jittered within the froxel (the frame's offset and the froxel's own), the
@@ -430,6 +515,9 @@ void fog_integrate_main(uint3 id : SV_DispatchThreadID)
     {
         uint2 texel = uint2(k * FOG_FROXELS_X + id.x, id.y);
         float4 l = light[texel];
+        // A culled froxel (behind every surface in view) adds nothing.
+        if (l.a < 0.0)
+            l = float4(0.0);
         float dt = fog_slice_distance(g, float(k) + 1.0) - fog_slice_distance(g, float(k));
         float segment = exp(-l.a * dt);
         gathered += transmittance * (l.a > 1e-7 ? l.rgb * (1.0 - segment) / l.a : l.rgb * dt);

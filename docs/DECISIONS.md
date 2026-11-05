@@ -11228,6 +11228,32 @@ the camera moved.
 - **Patents:** none found in a search (2026-11-05). The method has been public in shipped engines
   since 2014 and in open source since (Unreal, Godot, Flax).
 
+**The cull (the same day, `FogParams::cull`, on; `--no-fog-cull` the A/B).** No pixel reads the
+froxels that lie behind every surface in view, so they are not lit.
+- **The bound:** `fog/tiles` takes each froxel column's farthest surface from the depth (the sky's
+  infinite). `fog/bound` turns it into the last slice lit: two past the farthest of the column
+  and the two columns round it each way.
+  - `fog/apply` filters across one column each way and between two slices.
+  - A history read reaches a slice on and, shifted by the jitter, a column further. With the
+    eight neighbours alone, a froxel by a silhouette lost its history every other frame (the
+    review).
+  - A froxel past that slice is skipped.
+- **The history:** a skipped froxel is marked (an extinction of −10,000, which `fog/integrate`
+  takes as empty). A history read that reaches a mark at any weight is refused, so a froxel
+  uncovered as the camera moves is lit afresh.
+  - **Tried and left out:** carrying a skipped froxel's history forward instead. Where the bar's
+    far end came out from behind a pillar, its haze stayed dim for frames: 4.8 % of the frame over
+    2 codes, up to 65. Marked, with the bound above, 0.67 %, up to 29, and it looks the same.
+- **On a still camera:** 1–2 codes on about 1 % of the pixels. More than 2 codes on 27 pixels in
+  the bar, 203 in the street. The shimmer is the same: the bar 0.937 % against 0.936 %, the street
+  11.13 % both (its steam moving; measured with the eight-column bound).
+- **The cost:** `fog/tiles` and `fog/bound` read 0.002 and 0.001 ms; their zones may overlap other
+  work.
+  - At 1280 × 720, DLSS Quality: the bar's clip 7.52 → 7.18 ms, the street's 7.72 → 7.51 ms.
+  - The district's path at 2560 × 1440: `fog/light`'s zone 0.49 → 0.37 ms. The frame's gain is
+    inside the runs' spread there: the lamps' ReSTIR alone moved by 0.26 ms between runs. Most
+    of the path is outdoors, its far views reaching the volume's end.
+
 ## D-100 — A scene's own colour grading: a 3-D LUT after a log encoding, as a display transform ✅ (proposed 2026-11-05; the owner's go the same day: "Follow recommendations"; D-045, D-083, D-084, D-094)
 
 **The need.** The private district's look is graded by its source.

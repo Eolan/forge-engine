@@ -4,8 +4,11 @@
 //! meets its column of the lamps' grid (#386, unshadowed), by the sun through a shadow ray and by
 //! the probes' light (the sky's and the scene's bounce, glowing surfaces' included).
 //!
-//! Three graph passes a frame, over the HDR image before the upscaler:
-//! - `fog/light`: per froxel (160 × 90 × 64, quadratic in depth to the volume's far end), the
+//! Five graph passes a frame, over the HDR image before the upscaler:
+//! - `fog/tiles` and `fog/bound` ([`FogParams::cull`]): each froxel column's farthest surface,
+//!   from the depth, and the last slice lit, two past the farthest of the columns round it;
+//! - `fog/light`: per froxel up to that slice (160 × 90 × 64, quadratic in depth to the volume's
+//!   far end; those behind are marked, and a history reaching one is refused), the
 //!   medium (the boxes there in priority order, each over the others by its edges' fade) and the
 //!   light it scatters towards the camera (Henyey–Greenstein for the lamps and the sun; the
 //!   probes' light every way alike, from their irradiance up and down), at a point jittered within
@@ -196,7 +199,14 @@ struct GpuFog {
     history_write: u32,
     /// This frame's turn (0 or 1): its history's slot.
     parity: u32,
-    pad: [u32; 3],
+    /// The froxel columns' farthest surfaces (storage, then sampled), and 1 to cull behind them.
+    tiles: u32,
+    tiles_sampled: u32,
+    cull: u32,
+    /// Each column's last slice lit (storage, then sampled).
+    bound: u32,
+    bound_sampled: u32,
+    pad: [u32; 2],
 }
 
 /// What a frame's fog needs.
@@ -253,6 +263,11 @@ pub struct FogParams {
     /// The frame's pre-exposure (the renderer's): last frame's history, lit at its own, is brought
     /// to it.
     pub exposure: f32,
+    /// Froxels behind every surface their column and its neighbours show (two slices past them)
+    /// are not lit: no pixel reads them. They are marked, so that a froxel whose history reaches
+    /// one (uncovered as the camera moves) is lit afresh rather than taking stale light. Off: every
+    /// froxel lit, as before (the A/B).
+    pub cull: bool,
 }
 
 /// A scene's fog everywhere (D-099): an authored environment's volumetric fog, the boxes laid
@@ -273,6 +288,8 @@ pub struct GlobalFog {
 pub struct FogVolume {
     light: Pipeline,
     integrate: Pipeline,
+    tiles: Pipeline,
+    bound: Pipeline,
     apply: Pipeline,
     params: Vec<Buffer>,
     boxes: Vec<Buffer>,
@@ -317,6 +334,8 @@ impl FogVolume {
         Ok(Self {
             light: compute("fog_light_main", "fog light")?,
             integrate: compute("fog_integrate_main", "fog integrate")?,
+            tiles: compute("fog_tiles_main", "fog tiles")?,
+            bound: compute("fog_bound_main", "fog bound")?,
             apply: compute("fog_apply_main", "fog apply")?,
             params: buffers(std::mem::size_of::<GpuFog>(), "fog")?,
             boxes: buffers(
@@ -361,7 +380,7 @@ impl FogVolume {
         self.last.set(None);
     }
 
-    /// Declares the three passes over `color` (the HDR image, read and written) behind and over
+    /// Declares the passes over `color` (the HDR image, read and written) behind and over
     /// what `depth` shows, the fog of `boxes` that reach the volume (the nearest
     /// [`MAX_FOG_BOXES`]), lit by the frame's lamps (each by its [`crate::lamps::Lamp::fog`]
     /// share) and by `fog_lamps`, lamps of the fog alone in the scene frame (the nearest
@@ -481,6 +500,62 @@ impl FogVolume {
             .sky
             .filter(|_| params.ambient.iter().any(|&a| a > 0.0));
         let probes = params.probes.filter(|_| sky.is_some());
+        // The froxel columns' farthest surfaces and last slices lit, for the cull (`FogParams::cull`).
+        let bound = params.cull.then(|| {
+            let tiles = graph.transient(TransientDesc {
+                name: "fog tiles",
+                width: FROXELS_X,
+                height: FROXELS_Y,
+                format: vk::Format::R32_SFLOAT,
+                usage: vk::ImageUsageFlags::STORAGE | vk::ImageUsageFlags::SAMPLED,
+                aspect: vk::ImageAspectFlags::COLOR,
+                mip_levels: 1,
+            });
+            let pipeline = &self.tiles;
+            graph
+                .pass("fog/tiles")
+                .image(depth, ImageAccess::Sampled(compute))
+                .image(tiles, ImageAccess::StorageWrite(compute))
+                .run(move |resources, commands| {
+                    buffer.write(
+                        std::mem::offset_of!(GpuFog, depth) as u64,
+                        &[resources.sampled(depth).0],
+                    );
+                    buffer.write(
+                        std::mem::offset_of!(GpuFog, tiles) as u64,
+                        &[resources.storage(tiles, 0).0, resources.sampled(tiles).0],
+                    );
+                    commands.bind_pipeline(pipeline);
+                    commands.push_constants(pipeline, &address);
+                    commands.dispatch(FROXELS_X.div_ceil(GROUP), FROXELS_Y.div_ceil(GROUP), 1);
+                    Ok(())
+                });
+            let bound = graph.transient(TransientDesc {
+                name: "fog bound",
+                width: FROXELS_X,
+                height: FROXELS_Y,
+                format: vk::Format::R32_SFLOAT,
+                usage: vk::ImageUsageFlags::STORAGE | vk::ImageUsageFlags::SAMPLED,
+                aspect: vk::ImageAspectFlags::COLOR,
+                mip_levels: 1,
+            });
+            let pipeline = &self.bound;
+            graph
+                .pass("fog/bound")
+                .image(tiles, ImageAccess::Sampled(compute))
+                .image(bound, ImageAccess::StorageWrite(compute))
+                .run(move |resources, commands| {
+                    buffer.write(
+                        std::mem::offset_of!(GpuFog, bound) as u64,
+                        &[resources.storage(bound, 0).0, resources.sampled(bound).0],
+                    );
+                    commands.bind_pipeline(pipeline);
+                    commands.push_constants(pipeline, &address);
+                    commands.dispatch(FROXELS_X.div_ceil(GROUP), FROXELS_Y.div_ceil(GROUP), 1);
+                    Ok(())
+                });
+            bound
+        });
         // On the graphics queue: on the async one it shared the GPU with the lamps' ReSTIR, and the
         // private district's path took longer (2026-11-05). It writes the history alone (the
         // integration reads it) and takes the exposures from the CPU: no transient of its own, no
@@ -491,6 +566,9 @@ impl FogVolume {
             .with(|p| crate::MoversFrame::declare(params.movers, p, compute, true));
         if let Some((last, _)) = last {
             pass = pass.image(last, ImageAccess::Sampled(compute));
+        }
+        if let Some(bound) = bound {
+            pass = pass.image(bound, ImageAccess::Sampled(compute));
         }
         let (prev_view_proj, prev_camera, last_exposure) =
             last.map_or(([0.0; 16], [0.0; 4], 0.0), |(_, (vp, cam, exposure))| {
@@ -575,7 +653,12 @@ impl FogVolume {
                 history_read,
                 history_write,
                 parity: parity as u32,
-                pad: [0; 3],
+                tiles: 0,
+                tiles_sampled: 0,
+                cull: u32::from(params.cull),
+                bound: 0,
+                bound_sampled: 0,
+                pad: [0; 2],
             }],
         );
         pass.run(move |_, commands| {
@@ -661,7 +744,9 @@ mod tests {
     #[test]
     fn the_records_keep_the_shaders_layout() {
         assert_eq!(std::mem::size_of::<GpuFogBox>(), 96);
-        assert_eq!(std::mem::size_of::<GpuFog>(), 368);
+        assert_eq!(std::mem::size_of::<GpuFog>(), 384);
+        assert_eq!(std::mem::offset_of!(GpuFog, tiles), 356);
+        assert_eq!(std::mem::offset_of!(GpuFog, bound), 368);
         assert_eq!(std::mem::offset_of!(GpuFog, prev_view_proj), 240);
         assert_eq!(std::mem::offset_of!(GpuFog, last_exposure), 336);
         assert_eq!(std::mem::offset_of!(GpuFog, frame), 160);

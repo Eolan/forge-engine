@@ -596,6 +596,10 @@ pub struct Args {
     /// amendment, `FogParams::history`: its A/B).
     #[arg(long)]
     pub no_fog_history: bool,
+    /// Every froxel of the fog lit, those behind every surface in view too (the A/B of
+    /// `FogParams::cull`).
+    #[arg(long)]
+    pub no_fog_cull: bool,
     /// The particles drawn into the frame DLSS upscales, as before, not into a layer laid over
     /// its frame (the A/B of `Particles::composite_after_upscale`).
     #[arg(long)]
@@ -4752,6 +4756,7 @@ impl Demo for Gallery {
                     sky: Some(sky.light),
                     history: !self.args.no_fog_history,
                     exposure,
+                    cull: !self.args.no_fog_cull,
                 },
                 boxes,
                 fog_lamps,
