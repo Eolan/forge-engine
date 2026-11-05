@@ -7128,7 +7128,8 @@ questions of `research/decals.md` §11 answered as recommended:
 **Built, colour decals first** (2026-10-19, `forge_render::decals`): `MeshletSceneBuilder::
 set_decals` takes a `DecalSet` (kinds and boxes); the standard, UV-mapped and layered classes
 call `apply_decals` between the row's surface and its lighting. The grid's columns are 4 m (2 m
-and 8 m both cost more in the village), at most 16 decals a column, the non-empty ones in an
+and 8 m both cost more in the village), at most 16 decals a column (32 since 2026-11-05), the
+non-empty ones in an
 open-addressed hash. A kind is one premultiplied RGBA texture for now, a separate image rather
 than a layer of an array (the arrays come with the row decals' masks); a strip repeats along `u`
 from a phase of its own per decal, so neighbouring walls do not repeat it. The city plan's kit
@@ -7198,6 +7199,15 @@ now):
   in the archives). Its broken concrete and rubble now show relief under a low sun (0.02–0.08 % of
   a street view's pixels).
 - **Still waiting:** the decals' roughness and parallax maps.
+
+**32 decals a column** (2026-11-05, #393): the private district's dense walls and pavements had
+more than 16 decals over some 4 m columns. A decal is listed in every column its box spans, and
+749 of those places were left out (a decal left out of one column and kept in the next is cut at
+the 4 m edge). At 32, 77 are.
+- **Cost:** on its benchmark path, `shading/standard` 2.225 → 2.234 ms, within run-to-run noise
+  (the same path read 2.207 ms an hour before).
+- **Elsewhere:** the village's thirteen map-check views log no column over 16, so its tables are
+  the same.
 
 *(research: decals.md; D-007, D-013, D-021, D-026, D-028, D-047, D-065; issue #304)*
 

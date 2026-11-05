@@ -386,8 +386,9 @@ those searches. Family members in other jurisdictions were not checked.
   3. Sample with `SampleGrad`, the gradients being the box's axes dotted with `s.dpdx` and
      `s.dpdy`, through the anisotropic sampler (clamped, or repeating along u).
   4. Blend in list order, normals as surface gradients, resolved once at the end.
-- **Bounds and debugging.** The builder caps a cell at 16 decals and warns beyond. A debug view
-  (`--show-decals`) colours pixels by the number of decals walked.
+- **Bounds and debugging.** The builder caps a cell at 16 decals and warns beyond (32 since
+  2026-11-05, D-074). A debug view colouring pixels by the number of decals walked was planned and
+  not built.
 - **Rays:** none in the first version. Probes and mirror rays see the bare surface.
 
 ### 10.4 Numbers to measure

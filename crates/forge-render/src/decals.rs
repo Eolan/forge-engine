@@ -28,7 +28,7 @@ use glam::{Quat, Vec3};
 pub const CELL: f32 = 4.0;
 /// The most decals a column lists (a pixel walks at most these); more are left out, the lowest
 /// priorities first, with a warning.
-pub const MAX_PER_CELL: usize = 16;
+pub const MAX_PER_CELL: usize = 32;
 
 /// How a kind's texture gives its colour and how much of the surface it covers.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
