@@ -1825,6 +1825,9 @@ something stands out). Two things to watch:
     `shading/standard` 2.180 → 2.207 ms, the frame 14.448 → 14.446 ms. Its decals as a whole
     cost 0.35–0.39 ms (`--no-decals`: the frame 13.68 → 13.33 ms, `shading/standard` 2.157 →
     1.767). A scene without decal normal maps draws to the bit as before.
+  - *2026-11-05, the lamps' shadows in the fog (D-099's option, `--fog-lamp-shadows 4`):* the
+    same path, 5 000 frames each: `fog/light` 0.449 → 0.497 ms, the frame 14.487 → 14.517 ms
+    (p99 16.41 → 16.47). The bar's views at 1600 × 900: `fog/light` +0.05 to 0.07 ms.
   - *2026-10-19, the street lamps beyond the set (#284):* the village at 22:00 under DLAA, EV 3,
     receding from the junction 12 m up for 100 m (3 000 frames, the mean): `shading/standard`
     1.026 → 1.072 ms and the frame 4.916 → 4.955 ms with the far lamps (`--no-far-lamps` the

@@ -11028,3 +11028,36 @@ even and warm as the source's frame shows it: in the benchmark's frame 21 its co
 green 1.31 and blue over green 0.55 (the source 1.20 and 0.41; with 0.8, 0.93 and 0.61). The
 village and the Bistro have no fog volumes and are unchanged.
 
+
+**The lamps' shadows in the fog, the option (2026-11-05, `FogParams::lamp_shadows`, the city
+app's `--fog-lamp-shadows N`, off by default):**
+- **The form:** the patent search above found the threshold form the clearer, and it is built.
+  At each froxel, its strongest lamps are tested by a shadow ray each. There are up to N of them
+  (at most `FOG_SHADOW_RAYS`, 4), each a tenth or more of the froxel's lamps' light. The rest
+  stay unshadowed: the weaker lamps, the lamps of the fog alone, those casting no shadow.
+  - After Ward 1991's adaptive shadow testing, the strongest lights tested: deterministic, no
+    random draw, and no history needed.
+  - The weights are the lamps' unshadowed light, never learned from rays.
+- **The clearance:** a ray ends 30 cm before the lamp's sphere (`FOG_SHADOW_CLEAR`). Ended 5 cm
+  short, the glass under a pendant's bulb met every ray from under it and put out its cone. Within
+  that distance of a lamp, a wall lets its light into the fog behind. A flat piece's ray ends 2 cm
+  short of its middle, as the surfaces' do: a curtain over a panel shades its haze (#370).
+- **Off:** the lamps' sum is computed as before and the shadow block is skipped. The bar's frame
+  without anti-aliasing (1600 × 900) differs from HEAD's shader on 4 of its 1.44 million pixels,
+  by one code value (the compiler's work moved; two runs of the same shader are 0 px apart). Its
+  `fog/light` fell from 0.707 to 0.504 ms (0.708 and 0.502 again; the frame 13.35 → 13.14 ms), the
+  pass compiled differently; why is not established.
+- **Seen in motion:** the fog has no history, so a froxel is shadowed whole or not at all, on
+  the 160 × 90 × 64 grid fixed to the view. Shadow edges near lamps may crawl as the camera
+  moves.
+- **Cost:** the private district's benchmark path (2560 × 1440, DLSS Quality): `fog/light` 0.449
+  → 0.497 ms, the frame 14.49 → 14.52 ms; its bar's views +0.05 to 0.07 ms.
+- **The look:** the pool table's lamp throws its table's and stools' shadows into the haze. The
+  haze leaking through walls is gone.
+- **The source's six interior frames (geometric means, EV against the source's):**
+  - the pool corner +1.66 → +1.27, the next view +0.81 → +0.69;
+  - the landing −0.96 → −3.65 and −0.76 → −2.37.
+
+  The landing had been lit by red haze through its walls. The source, path traced with shadowed
+  fog, keeps it bright, so the landing lacks light of its own, which this shows. **Off by
+  default** until the landing's light is found. The village and the Bistro have no fog volumes.

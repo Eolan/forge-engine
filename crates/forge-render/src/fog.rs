@@ -121,6 +121,10 @@ struct GpuFogBox {
     tint: [f32; 4],
 }
 
+/// The most lamps a froxel tests by a shadow ray ([`FogParams::lamp_shadows`];
+/// `FOG_SHADOW_RAYS` in `fog.slang`).
+pub const FOG_SHADOW_RAYS: u32 = 4;
+
 /// Mirrors `Fog` in `fog.slang`.
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
@@ -171,6 +175,11 @@ pub struct FogParams {
     /// every strong lamp seen through the fog lit a ball of haze round it, 45 times its light
     /// scattered every way alike. Both are held within ±0.95 (at 1 the phase is no longer one).
     pub lamp_anisotropy: f32,
+    /// The lamps' shadows in the fog (D-099's option): at each froxel, its strongest lamps (up to
+    /// this many, at most [`FOG_SHADOW_RAYS`]) that give a tenth or more of its lamps' light, a
+    /// shadow ray to each; the rest unshadowed, as are the lamps of the fog alone and those
+    /// casting no shadow. 0: every lamp unshadowed, the source's raster mode's look.
+    pub lamp_shadows: u32,
     /// The resolve's frame record ([`crate::MeshletRenderer::frame_address`]): its lamps, their
     /// grid, the TLAS.
     pub frame: u64,
@@ -407,7 +416,12 @@ impl FogVolume {
                         params.ambient[1].max(0.0),
                         params.ambient[0].max(0.0),
                     ],
-                    phase: [params.lamp_anisotropy.clamp(-0.95, 0.95), 0.0, 0.0, 0.0],
+                    phase: [
+                        params.lamp_anisotropy.clamp(-0.95, 0.95),
+                        params.lamp_shadows.min(FOG_SHADOW_RAYS) as f32,
+                        0.0,
+                        0.0,
+                    ],
                     frame: params.frame,
                     boxes: boxes_address,
                     fog_lamps: lamps_address,

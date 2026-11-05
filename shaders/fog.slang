@@ -32,7 +32,7 @@ struct Fog
     float4 sun_color;       // rgb: the sunlight's colour; a: the sun's phase anisotropy g
     float4 global;          // the scene's own fog everywhere: x density (1/m), y the height it thins above (the scene frame), z its falloff (1/m), w the share absorbed
     float4 scales;          // x: the sun's light into the fog, y: the lamps', z: the probes' in the boxes (times each one's share), w: the probes' in the fog everywhere
-    float4 phase;           // x: the lamps' phase anisotropy g; yzw 0
+    float4 phase;           // x: the lamps' phase anisotropy g; y: the lamps tested by a shadow ray a froxel (`FogParams::lamp_shadows`); zw 0
     Frame* frame;           // the resolve's frame: its lamps, their grid, the TLAS
     FogBox* boxes;
     Lamp* fog_lamps;        // lamps that light the fog alone (an authored scene's), near the camera
@@ -128,6 +128,21 @@ void fog_medium(Fog* g, float3 world, out float extinction, out float albedo, ou
 // middle. Jittered within the froxel each frame (as D-032's dust is), the volume shimmered with
 // nothing to settle it (a still camera's moving pixels 1.50 → 2.81 % in the private district's
 // bathroom), and a sample landing beside a bulb lit its whole froxel white.
+// The lamps' shadows (D-099's option, `FogParams::lamp_shadows`): a froxel's strongest lamps, up
+// to FOG_SHADOW_RAYS, that give FOG_SHADOW_SHARE or more of its lamps' light are each tested by a
+// shadow ray, the rest left unshadowed (after Ward 1991's adaptive shadow testing, the strongest
+// lights tested: deterministic, no random draw; the weights the lamps' unshadowed light, never
+// learned from rays, D-099's patent rules). Off (0), the lamps' sum is the unshadowed one.
+static const uint FOG_SHADOW_RAYS = 4u;
+static const float FOG_SHADOW_SHARE = 0.1;
+// How far before a lamp's sphere its shadow ray from the fog ends, metres: its own fitting (the
+// glass under a pendant's bulb, a lantern's frame) stands within it. Ended 5 cm short, the
+// fitting met every ray from under a pendant lamp and put out its cone; within this distance of a
+// lamp, a wall lets its light into the fog behind. A flat piece's ray ends 2 cm short of its
+// middle, as `lamp_ray`'s: what covers the piece (a curtain, a window's recess) is in its way
+// (#370).
+static const float FOG_SHADOW_CLEAR = 0.3;
+
 [shader("compute")]
 [numthreads(8, 8, 1)]
 void fog_light_main(uint3 id : SV_DispatchThreadID)
@@ -159,6 +174,19 @@ void fog_light_main(uint3 id : SV_DispatchThreadID)
         // The lamps whose reach meets the froxel's column (every lamp beyond the grid), their
         // light as the light lists weigh it at a surface facing each (lux).
         float3 lamps = float3(0.0);
+        // The strongest shadow-casting lamps so far, strongest first: their index, their light's
+        // luminance and their light.
+        uint shadowed = min(uint(g[0].phase.y), FOG_SHADOW_RAYS);
+        uint top_index[FOG_SHADOW_RAYS];
+        float top_y[FOG_SHADOW_RAYS];
+        float3 top_light[FOG_SHADOW_RAYS];
+        [unroll]
+        for (uint q = 0u; q < FOG_SHADOW_RAYS; q++)
+        {
+            top_index[q] = 0u;
+            top_y[q] = 0.0;
+            top_light[q] = float3(0.0);
+        }
         if (f[0].lamp_count > 0u && f[0].lamps != nullptr)
         {
             LampRuns runs = lamp_runs(f, REGION_NONE, REGION_NONE, world, true);
@@ -166,7 +194,8 @@ void fog_light_main(uint3 id : SV_DispatchThreadID)
             {
                 for (uint e = runs.run[r].x; e < runs.run[r].y; e++)
                 {
-                    Lamp lamp = f[0].lamps[lamp_at(f, runs, e)];
+                    uint index = lamp_at(f, runs, e);
+                    Lamp lamp = f[0].lamps[index];
                     float3 d = lamp.position_radius.xyz - world;
                     float dist2 = dot(d, d);
                     float reach = lamp.colour_reach.w;
@@ -179,7 +208,66 @@ void fog_light_main(uint3 id : SV_DispatchThreadID)
                     float3 lux = lamp.colour_reach.rgb / max(dist2, least * least) * window * window * lamp_beam(lamp, to_lamp);
                     float share = 1.0 - asfloat(lamp.flags.y);
                     lamps += share * lux * fog_phase(dot(-direction, -to_lamp), g[0].phase.x);
+                    // Kept among the strongest, carried down past the weaker ones.
+                    if (shadowed > 0u && (lamp.flags.x & LAMP_SHADOWLESS) == 0u)
+                    {
+                        float3 light = share * lux * fog_phase(dot(-direction, -to_lamp), g[0].phase.x);
+                        float y = dot(light, float3(0.2126, 0.7152, 0.0722));
+                        [unroll]
+                        for (uint q = 0u; q < FOG_SHADOW_RAYS; q++)
+                        {
+                            if (q < shadowed && y > top_y[q])
+                            {
+                                float ty = top_y[q];
+                                uint ti = top_index[q];
+                                float3 tl = top_light[q];
+                                top_y[q] = y;
+                                top_index[q] = index;
+                                top_light[q] = light;
+                                y = ty;
+                                index = ti;
+                                light = tl;
+                            }
+                        }
+                    }
                 }
+            }
+            // Their shadows: each strong lamp a ray to it, its light taken off where it is met. One
+            // ray in a rolled loop (each inlined copy grows the pass, #348); the entry read by
+            // constant indices, so the lists stay in registers.
+            if (shadowed > 0u && f[0].tlas != 0)
+            {
+                float least_y = FOG_SHADOW_SHARE * dot(lamps, float3(0.2126, 0.7152, 0.0722));
+                [loop]
+                for (uint q = 0u; q < shadowed; q++)
+                {
+                    float y = 0.0;
+                    uint index = 0u;
+                    float3 light = float3(0.0);
+                    [unroll]
+                    for (uint p = 0u; p < FOG_SHADOW_RAYS; p++)
+                    {
+                        if (p == q)
+                        {
+                            y = top_y[p];
+                            index = top_index[p];
+                            light = top_light[p];
+                        }
+                    }
+                    if (y <= 0.0 || y < least_y)
+                        break;
+                    Lamp lamp = f[0].lamps[index];
+                    float3 d = lamp.position_radius.xyz - world;
+                    float dist = length(d);
+                    RayDesc ray;
+                    ray.Origin = world;
+                    ray.Direction = d / max(dist, 1e-6);
+                    ray.TMin = 0.0;
+                    ray.TMax = max(dist - (lamp_flat(lamp) ? 0.02 : lamp.position_radius.w + FOG_SHADOW_CLEAR), 0.0);
+                    if (ray.TMax > 0.0 && ray_blocked(f, ray))
+                        lamps -= light;
+                }
+                lamps = max(lamps, float3(0.0));
             }
         }
         // The lamps of the fog alone (an authored scene's lights that light no surface).

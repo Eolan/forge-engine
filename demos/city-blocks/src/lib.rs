@@ -588,6 +588,10 @@ pub struct Args {
     /// it, 0 none (its A/B).
     #[arg(long, default_value_t = 1.0)]
     pub fog_ambient: f32,
+    /// The lamps' shadows in the fog (D-099's option, `FogParams::lamp_shadows`): at each froxel,
+    /// a shadow ray to each of its strongest lamps, up to this many (at most 4); 0 none.
+    #[arg(long, default_value_t = 0)]
+    pub fog_lamp_shadows: u32,
     /// No street lamps beyond the frame's set (#284): their pools go dark past the nearest
     /// lamps the frame lights with shadow rays, as before (the far lamps' A/B).
     #[arg(long)]
@@ -4712,6 +4716,7 @@ impl Demo for Gallery {
                     sun_illuminance: self.renderer.sun_illuminance * exposure,
                     anisotropy: environment.map_or(FOG_ANISOTROPY, |e| e.anisotropy),
                     lamp_anisotropy: FOG_ANISOTROPY,
+                    lamp_shadows: self.args.fog_lamp_shadows,
                     frame: self.renderer.frame_address(frame.slot),
                     movers: targets.movers,
                     global: environment.and_then(|e| e.global),
