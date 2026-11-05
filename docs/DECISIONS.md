@@ -11210,7 +11210,30 @@ not covered):
   weigh it.
 - **So a go would mean volumes too:** settings blended by the camera's place, as engines' post-process
   volumes do (Unreal's since 2014, Unity's Post-processing v2 since 2017).
-- **Patents:** volume blending has not been searched yet. Search before building it.
+- **Patents (searched 2026-11-05, Google Patents with CPC A63F13/52 and some 15 worded searches):**
+  - **Cygames US 12,102,914 B2** (in force, about 2040; JP6987807B2): the closest. Its published
+    claim 1 corrects the camera's image when the player's object enters a correction range set
+    for another object whose movement the game controls. Its dependents add priorities among
+    overlapping ranges and a blend range scaled by distance. World-anchored volumes lack the moved
+    other object, so they do not read on it. **The granted claims could not be read** (the
+    sites refused; snippets say they add the blend range and a saturation change).
+  - **NetEase CN112206519B** (China, about 2040): trigger volumes a character enters, with
+    environment parameters read from a file. Check it before a release in China.
+  - **Capcom JP6457593B1** (Japan): needs a VR headset's three cameras. It is prior art against
+    the above (per-area exposure, colour correction, fog, tone mapping, published January 2019).
+  - **Sony US 2025/0299413 A1:** pending, a shader blended in near water; its claims not read.
+  - **Prior art:** Source's colour correction by distance to an entity (c_colorcorrection.cpp,
+    2005) and its volumes faded over time; Unreal Engine 3's post-process volumes (2007:
+    priority, timed blends); Unreal Engine 4's blend radius, weight and priority (2014); Unity's
+    Post-processing v2 volumes (2017).
+  - **Rules:**
+    1. Volumes anchored to the world (authored with the level), never attached to a character
+       or an object the game moves: no grading aura round an enemy. Read the granted claims of
+       US 12,102,914 before ever building that.
+    2. Weights from the camera's depth into a blend margin, or a fixed time on entry; overlaps
+       by priority, then weight.
+    3. Before a release in China, check CN112206519B; once Sony's application is granted, read
+       its claims.
 
 **For the owner:**
 - go or no-go, and whether it includes grading volumes;
