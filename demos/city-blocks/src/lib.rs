@@ -592,6 +592,14 @@ pub struct Args {
     /// a shadow ray to each of its strongest lamps, up to this many (at most 4); 0 none.
     #[arg(long, default_value_t = 0)]
     pub fog_lamp_shadows: u32,
+    /// Each froxel of the fog at its middle alone, without its history of jittered samples (D-099's
+    /// amendment, `FogParams::history`: its A/B).
+    #[arg(long)]
+    pub no_fog_history: bool,
+    /// The particles drawn into the frame DLSS upscales, as before, not into a layer laid over
+    /// its frame (the A/B of `Particles::composite_after_upscale`).
+    #[arg(long)]
+    pub particles_before_dlss: bool,
     /// No street lamps beyond the frame's set (#284): their pools go dark past the nearest
     /// lamps the frame lights with shadow rays, as before (the far lamps' A/B).
     #[arg(long)]
@@ -4558,7 +4566,15 @@ impl Demo for Gallery {
             self.splash_born += u64::from(stats.fresh);
         }
         // The scene's particles (D-064): smoke, dust and embers, over the spray, their reactive
-        // mask over its.
+        // mask over its. Under DLSS they draw into a layer laid over its frame after it
+        // (`composite_after_upscale`): it takes no reactive mask, and a plume in the frame it
+        // upscales stayed in its history. Not with the tank (#156): its water refracts the scene
+        // with the particles in it.
+        let particles_after = self.dlaa_on
+            && self.dlaa.is_some()
+            && !self.args.particles_before_dlss
+            && liquid_state.is_none();
+        let mut particles_deferred = false;
         if let (Some(particles), Some(running)) = (&self.particles, self.running.as_mut()) {
             let time = self.sea_time as f32;
             let mut emitters = Vec::new();
@@ -4585,12 +4601,14 @@ impl Demo for Gallery {
                     time,
                     tlas: self.scene.rays().map_or(0, |r| r.tlas_address()),
                     probes,
+                    after_upscale: particles_after,
                 },
                 taa_frame.color,
                 targets.depth,
                 reactive,
                 extent,
             );
+            particles_deferred = particles_after;
             let stats = particles.stats();
             ctx.profile.counter(stats.line());
             self.particle_peak = self.particle_peak.max(stats.live);
@@ -4706,6 +4724,10 @@ impl Demo for Gallery {
             environment,
         }) = &self.fog
         {
+            // A cut starts the froxels' history afresh, as TAA's.
+            if taa_frame.reset {
+                volume.reset_history();
+            }
             volume.draw(
                 &mut frame.graph,
                 frame.slot,
@@ -4728,6 +4750,8 @@ impl Demo for Gallery {
                         .map(|a| a * self.args.fog_ambient),
                     probes,
                     sky: Some(sky.light),
+                    history: !self.args.no_fog_history,
+                    exposure,
                 },
                 boxes,
                 fog_lamps,
@@ -4790,6 +4814,17 @@ impl Demo for Gallery {
             // The anti-aliasing off: the frame as drawn, without jitter.
             taa_frame.color
         };
+        // The particles' layer over DLSS's frame.
+        if particles_deferred && let Some(particles) = &self.particles {
+            particles.composite_after_upscale(
+                &mut frame.graph,
+                frame.slot,
+                shown,
+                taa_frame.jitter,
+                extent,
+                output,
+            );
+        }
         // The image through the tone curve, with bloom drawn from the resolved image: from the
         // jittered frame a light smaller than a pixel made its halo pulse (the owner saw the
         // lamps shimmer at night).

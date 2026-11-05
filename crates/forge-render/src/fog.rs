@@ -8,8 +8,10 @@
 //! - `fog/light`: per froxel (160 × 90 × 64, quadratic in depth to the volume's far end), the
 //!   medium (the boxes there in priority order, each over the others by its edges' fade) and the
 //!   light it scatters towards the camera (Henyey–Greenstein for the lamps and the sun; the
-//!   probes' light every way alike, from their irradiance up and down), at the froxel's middle (a
-//!   jittered point shimmered, and lit a froxel white beside a bulb);
+//!   probes' light every way alike, from their irradiance up and down), at a point jittered within
+//!   the froxel each frame and blended into the froxel's history, last frame's volume read where
+//!   the froxel's middle stood then ([`FogParams::history`]: the froxels' blocks and their crawl as
+//!   the camera moves averaged away; without it, at the froxel's middle);
 //! - `fog/integrate`: per froxel column, the light gathered and the transmittance to each slice;
 //! - `fog/apply`: per pixel, the colour dimmed by the fog in front of it and brightened by what
 //!   it scatters, by the pixel's depth (one trilinear read of the volume).
@@ -21,10 +23,12 @@
 use std::sync::Arc;
 
 use bytemuck::{Pod, Zeroable};
+use std::cell::Cell;
+
 use forge_gpu::{
     Buffer, BufferAccess, BufferDesc, ComputePipelineDesc, Device, FRAMES_IN_FLIGHT, FrameGraph,
-    FrameSlot, ImageAccess, ImageHandle, MemoryCategory, MemoryLocation, Pipeline, Result,
-    ShaderCompiler, ShaderStage, TransientDesc, vk,
+    FrameSlot, GraphImage, ImageAccess, ImageDesc, ImageHandle, MemoryCategory, MemoryLocation,
+    Pipeline, Result, ShaderCompiler, ShaderStage, TransientDesc, vk,
 };
 use glam::{Mat4, Quat, Vec3};
 
@@ -38,6 +42,33 @@ pub const MAX_FOG_BOXES: usize = 32;
 /// The most lamps of the fog alone a frame weighs: those nearest the camera whose reach meets the
 /// volume.
 pub const MAX_FOG_LAMPS: usize = 256;
+/// The share of a froxel's light its history keeps each frame ([`FogParams::history`]): about
+/// ten frames' samples, jittered within the froxel, averaged (Hillaire 2015's, Unreal's 0.9).
+const HISTORY_WEIGHT: f32 = 0.9;
+/// The most the camera may move between two frames, metres, for the fog to keep its history:
+/// beyond, a jump (a cut, a teleport, the scene's origin moved), and the froxels start afresh.
+const HISTORY_JUMP: f32 = 4.0;
+/// The cosine of the most it may turn between two frames (30°): the light scattered towards it
+/// depends on its direction.
+const HISTORY_TURN: f32 = 0.866;
+
+/// Whether the camera of `view_proj` at `camera` continues last frame's (`previous` at
+/// `previous_camera`): not further than [`HISTORY_JUMP`], not turned more than [`HISTORY_TURN`]
+/// allows. The view direction is the projection's w row (`clip.w` is the depth along it).
+fn continues(previous: Mat4, previous_camera: Vec3, view_proj: Mat4, camera: Vec3) -> bool {
+    let forward = |m: Mat4| Vec3::new(m.x_axis.w, m.y_axis.w, m.z_axis.w).normalize_or_zero();
+    previous_camera.distance(camera) <= HISTORY_JUMP
+        && forward(previous).dot(forward(view_proj)) >= HISTORY_TURN
+}
+
+/// The frame's offset within each froxel, each axis −0.5 to 0.5: the R2 sequence (Roberts 2018,
+/// the generalised golden ratio in three dimensions), a froxel's own offset added in the shader.
+fn froxel_jitter(frame: u64) -> [f32; 3] {
+    let g = 1.220_744_1_f64;
+    let a = [1.0 / g, 1.0 / (g * g), 1.0 / (g * g * g)];
+    let n = (frame % (1 << 20)) as f64;
+    a.map(|a| ((0.5 + a * n).fract() - 0.5) as f32)
+}
 
 /// A fog volume: a box of fog in the scene frame.
 #[derive(Clone, Copy, Debug)]
@@ -151,6 +182,21 @@ struct GpuFog {
     width: u32,
     height: u32,
     fog_lamp_count: u32,
+    /// Last frame's view-projection (camera-relative, its jitter included).
+    prev_view_proj: [f32; 16],
+    /// xyz: last frame's camera in the scene frame; w: the history's weight (0: none read).
+    prev_camera: [f32; 4],
+    /// xyz: this frame's offset within the froxels (`froxel_jitter`, 0 without a history); w: 0.
+    jitter: [f32; 4],
+    /// The exposure last frame's history was lit at (0: none), and this frame's: both the CPU's.
+    last_exposure: f32,
+    exposure: f32,
+    /// Sampled index of last frame's history, storage index of this frame's.
+    history_read: u32,
+    history_write: u32,
+    /// This frame's turn (0 or 1): its history's slot.
+    parity: u32,
+    pad: [u32; 3],
 }
 
 /// What a frame's fog needs.
@@ -199,6 +245,14 @@ pub struct FogParams {
     pub probes: Option<crate::probes::ProbeLight>,
     /// The sky's light this frame: the probes' lookup falls back to it where they leave a point.
     pub sky: Option<crate::SkyLight>,
+    /// Each froxel lit at a point jittered within it each frame and blended into its history
+    /// (last frame's volume where the froxel's middle stood then, [`HISTORY_WEIGHT`] of it): the
+    /// froxels' 16-pixel blocks and their crawl in motion averaged away. Off: at the froxel's
+    /// middle, alone, as before (the A/B).
+    pub history: bool,
+    /// The frame's pre-exposure (the renderer's): last frame's history, lit at its own, is brought
+    /// to it.
+    pub exposure: f32,
 }
 
 /// A scene's fog everywhere (D-099): an authored environment's volumetric fog, the boxes laid
@@ -223,6 +277,12 @@ pub struct FogVolume {
     params: Vec<Buffer>,
     boxes: Vec<Buffer>,
     lamps: Vec<Buffer>,
+    /// The froxels' light of the last frame and of this one, in turns (`frame` % 2 written).
+    history: [GraphImage; 2],
+    /// Frames drawn, and the last one's view-projection, camera and exposure (none: no history
+    /// to read).
+    frame: Cell<u64>,
+    last: Cell<Option<(Mat4, Vec3, f32)>>,
 }
 
 impl FogVolume {
@@ -267,7 +327,38 @@ impl FogVolume {
                 std::mem::size_of::<crate::lamps::GpuLamp>() * MAX_FOG_LAMPS,
                 "fog lamps",
             )?,
+            history: [0, 1]
+                .map(|i| {
+                    GraphImage::new(
+                        device,
+                        ImageDesc {
+                            width: FROXELS_X * SLICES,
+                            height: FROXELS_Y,
+                            format: vk::Format::R16G16B16A16_SFLOAT,
+                            usage: vk::ImageUsageFlags::STORAGE | vk::ImageUsageFlags::SAMPLED,
+                            aspect: vk::ImageAspectFlags::COLOR,
+                            mip_levels: 1,
+                            name: if i == 0 {
+                                "fog history a"
+                            } else {
+                                "fog history b"
+                            },
+                        },
+                    )
+                })
+                .into_iter()
+                .collect::<Result<Vec<_>>>()?
+                .try_into()
+                .unwrap_or_else(|_| unreachable!("two histories")),
+            frame: Cell::new(0),
+            last: Cell::new(None),
         })
+    }
+
+    /// Forgets the history: the next frame starts the froxels' light afresh (a cut: its light
+    /// depends on the view's direction).
+    pub fn reset_history(&self) {
+        self.last.set(None);
     }
 
     /// Declares the three passes over `color` (the HDR image, read and written) behind and over
@@ -301,6 +392,8 @@ impl FogVolume {
             .collect();
         let global_fog = params.global.is_some_and(|g| g.density > 0.0);
         if (near.is_empty() || !near.iter().any(|(_, b)| b.density > 0.0)) && !global_fog {
+            // No fog this frame: the history, when it comes back, starts afresh.
+            self.last.set(None);
             return;
         }
         near.sort_by(|a, b| gap(a.1).total_cmp(&gap(b.1)));
@@ -358,8 +451,26 @@ impl FogVolume {
             aspect: vk::ImageAspectFlags::COLOR,
             mip_levels: 1,
         };
-        let light = graph.transient(atlas("fog light"));
         let volume = graph.transient(atlas("fog volume"));
+        // The history: this frame's to write, last frame's to read (when there is one).
+        let frame_index = self.frame.get();
+        let parity = (frame_index % 2) as usize;
+        let this = graph.import(&self.history[parity]);
+        let last = self
+            .last
+            .get()
+            .filter(|&(vp, cam, _)| {
+                params.history && continues(vp, cam, params.view_proj, params.camera)
+            })
+            .map(|prev| (graph.import(&self.history[1 - parity]), prev));
+        let jitter = if params.history {
+            froxel_jitter(frame_index)
+        } else {
+            [0.0; 3]
+        };
+        self.frame.set(frame_index + 1);
+        self.last
+            .set(Some((params.view_proj, params.camera, params.exposure)));
         let buffer: &'f Buffer = &self.params[slot.index];
         let address = buffer.address();
         let inverse = params.view_proj.inverse();
@@ -370,10 +481,30 @@ impl FogVolume {
             .sky
             .filter(|_| params.ambient.iter().any(|&a| a > 0.0));
         let probes = params.probes.filter(|_| sky.is_some());
+        // On the graphics queue: on the async one it shared the GPU with the lamps' ReSTIR, and the
+        // private district's path took longer (2026-11-05). It writes the history alone (the
+        // integration reads it) and takes the exposures from the CPU: no transient of its own, no
+        // buffer it reads and writes.
         let mut pass = graph
             .pass("fog/light")
-            .image(light, ImageAccess::StorageWrite(compute))
+            .image(this, ImageAccess::StorageWrite(compute))
             .with(|p| crate::MoversFrame::declare(params.movers, p, compute, true));
+        if let Some((last, _)) = last {
+            pass = pass.image(last, ImageAccess::Sampled(compute));
+        }
+        let (prev_view_proj, prev_camera, last_exposure) =
+            last.map_or(([0.0; 16], [0.0; 4], 0.0), |(_, (vp, cam, exposure))| {
+                (
+                    vp.to_cols_array(),
+                    cam.extend(HISTORY_WEIGHT).to_array(),
+                    exposure,
+                )
+            });
+        // The history's indices are its own; the transients' (the volume, the depth, the colour)
+        // are written by `fog/integrate`, whose pass declares the volume.
+        let history_write = self.history[parity].storage(0).0;
+        let history_sampled = self.history[parity].sampled().0;
+        let history_read = last.map_or(u32::MAX, |_| self.history[1 - parity].sampled().0);
         if let Some(sky) = sky {
             pass = pass.buffer(sky.buffer, BufferAccess::ShaderRead(compute));
         }
@@ -387,69 +518,88 @@ impl FogVolume {
         }
         let probes_address = probes.map_or(0, |p| p.address);
         let sky_address = sky.map_or(0, |s| s.address);
-        pass.run(move |resources, commands| {
-            buffer.write(
-                0,
-                &[GpuFog {
-                    inv_view_proj: inverse.to_cols_array(),
-                    camera: params.camera.extend(params.far).to_array(),
-                    sun: params
-                        .sun_dir
-                        .normalize_or(Vec3::Y)
-                        .extend(params.sun_illuminance)
-                        .to_array(),
-                    sun_color: params
-                        .sun_color
-                        .extend(params.anisotropy.clamp(-0.95, 0.95))
-                        .to_array(),
-                    global: params.global.map_or([0.0; 4], |g| {
-                        [
-                            g.density.max(0.0),
-                            g.height,
-                            g.falloff.max(0.0),
-                            g.absorption.clamp(0.0, 1.0),
-                        ]
-                    }),
-                    scales: [
-                        params.light_scales[0],
-                        params.light_scales[1],
-                        params.ambient[1].max(0.0),
-                        params.ambient[0].max(0.0),
-                    ],
-                    phase: [
-                        params.lamp_anisotropy.clamp(-0.95, 0.95),
-                        params.lamp_shadows.min(FOG_SHADOW_RAYS) as f32,
-                        0.0,
-                        0.0,
-                    ],
-                    frame: params.frame,
-                    boxes: boxes_address,
-                    fog_lamps: lamps_address,
-                    probes: probes_address,
-                    sky: sky_address,
-                    box_count,
-                    light: resources.storage(light, 0).0,
-                    light_sampled: resources.sampled(light).0,
-                    volume: resources.storage(volume, 0).0,
-                    volume_sampled: resources.sampled(volume).0,
-                    depth: resources.sampled(depth).0,
-                    color: resources.storage(color, 0).0,
-                    width: extent.width,
-                    height: extent.height,
-                    fog_lamp_count,
-                }],
-            );
+        buffer.write(
+            0,
+            &[GpuFog {
+                inv_view_proj: inverse.to_cols_array(),
+                camera: params.camera.extend(params.far).to_array(),
+                sun: params
+                    .sun_dir
+                    .normalize_or(Vec3::Y)
+                    .extend(params.sun_illuminance)
+                    .to_array(),
+                sun_color: params
+                    .sun_color
+                    .extend(params.anisotropy.clamp(-0.95, 0.95))
+                    .to_array(),
+                global: params.global.map_or([0.0; 4], |g| {
+                    [
+                        g.density.max(0.0),
+                        g.height,
+                        g.falloff.max(0.0),
+                        g.absorption.clamp(0.0, 1.0),
+                    ]
+                }),
+                scales: [
+                    params.light_scales[0],
+                    params.light_scales[1],
+                    params.ambient[1].max(0.0),
+                    params.ambient[0].max(0.0),
+                ],
+                phase: [
+                    params.lamp_anisotropy.clamp(-0.95, 0.95),
+                    params.lamp_shadows.min(FOG_SHADOW_RAYS) as f32,
+                    0.0,
+                    0.0,
+                ],
+                frame: params.frame,
+                boxes: boxes_address,
+                fog_lamps: lamps_address,
+                probes: probes_address,
+                sky: sky_address,
+                box_count,
+                light: history_write,
+                light_sampled: history_sampled,
+                volume: 0,
+                volume_sampled: 0,
+                depth: 0,
+                color: 0,
+                width: extent.width,
+                height: extent.height,
+                fog_lamp_count,
+                prev_view_proj,
+                prev_camera,
+                jitter: [jitter[0], jitter[1], jitter[2], 0.0],
+                last_exposure,
+                exposure: params.exposure,
+                history_read,
+                history_write,
+                parity: parity as u32,
+                pad: [0; 3],
+            }],
+        );
+        pass.run(move |_, commands| {
             commands.bind_pipeline(pipeline);
             commands.push_constants(pipeline, &address);
             commands.dispatch(FROXELS_X.div_ceil(GROUP), FROXELS_Y.div_ceil(GROUP), SLICES);
             Ok(())
         });
         let pipeline = &self.integrate;
+        // It reads the froxels' light from this frame's history, which `fog/light` wrote.
         graph
             .pass("fog/integrate")
-            .image(light, ImageAccess::StorageReadWrite(compute))
+            .image(this, ImageAccess::StorageRead(compute))
             .image(volume, ImageAccess::StorageWrite(compute))
-            .run(move |_, commands| {
+            .run(move |resources, commands| {
+                buffer.write(
+                    std::mem::offset_of!(GpuFog, volume) as u64,
+                    &[
+                        resources.storage(volume, 0).0,
+                        resources.sampled(volume).0,
+                        resources.sampled(depth).0,
+                        resources.storage(color, 0).0,
+                    ],
+                );
                 commands.bind_pipeline(pipeline);
                 commands.push_constants(pipeline, &address);
                 commands.dispatch(FROXELS_X.div_ceil(GROUP), FROXELS_Y.div_ceil(GROUP), 1);
@@ -479,12 +629,60 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_jump_or_a_sharp_turn_drops_the_history() {
+        // `continues` reads the view's direction from the projection's w row (`clip.w` is the
+        // depth along it): a matrix with that row alone stands for a camera looking that way.
+        let looking = |degrees: f32| {
+            let way = Vec3::new(degrees.to_radians().sin(), 0.0, -degrees.to_radians().cos());
+            Mat4::from_cols(
+                glam::Vec4::new(1.0, 0.0, 0.0, way.x),
+                glam::Vec4::new(0.0, 1.0, 0.0, way.y),
+                glam::Vec4::new(0.0, 0.0, 1.0, way.z),
+                glam::Vec4::W,
+            )
+        };
+        let ahead = looking(0.0);
+        assert!(continues(
+            ahead,
+            Vec3::ZERO,
+            ahead,
+            Vec3::new(0.0, 0.0, -0.5)
+        ));
+        assert!(continues(ahead, Vec3::ZERO, looking(10.0), Vec3::ZERO));
+        assert!(!continues(ahead, Vec3::ZERO, looking(45.0), Vec3::ZERO));
+        assert!(!continues(
+            ahead,
+            Vec3::ZERO,
+            ahead,
+            Vec3::new(5.0, 0.0, 0.0)
+        ));
+    }
+
+    #[test]
     fn the_records_keep_the_shaders_layout() {
         assert_eq!(std::mem::size_of::<GpuFogBox>(), 96);
-        assert_eq!(std::mem::size_of::<GpuFog>(), 240);
+        assert_eq!(std::mem::size_of::<GpuFog>(), 368);
+        assert_eq!(std::mem::offset_of!(GpuFog, prev_view_proj), 240);
+        assert_eq!(std::mem::offset_of!(GpuFog, last_exposure), 336);
         assert_eq!(std::mem::offset_of!(GpuFog, frame), 160);
         assert_eq!(std::mem::offset_of!(GpuFog, fog_lamps), 176);
         assert_eq!(std::mem::offset_of!(GpuFog, sky), 192);
         assert_eq!(std::mem::offset_of!(GpuFog, box_count), 200);
+    }
+
+    #[test]
+    fn the_jitter_covers_the_froxel_evenly() {
+        // Eight frames' offsets: within a half froxel each way, spread over both halves of each
+        // axis, none repeated.
+        let offsets: Vec<[f32; 3]> = (0..8).map(froxel_jitter).collect();
+        for axis in 0..3 {
+            assert!(offsets.iter().all(|o| o[axis].abs() <= 0.5));
+            assert!(
+                offsets.iter().any(|o| o[axis] < -0.1) && offsets.iter().any(|o| o[axis] > 0.1)
+            );
+        }
+        for (i, a) in offsets.iter().enumerate() {
+            assert!(offsets[i + 1..].iter().all(|b| a != b));
+        }
     }
 }

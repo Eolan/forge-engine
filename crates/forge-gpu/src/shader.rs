@@ -185,6 +185,8 @@ const PRECISE_ENTRIES: &[(&str, &str)] = &[
     ("particles.slang", "advance_main"),
     ("particles.slang", "vert_main"),
     ("particles.slang", "frag_main"),
+    ("particles.slang", "frag_layer_main"),
+    ("particles.slang", "composite_main"),
 ];
 
 /// The shader files that include a vendor SDK's headers, and the SDK's include directory beside

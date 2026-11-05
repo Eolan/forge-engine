@@ -2906,6 +2906,21 @@ street 5.8 / 8.7. VRAM 3.9 GB (2.3 GB geometry: #387, pages about a tenth full).
     0.351 ms (four reads a pixel). They also drew a coil of lit rims.
   - **First tuning:** fewer, denser and smaller puffs drew in 0.187 ms, but read as balls.
   - **Earlier forms:** denser ones, or ones emitted over the whole district, cost up to +1.24 ms.
+- **The fog's history, the steam's layer under DLSS** (D-099's and D-064's amendments,
+  2026-11-05; the path by day, 2560 × 1440, DLSS Quality, 5,000 frames; interleaved runs after a
+  warm-up, the first run of a batch reading about 0.3 ms slower):
+  - **The particles' layer** against the old order: 15.82 and 16.07 ms against 15.80 and 15.77
+    (p99 17.80–18.10 against 17.75–17.86); `particles/composite` 0.04 ms, `particles/draw` 0.23 as
+    before. The puffs' sun, five shadow rays and up to four short ones each (D-064's amendment):
+    `particles/advance` 0.001 ms with about 1,500 particles alive.
+  - **The fog's history:** `fog/light` 0.43 → 0.46–0.47 ms (its zone, beside the particles'
+    draw). The frame stays within the runs' spread: 14.80 and 15.73 ms without, 15.62 and 15.95 ms
+    with (one run without had the lamps' ReSTIR 0.3 ms faster too).
+  - **Left out:** the particles drawn after DLSS at the window's size (16.57 and 17.17 ms against
+    16.13 and 16.12, p99 20.0–20.3), and `fog/light` on the async queue (16.47 ms).
+  - **`fog/light`'s zone** reads 0.47–0.50 ms beside the particles' draw, which runs at the same
+    time with no barrier between them; with no particle alive it reads 0.91 ms (the street at
+    1280 × 720). The zones quoted above for it (0.45–0.56 ms) are short in the same way.
 
 ## Instances scaled per axis: the 96-byte record (#380, 2026-11-01)
 

@@ -48,7 +48,33 @@ struct Fog
     uint width;
     uint height;
     uint fog_lamp_count;
+    float4x4 prev_view_proj; // last frame's clip from camera-relative (its jitter included)
+    float4 prev_camera;      // xyz: last frame's camera in the scene frame; w: the history's weight (0: none)
+    float4 jitter;           // xyz: this frame's offset within the froxels (−0.5 to 0.5), 0 without a history
+    float last_exposure;     // the exposure last frame's history was lit at (0: none)
+    float exposure;          // this frame's (both the CPU's: their ratio stays exact)
+    uint history_read;       // sampled index of last frame's history (0xFFFFFFFF: none)
+    uint history_write;      // storage index of this frame's history
+    uint parity;             // this frame's turn: its history's slot
+    uint pad0;
+    uint pad1;
+    uint pad2;
 };
+
+// A froxel's own offset added to the frame's (pcg3d, Jarzynski and Olano 2020), so that
+// neighbouring froxels sample different places in the same frame: 0 to 1 each.
+float3 fog_froxel_offset(uint3 v)
+{
+    v = v * 1664525u + 1013904223u;
+    v.x += v.y * v.z;
+    v.y += v.z * v.x;
+    v.z += v.x * v.y;
+    v ^= v >> 16u;
+    v.x += v.y * v.z;
+    v.y += v.z * v.x;
+    v.z += v.x * v.y;
+    return float3(v & 0xFFFFFFu) / 16777216.0;
+}
 
 struct FogPush
 {
@@ -124,10 +150,12 @@ void fog_medium(Fog* g, float3 world, out float extinction, out float albedo, ou
 }
 
 // A thread per froxel: the medium there and the light it scatters towards the camera, the
-// lamps' (their column's, unshadowed) and the sun's (through a shadow ray), at the froxel's
-// middle. Jittered within the froxel each frame (as D-032's dust is), the volume shimmered with
-// nothing to settle it (a still camera's moving pixels 1.50 → 2.81 % in the private district's
-// bathroom), and a sample landing beside a bulb lit its whole froxel white.
+// lamps' (their column's, unshadowed) and the sun's (through a shadow ray). With a history
+// (`FogParams::history`, D-099's amendment of 2026-11-05) at a point jittered within the froxel
+// each frame, blended into last frame's volume where the froxel's middle stood then; where last
+// frame's volume did not reach (a first frame, the screen's edge as the camera turns), at its
+// middle. Jittered without a history (as D-032's dust is), the volume shimmered with nothing to
+// settle it (a still camera's moving pixels 1.50 → 2.81 % in the private district's bathroom).
 // The lamps' shadows (D-099's option, `FogParams::lamp_shadows`): a froxel's strongest lamps, up
 // to FOG_SHADOW_RAYS, that give FOG_SHADOW_SHARE or more of its lamps' light are each tested by a
 // shadow ray, the rest left unshadowed (after Ward 1991's adaptive shadow testing, the strongest
@@ -143,6 +171,45 @@ static const float FOG_SHADOW_SHARE = 0.1;
 // (#370).
 static const float FOG_SHADOW_CLEAR = 0.3;
 
+// Last frame's volume (D-099's amendment, the history) at the point that stands at screen `uv`
+// and `t` m from the camera now: reprojected through last frame's camera, its slice found by
+// inverting the light's sample distances (slice k's at the middle of its near and far ends:
+// `far / (2 S²) · (2k² + 2k + 1)`), bilinear within two slices and linear between them, brought
+// to this frame's exposure. False where last frame's volume did not reach the point, or there is
+// none, or its value is not finite (a fault kept in a history would never clear).
+bool fog_history(Fog* g, Frame* f, float2 uv, float t, out float4 previous)
+{
+    previous = float4(0.0);
+    if (g[0].prev_camera.w <= 0.0 || g[0].history_read == 0xFFFFFFFFu)
+        return false;
+    float3 relative = g[0].camera.xyz + fog_view_direction(g, uv) * t - g[0].prev_camera.xyz;
+    float distance = length(relative);
+    if (distance > g[0].camera.w)
+        return false;
+    float4 clip = mul(g[0].prev_view_proj, float4(relative, 1.0));
+    if (clip.w <= 1e-4)
+        return false;
+    float2 prev_uv = float2(clip.x / clip.w * 0.5 + 0.5, 0.5 - clip.y / clip.w * 0.5);
+    if (any(prev_uv < 0.0) || any(prev_uv > 1.0))
+        return false;
+    float slices = float(FOG_SLICES);
+    float w = 0.5 * (sqrt(max(4.0 * distance * slices * slices / g[0].camera.w - 1.0, 0.0)) - 1.0);
+    Texture2D<float4> history = g_sampled_images[NonUniformResourceIndex(g[0].history_read)];
+    SamplerState linear = g_samplers[SAMPLER_LINEAR_CLAMP];
+    float2 atlas_size = float2(FOG_FROXELS_X * FOG_SLICES, FOG_FROXELS_Y);
+    float2 inside = clamp(prev_uv * float2(FOG_FROXELS_X, FOG_FROXELS_Y), 0.5, float2(FOG_FROXELS_X, FOG_FROXELS_Y) - 0.5);
+    float k = clamp(floor(w), 0.0, slices - 2.0);
+    float s = saturate(w - k);
+    float4 a = history.SampleLevel(linear, (inside + float2(k * FOG_FROXELS_X, 0.0)) / atlas_size, 0.0);
+    float4 b = history.SampleLevel(linear, (inside + float2((k + 1.0) * FOG_FROXELS_X, 0.0)) / atlas_size, 0.0);
+    previous = lerp(a, b, s);
+    if (!all(isfinite(previous)))
+        return false;
+    float last_exposure = g[0].last_exposure;
+    previous.rgb = min(previous.rgb * (last_exposure > 0.0 ? g[0].exposure / last_exposure : 1.0), 65000.0);
+    return true;
+}
+
 [shader("compute")]
 [numthreads(8, 8, 1)]
 void fog_light_main(uint3 id : SV_DispatchThreadID)
@@ -151,11 +218,19 @@ void fog_light_main(uint3 id : SV_DispatchThreadID)
         return;
     Fog* g = fog_push.fog;
     Frame* f = g[0].frame;
-    float2 uv = (float2(id.xy) + 0.5) / float2(FOG_FROXELS_X, FOG_FROXELS_Y);
-    float3 direction = fog_view_direction(g, uv);
+    float2 middle_uv = (float2(id.xy) + 0.5) / float2(FOG_FROXELS_X, FOG_FROXELS_Y);
     float near = fog_slice_distance(g, float(id.z));
     float far = fog_slice_distance(g, float(id.z) + 1.0);
-    float t = 0.5 * (near + far);
+    // The history first: last frame's volume where this froxel's middle stood then.
+    float4 previous;
+    bool remembered = fog_history(g, f, middle_uv, 0.5 * (near + far), previous);
+    // With it, a point jittered within the froxel (the frame's offset and the froxel's own), the
+    // history averaging ten frames of them; without, its middle.
+    bool jittered = remembered;
+    float3 j = jittered ? frac(g[0].jitter.xyz + fog_froxel_offset(id)) - 0.5 : float3(0.0);
+    float2 uv = jittered ? (float2(id.xy) + 0.5 + j.xy) / float2(FOG_FROXELS_X, FOG_FROXELS_Y) : middle_uv;
+    float3 direction = fog_view_direction(g, uv);
+    float t = jittered ? near + (far - near) * (0.5 + j.z) : 0.5 * (near + far);
     float3 world = g[0].camera.xyz + direction * t;
     // Half the froxel's size, across and in depth: a lamp's light is taken from no nearer, so a
     // bulb inside a froxel lights it as its whole volume's mean would, not as its middle beside
@@ -328,7 +403,14 @@ void fog_light_main(uint3 id : SV_DispatchThreadID)
         }
         scattered = albedo * tint * (extinction * (lamps * (f[0].exposure * g[0].scales.y) + sunlight * g[0].scales.x) + ambient);
     }
-    g_storage_images_rgba16f[NonUniformResourceIndex(g[0].light)][uint2(id.z * FOG_FROXELS_X + id.x, id.y)] = float4(scattered, extinction);
+    float4 lit = float4(scattered, extinction);
+    // The history keeps its weight of the light: the jittered samples of about ten frames average
+    // out the froxels' blocks and their crawl as the camera moves.
+    uint2 texel = uint2(id.z * FOG_FROXELS_X + id.x, id.y);
+    if (remembered)
+        lit = lerp(lit, previous, g[0].prev_camera.w);
+    // This frame's history, which the integration reads (`light` is its storage index too).
+    g_storage_images_rgba16f[NonUniformResourceIndex(g[0].history_write)][texel] = lit;
 }
 
 // A thread per froxel column: the light gathered and the transmittance from the camera to each

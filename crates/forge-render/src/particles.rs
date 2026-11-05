@@ -16,7 +16,12 @@
 //!   open sky's beyond them);
 //! - `particles/draw` after the sky's compose: soft puffs facing the camera, smoke
 //!   alpha-blended and embers added in one premultiplied blend, writing the reactive mask TAA
-//!   reads ([`crate::Taa::resolve`]), over the splashes' when they drew this frame.
+//!   reads ([`crate::Taa::resolve`]), over the splashes' when they drew this frame. Under DLSS
+//!   they draw into a layer of their own instead, and `particles/composite`
+//!   ([`Particles::composite_after_upscale`]) lays it over DLSS's frame: DLSS takes no reactive
+//!   mask (NVIDIA's guide, 3.15), and a plume drawn into the frame it upscales stayed in its
+//!   history as the plume faded, which then dropped it in blocks (the private district's street
+//!   steam, 2026-11-05).
 
 use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
@@ -47,6 +52,8 @@ const MAX_EFFECTS: usize = 64;
 const REACH: f32 = 400.0;
 /// The format of the reactive mask TAA reads (the splashes').
 const REACTIVE_FORMAT: vk::Format = vk::Format::R8_UNORM;
+/// The share of each pixel the particles' layer covers ([`ParticleParams::after_upscale`]).
+const COVERAGE_FORMAT: vk::Format = vk::Format::R16_SFLOAT;
 
 /// How an effect's particles are drawn (`DRAW_*` in `particles.slang`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
@@ -208,6 +215,10 @@ pub struct ParticleParams {
     /// This frame's light probes (D-036): the ambient light at each particle where they reach,
     /// the open sky's beyond. None: the sky's everywhere.
     pub probes: Option<crate::probes::ProbeLight>,
+    /// The particles drawn into a layer of their own, which
+    /// [`Particles::composite_after_upscale`] lays over the upscaler's frame (DLSS's): not into
+    /// `color`. [`Particles::update`] then returns the reactive mask it was given.
+    pub after_upscale: bool,
 }
 
 /// The particles' counters, for the log and the overlay.
@@ -341,9 +352,18 @@ struct GpuFrame {
     effects: u64,
     /// The frame's `ProbeField`, 0 for none.
     probes: u64,
+    /// The layer and its coverage (sampled), the upscaler's frame (storage), for
+    /// `particles/composite`.
+    layer: u32,
+    coverage: u32,
+    output: u32,
+    layer_pad: u32,
+    /// The jitter the layer was drawn with, in its UV; the upscaler's frame's size, pixels.
+    layer_shift: [f32; 2],
+    output_size: [f32; 2],
 }
 
-const _: () = assert!(std::mem::size_of::<GpuFrame>() == 240);
+const _: () = assert!(std::mem::size_of::<GpuFrame>() == 272);
 
 /// The ring's bookkeeping on the CPU: slots counted from the start, so a block's are
 /// `first % PARTICLE_CAPACITY` onwards.
@@ -383,6 +403,13 @@ pub struct Particles {
     emit: Pipeline,
     advance: Pipeline,
     draw: Pipeline,
+    /// The draw into the layer: the light and the coverage, no reactive mask.
+    draw_layer: Pipeline,
+    /// The layer over the upscaler's frame.
+    composite: Pipeline,
+    /// This frame's layer and its coverage, when [`Particles::update`] drew into them, with the
+    /// frame's number (a handle is one graph's).
+    layer: Cell<Option<(u64, ImageHandle, ImageHandle)>>,
     ring: GraphBuffer,
     table: Buffer,
     /// Per frame slot: the frame's block and its blocks, written by the CPU.
@@ -441,8 +468,26 @@ impl Particles {
             premultiplied: true,
             name: "particles draw",
         });
+        let fragment_layer = device.create_shader_module(
+            &shaders.compile("particles.slang", "frag_layer_main", ShaderStage::Fragment)?,
+            "particles fragment into the layer",
+        )?;
+        let draw_layer = device.create_vertex_pipeline(&VertexPipelineDesc {
+            vertex: (vertex, "vert_main"),
+            fragment: (fragment_layer, "frag_layer_main"),
+            color_formats: &[HDR_FORMAT, COVERAGE_FORMAT],
+            depth_format: None,
+            push_constant_bytes: push,
+            cull_mode: vk::CullModeFlags::NONE,
+            wireframe: false,
+            depth_test: false,
+            alpha_blend: true,
+            premultiplied: true,
+            name: "particles draw into the layer",
+        });
         device.destroy_shader_module(vertex);
         device.destroy_shader_module(fragment);
+        device.destroy_shader_module(fragment_layer);
         let ring = GraphBuffer::new(device.create_buffer(BufferDesc {
             size: u64::from(PARTICLE_CAPACITY) * PARTICLE_BYTES,
             usage: vk::BufferUsageFlags::STORAGE_BUFFER,
@@ -495,6 +540,9 @@ impl Particles {
             emit: compute("emit_main", "particles emit")?,
             advance: compute("advance_main", "particles advance")?,
             draw: draw?,
+            draw_layer: draw_layer?,
+            composite: compute("composite_main", "particles composite")?,
+            layer: Cell::new(None),
             ring,
             table,
             frames: per_slot(std::mem::size_of::<GpuFrame>(), "particle frame")?,
@@ -547,6 +595,7 @@ impl Particles {
         reactive: Option<ImageHandle>,
         extent: vk::Extent2D,
     ) -> Option<ImageHandle> {
+        self.layer.set(None);
         let now = params.time;
         let mut ring = self.state.borrow_mut();
         // A clock that jumped or went back starts the ring over.
@@ -706,6 +755,12 @@ impl Particles {
                 blocks: blocks_buffer.address(),
                 effects: self.table.address(),
                 probes: params.probes.map_or(0, |p| p.address),
+                layer: 0,
+                coverage: 0,
+                output: 0,
+                layer_pad: 0,
+                layer_shift: [0.0; 2],
+                output_size: [0.0; 2],
             }],
         );
         let address = frame_buffer.address();
@@ -744,9 +799,26 @@ impl Particles {
             commands.dispatch(live.div_ceil(64), 1, 1);
             Ok(())
         });
-        let (mask, load) = match reactive {
-            Some(mask) => (mask, vk::AttachmentLoadOp::LOAD),
-            None => (
+        // Under DLSS, a layer and its coverage in place of the frame and the reactive mask.
+        let layer = params.after_upscale.then(|| {
+            let target = |name: &'static str, format: vk::Format| TransientDesc {
+                name,
+                width: extent.width,
+                height: extent.height,
+                format,
+                usage: vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::SAMPLED,
+                aspect: vk::ImageAspectFlags::COLOR,
+                mip_levels: 1,
+            };
+            let light = graph.transient(target("particle layer", HDR_FORMAT));
+            let coverage = graph.transient(target("particle coverage", COVERAGE_FORMAT));
+            self.layer.set(Some((slot.frame_number, light, coverage)));
+            (light, coverage)
+        });
+        let (mask, load) = match (layer, reactive) {
+            (Some((_, coverage)), _) => (coverage, vk::AttachmentLoadOp::CLEAR),
+            (None, Some(mask)) => (mask, vk::AttachmentLoadOp::LOAD),
+            (None, None) => (
                 graph.transient(TransientDesc {
                     name: "particle reactive mask",
                     width: extent.width,
@@ -759,16 +831,19 @@ impl Particles {
                 vk::AttachmentLoadOp::CLEAR,
             ),
         };
+        let (target, target_load, draw) = match layer {
+            Some((light, _)) => (light, vk::AttachmentLoadOp::CLEAR, &self.draw_layer),
+            None => (color, vk::AttachmentLoadOp::LOAD, &self.draw),
+        };
         let vertex = vk::PipelineStageFlags2::VERTEX_SHADER;
         let fragment = vk::PipelineStageFlags2::FRAGMENT_SHADER;
-        let draw = &self.draw;
         graph
             .pass("particles/draw")
             .buffer(ring_handle, BufferAccess::ShaderRead(vertex))
             .buffer(sky.light.buffer, BufferAccess::ShaderRead(vertex))
             .image(sky.aerial(), ImageAccess::Sampled(vertex))
             .image(depth, ImageAccess::Sampled(fragment))
-            .image(color, ImageAccess::ColorAttachment)
+            .image(target, ImageAccess::ColorAttachment)
             .image(mask, ImageAccess::ColorAttachment)
             .run(move |resources, commands| {
                 frame_buffer.write(
@@ -777,10 +852,11 @@ impl Particles {
                 );
                 let attachments = [
                     vk::RenderingAttachmentInfo::default()
-                        .image_view(resources.view(color))
+                        .image_view(resources.view(target))
                         .image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
-                        .load_op(vk::AttachmentLoadOp::LOAD)
-                        .store_op(vk::AttachmentStoreOp::STORE),
+                        .load_op(target_load)
+                        .store_op(vk::AttachmentStoreOp::STORE)
+                        .clear_value(vk::ClearValue::default()),
                     vk::RenderingAttachmentInfo::default()
                         .image_view(resources.view(mask))
                         .image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
@@ -803,7 +879,66 @@ impl Particles {
                 commands.end_rendering();
                 Ok(())
             });
-        Some(mask)
+        match layer {
+            Some(_) => reactive,
+            None => Some(mask),
+        }
+    }
+
+    /// Declares `particles/composite`, when this frame's [`Particles::update`] drew into a layer
+    /// ([`ParticleParams::after_upscale`]): the layer over `color`, the upscaler's frame at
+    /// `extent`, read where each pixel's point lay in the render (at `render` pixels, drawn with
+    /// `jitter` pixels: x right, y down), bilinear. Nothing without such an update.
+    pub fn composite_after_upscale<'f>(
+        &'f self,
+        graph: &mut FrameGraph<'f>,
+        slot: FrameSlot,
+        color: ImageHandle,
+        jitter: glam::Vec2,
+        render: vk::Extent2D,
+        extent: vk::Extent2D,
+    ) {
+        let Some((light, coverage)) = self
+            .layer
+            .take()
+            .filter(|(frame, _, _)| *frame == slot.frame_number)
+            .map(|(_, light, coverage)| (light, coverage))
+        else {
+            return;
+        };
+        let frame_buffer = &self.frames[slot.index];
+        let address = frame_buffer.address();
+        let pipeline = &self.composite;
+        let compute = vk::PipelineStageFlags2::COMPUTE_SHADER;
+        graph
+            .pass("particles/composite")
+            .image(light, ImageAccess::Sampled(compute))
+            .image(coverage, ImageAccess::Sampled(compute))
+            .image(color, ImageAccess::StorageReadWrite(compute))
+            .run(move |resources, commands| {
+                frame_buffer.write(
+                    std::mem::offset_of!(GpuFrame, layer) as u64,
+                    &[
+                        resources.sampled(light).0,
+                        resources.sampled(coverage).0,
+                        resources.storage(color, 0).0,
+                        0,
+                    ],
+                );
+                frame_buffer.write(
+                    std::mem::offset_of!(GpuFrame, layer_shift) as u64,
+                    &[
+                        jitter.x / render.width.max(1) as f32,
+                        jitter.y / render.height.max(1) as f32,
+                        extent.width as f32,
+                        extent.height as f32,
+                    ],
+                );
+                commands.bind_pipeline(pipeline);
+                commands.push_constants(pipeline, &address);
+                commands.dispatch(extent.width.div_ceil(8), extent.height.div_ceil(8), 1);
+                Ok(())
+            });
     }
 }
 

@@ -29,6 +29,8 @@ static const float MAX_STEP = 1.0 / 30.0;
 static const float MAX_SPAN = 0.1;
 // The share of a particle's life over which it fades in.
 static const float FADE_IN = 0.08;
+// The time over which a puff's sunlit share follows its rays (advance_main), seconds.
+static const float SUN_EASE = 0.15;
 // The most a particle asks of TAA's current frame (FSR 2's cap for its reactive mask).
 static const float REACTIVE = 0.9;
 // Smoke scatters a little forwards (Henyey–Greenstein), with an even part for the light it
@@ -63,7 +65,7 @@ struct Particle
     uint effect;     // its effect's index
     float spin;      // its puff's turn, radians
     float sun;       // the sun's share: its phase towards the camera times its visibility
-    float pad;
+    float lit;       // the share of it the sun reaches (sun_share), eased; -1 until first lit
 };
 
 // Must match GpuEffect in particles.rs.
@@ -125,6 +127,12 @@ struct ParticleFrame
     Block* blocks;
     Effect* effects;
     ProbeField* probes;  // this frame's light probes (D-036), or null: the open sky's light
+    uint layer;          // the particles' layer and its coverage (sampled), the upscaler's
+    uint coverage;       // frame (storage, rgba16f), for composite_main
+    uint output;
+    uint layer_pad;
+    float2 layer_shift;  // the jitter the layer was drawn with, in its UV
+    float2 output_size;  // the upscaler's frame, pixels
 };
 
 struct ParticlePush
@@ -212,7 +220,7 @@ void emit_main(uint3 id : SV_DispatchThreadID)
     q.effect = b.effect;
     q.spin = 2.0 * PI * random3(uint3(b.seed, k, 3u)).x;
     q.sun = 0.0;
-    q.pad = 0.0;
+    q.lit = -1.0;
     f[0].ring[(b.first + j) % f[0].capacity] = q;
 }
 
@@ -258,6 +266,56 @@ float sun_visibility(ParticleFrame* f, float3 p)
     }
     return q.CommittedStatus() == COMMITTED_NOTHING ? 1.0 : 0.0;
 }
+
+// Whether nothing of the scene stands between `p` and `p + offset`.
+bool open_between(ParticleFrame* f, float3 p, float3 offset)
+{
+    if (f[0].tlas == 0)
+        return true;
+    float span = length(offset);
+    if (span < 1e-4)
+        return true;
+    RayDesc ray;
+    ray.Origin = p;
+    ray.Direction = offset / span;
+    ray.TMin = 0.0;
+    ray.TMax = span;
+    RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_SKIP_CLOSEST_HIT_SHADER | RAY_FLAG_FORCE_OPAQUE> q;
+    q.TraceRayInline(RaytracingAccelerationStructure(f[0].tlas), RAY_FLAG_NONE, 0x01, ray); // RAY_SHADOW (#301)
+    while (q.Proceed())
+    {
+    }
+    return q.CommittedStatus() == COMMITTED_NOTHING;
+}
+
+// The share of a puff of `radius` round `p` the sun reaches: a ray from its middle and from four
+// points half its radius out across the sun's way (turned by its seed), averaged. One ray from
+// its middle turned a puff metres wide from lit to shaded in a frame as it crossed a shadow's
+// edge: the steam in a sunlit street flickered (the owner, 2026-11-05: "this one pops a lot").
+float sun_share(ParticleFrame* f, float3 p, float radius, uint seed)
+{
+    float3 t;
+    float3 b;
+    across(f[0].sun.xyz, t, b);
+    float a = float(seed & 1023u) * (2.0 * PI / 1024.0);
+    float3 u = (t * cos(a) + b * sin(a)) * (0.5 * radius);
+    float3 v = (b * cos(a) - t * sin(a)) * (0.5 * radius);
+    float3 around[4] = { u, -u, v, -v };
+    float lit = sun_visibility(f, p);
+    float count = 1.0;
+    // A point a surface stands between (in the ground under a grate's steam, in the wall a puff
+    // leans on) is left out: its ray would start inside it and darken the puff.
+    for (uint i = 0u; i < 4u; i++)
+    {
+        if (open_between(f, p, around[i]))
+        {
+            lit += sun_visibility(f, p + around[i]);
+            count += 1.0;
+        }
+    }
+    return lit / count;
+}
+
 
 // How far the scene's nearest surface lies along `ray` (the static structure, every surface
 // opaque); -1 where it meets none.
@@ -379,7 +437,12 @@ void advance_main(uint3 id : SV_DispatchThreadID)
             from_down = probe_irradiance(f[0].probes, q.position, -up, -up, -view, sky_down);
         }
         q.light = 0.5 * (from_up + from_down) * f[0].sun_radiance.w / PI;
-        q.sun = 4.0 * phase * sun_visibility(f, q.position);
+        // The sun's share of the puff, eased over SUN_EASE seconds: its five rays' steps as it
+        // crosses a shadow's edge blend.
+        float radius = lerp(e.radius.x, e.radius.y, saturate((now - q.birth) / q.life));
+        float lit = sun_share(f, q.position, radius, q.seed);
+        q.lit = q.lit < 0.0 ? lit : lerp(lit, q.lit, exp(-max(span, 0.0) / SUN_EASE));
+        q.sun = 4.0 * phase * q.lit;
     }
     f[0].ring[slot] = q;
 }
@@ -486,7 +549,12 @@ ParticleVaryings vert_main(uint vertex : SV_VertexID)
 
     float4 colour = lerp(e.colour0, e.colour1, s);
     float fade_in = saturate(s / FADE_IN);
-    float alpha = colour.a * fade_in * coverage;
+    // Faded out as the camera comes within two of its radii, gone at half of one (a camera depth
+    // fade, as Unreal's): without it, a puff the camera walked into covered the screen at full
+    // opacity and vanished in one frame as its middle passed the near plane (the private
+    // district's street steam, 2026-11-05).
+    float near_fade = smoothstep(0.5 * radius, 2.0 * radius, clip.w);
+    float alpha = colour.a * fade_in * coverage * near_fade;
     Sky* sky = f[0].sky;
     float scale = f[0].sun_radiance.w;
     float2 ndc = clip.xy / clip.w;
@@ -522,8 +590,8 @@ struct ParticleTargets
     float4 reactive : SV_Target1;
 };
 
-[shader("fragment")]
-ParticleTargets frag_main(ParticleVaryings input)
+// A particle's light and its reactive mask at one pixel.
+ParticleTargets particle_shade(ParticleVaryings input)
 {
     ParticleFrame* f = particle_push.frame;
     // A billowing puff: three octaves of noise turned with the particle and churning over its
@@ -625,4 +693,45 @@ ParticleTargets frag_main(ParticleVaryings input)
     float r = saturate(max(color.a, 0.25 * k));
     o.reactive = float4(REACTIVE * r, 0.0, 0.0, r);
     return o;
+}
+
+[shader("fragment")]
+ParticleTargets frag_main(ParticleVaryings input)
+{
+    return particle_shade(input);
+}
+
+struct LayerTargets
+{
+    float4 color : SV_Target0;
+    float4 coverage : SV_Target1; // r: the share of the pixel the puffs cover, blended over
+};
+
+// Into a layer of their own, laid over the upscaler's frame after it (DLSS's,
+// `Particles::composite_after_upscale`): the light, and the share of the pixel covered.
+[shader("fragment")]
+LayerTargets frag_layer_main(ParticleVaryings input)
+{
+    ParticleTargets t = particle_shade(input);
+    LayerTargets o;
+    o.color = t.color;
+    o.coverage = float4(t.color.a, 0.0, 0.0, t.color.a);
+    return o;
+}
+
+// The particles' layer over the upscaler's frame: at each of its pixels, the layer where that
+// pixel's point lay in the jittered render (bilinear), over what is there by the share covered.
+[shader("compute")]
+[numthreads(8, 8, 1)]
+void composite_main(uint3 id : SV_DispatchThreadID)
+{
+    ParticleFrame* f = particle_push.frame;
+    if (float(id.x) >= f[0].output_size.x || float(id.y) >= f[0].output_size.y)
+        return;
+    float2 uv = (float2(id.xy) + 0.5) / f[0].output_size + f[0].layer_shift;
+    float3 light = sample_image_level(f[0].layer, SAMPLER_LINEAR_CLAMP, uv, 0.0).rgb;
+    float covered = saturate(sample_image_level(f[0].coverage, SAMPLER_LINEAR_CLAMP, uv, 0.0).r);
+    RWTexture2D<float4> frame = g_storage_images_rgba16f[NonUniformResourceIndex(f[0].output)];
+    float4 behind = frame[id.xy];
+    frame[id.xy] = float4(behind.rgb * (1.0 - covered) + light, behind.a);
 }

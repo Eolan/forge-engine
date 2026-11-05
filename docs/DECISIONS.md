@@ -4966,6 +4966,63 @@ downloaded sets stay out unless the owner says otherwise.
   - **In the district:** its viewer places the source's steam emitters and emits those within
     60 m of the camera. The cost is in `docs/PROFILE.md`.
 
+**The steam near the camera, under DLSS and in the sun (2026-11-05).** The owner, on the district's
+street: "outside is not great either", "the fog "pops"", and on a sunlit manhole's column, "this
+one pops a lot", "same for other smoke/fog emitters outside".
+- **The camera in a puff:** a puff the camera walked into covered the screen at full opacity. It
+  vanished in one frame when its middle passed the near plane, and the street went from orange
+  haze to clear.
+  - **The fix:** each particle fades out as the camera comes within two of its radii, and is
+    gone at half of one (`smoothstep`, a camera depth fade as Unreal's).
+  - **The result:** the street's largest one-frame step in the frame's light went from 30.4 % to
+    7.1 % (4.3 % without steam, the camera's own motion).
+- **The sun on a puff:** one shadow ray from its middle turned a puff metres wide from lit to
+  shaded in a frame as it crossed a shadow's edge, and a sunlit street's steam flickered.
+  - **The fix:** five rays, from its middle and from four points half its radius out across the
+    sun's way (turned by its seed), averaged and eased over 0.15 s (`sun_share`, `SUN_EASE`). A
+    point a surface stands between (the ground under a grate's steam, the wall a puff leans on)
+    is left out: its ray would start inside the surface.
+  - **The result:** over six seconds of the street under DLSS Quality, the 4 × 6 tiles' sudden
+    steps in light (over four times their neighbours') went from 162 to 51; those left are in
+    dark tiles, the camera's motion. `particles/advance` stays at 0.001 ms.
+- **The blocks:** under DLSS (Quality and DLAA) the steam showed square blocks and a fine grid.
+  It did not with the anti-aliasing off or with FSR, which takes the particles' reactive mask.
+  - DLSS takes no reactive mask: NVIDIA's guide (3.15) says the current models ignore it.
+  - DLSS held the fading steam in its history. In the steam's region at the same frame: 0.225
+    under DLSS, 0.178 with the anti-aliasing off.
+  - **Tried and left out:** the puffs' own motion vectors (their middles moved by their velocity
+    and the camera) written where they cover a third of a pixel, then a fiftieth. The blocks
+    stayed. A translucent layer over a surface has no one motion.
+  - **Tried and left out:** the particles drawn after DLSS, over its frame, at the window's size
+    and without the jitter. The steam was clean, but the frame took 0.45 to 1.05 ms longer and
+    unsteadily (p99 18 → 20 ms on the district's path). The draw that reads the particles' ring
+    moved to the frame's end, and `fog/light` lost the draw it had run beside.
+- **A layer of their own** (`ParticleParams::after_upscale`, `Particles::composite_after_upscale`;
+  `--particles-before-dlss` the A/B):
+  - **The order:** under DLSS the particles are drawn where they were, at the render's size and
+    with its jitter, but into a layer of their own: their light, and the share of each pixel
+    they cover blended over. `particles/composite` then lays the layer over DLSS's frame: read
+    where each pixel's point lay in the jittered render, bilinear, over what is there by the
+    share covered.
+  - **The result:** the steam follows the steam without anti-aliasing (0.182 against 0.178 at
+    the same frame), with no blocks. It is a little softer, upsampled from the render's size.
+  - **The cost:** `particles/composite` 0.04 ms at 2560 × 1440; on the district's path (DLSS
+    Quality, interleaved runs) the frame 15.77–15.80 ms in the old order and 15.82–16.07 ms with
+    the layer, p99 17.75–18.10 both. The transient heap's peak is the same (134 MB): the layer
+    takes memory free at that point of the frame.
+  - **A still view** of the street's steam (2560 × 1440, frames ten apart): pixels changing by more
+    than 2 codes 12.9 → 17.0 % (at the path's 53 s) and 9.8 → 13.2 % (51 s). The change lies in
+    the moving steam, which DLSS no longer averages. Edges outside the steam change no more
+    than before.
+  - **What the order changes:** the exposure's meter, which reads the frame before the upscale,
+    no longer sees the particles; the bloom and the local exposure still do. The froxel fog
+    (D-099) no longer covers them, and they keep their own aerial haze. Before, the fog was laid
+    over them at the depth of the surface behind, too much for a near puff.
+  - **FSR, TAA, no anti-aliasing, and a scene with the tank** (#156, whose water refracts the
+    scene with the particles in it) keep the old order and the reactive mask.
+  - **Patents:** none found in a search (2026-11-05). Epic's guide to temporal upscalers moves
+    translucency's pass for the same reason.
+
 ## D-065 — Lighting the insides: lamps by clustered lists until ReSTIR's patents are settled ✅ (proposed 2026-10-16, #270; the owner's go 2026-10-17: both, compared)
 
 **The question:** how the village's entered houses are lit (#270): lamps, the rooms' bounce
@@ -11112,6 +11169,46 @@ app's `--fog-lamp-shadows N`, off by default):**
   The landing had been lit by red haze through its walls. The source, path traced with shadowed
   fog, keeps it bright, so the landing lacks light of its own, which this shows. **Off by
   default** until the landing's light is found. The village and the Bistro have no fog volumes.
+
+**The history (D-099's amendment, 2026-11-05, `FogParams::history`, on; `--no-fog-history` the
+A/B).** The owner, on the bar's haze: "Fog is not good, pixelized and not stable". Lit at their
+middles, the froxels showed as 16-pixel blocks along the lamps' cones, and the blocks crawled as
+the camera moved.
+- **The form** (Wronski 2014, Hillaire 2015, Unreal 4.16's volumetric fog; Godot's and Flax's do
+  the same):
+  - each froxel is lit at a point jittered within it each frame: the R2 sequence (Roberts 2018)
+    plus a pcg3d offset of its own, so neighbours sample different places;
+  - the result is blended into last frame's volume where the froxel's middle stood then,
+    keeping 0.9 of it (about ten frames' samples);
+  - the reprojection goes through last frame's view-projection; the slice is found by inverting
+    the light's sample distances, then read bilinear within two slices and linear between them;
+  - the history is brought to this frame's exposure (the CPU's, last frame's kept beside it).
+- **Where there is no history,** a froxel is lit at its middle, unjittered, as before:
+  - the first frame, or a frame after one without fog;
+  - a cut: the anti-aliasing's reset, the camera moved more than 4 m or turned more than 30° in a
+    frame (a teleport, the scene's origin moved);
+  - a point outside last frame's volume;
+  - a history value that is not finite (a fault kept in a history would never clear).
+- **The pass:** `fog/light` writes the history alone and `fog/integrate` reads it. The froxels'
+  own transient is gone, as is the buffer of exposures the first form read and wrote.
+- **The look:** the cones' edges are smooth, and their blocks no longer crawl. A still camera's
+  shimmer is unchanged: the bar 0.71 → 0.75 %, its landing 0.18 → 0.20 % (pixels over 2 codes,
+  frames ten apart).
+- **The cost:** on the district's path (2560 × 1440, DLSS Quality, interleaved runs) `fog/light`
+  0.43 → 0.46–0.47 ms (its zone, beside the particles' draw). The frame stays within the runs'
+  spread: 14.80 and 15.73 ms without, 15.62 and 15.95 ms with (one run without had the lamps'
+  ReSTIR 0.3 ms faster too).
+  - The zone shows less than the pass costs. With no barrier between them, the pass runs beside
+    the particles' draw before it, and its zone counts only what comes after that draw: 0.47 ms on
+    the district's street at 1280 × 720, 0.91 ms with no particle alive.
+  - **Tried and left out:** `fog/light` on the async compute queue. It needs this frame's movers
+    and probes, not its scene, but there it shared the GPU with the lamps' ReSTIR and the path took
+    longer.
+- **The owner's "the fog pops":** in the street it was the steam (D-064's amendment, the near
+  fade). At the bar's far end, the jump at the benchmark path's 16.8 s was the camera turning: a
+  lit stretch of haze came in at the screen's edge.
+- **Patents:** none found in a search (2026-11-05). The method has been public in shipped engines
+  since 2014 and in open source since (Unreal, Godot, Flax).
 
 ## D-100 — A scene's own colour grading: a 3-D LUT after a log encoding, as a display transform ✅ (proposed 2026-11-05; the owner's go the same day: "Follow recommendations"; D-045, D-083, D-084, D-094)
 
