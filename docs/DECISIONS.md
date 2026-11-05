@@ -11199,8 +11199,21 @@ not covered):
   4. Before a live grading tool across two machines, read Sony's US 12,039,708 B2.
   5. LogC named only to describe the curve (ARRI licenses the name for cameras).
 
+**Grading by area (2026-11-05, found after the proposal):**
+- **What the source does:** besides its scene table, it grades by volume. A trigger volume over
+  the private district's bar carries its own grading settings: per-channel gain (1, 1.18, 1) and
+  gamma (1, 0.87, 0.95) over low and high tonal ranges. A second volume fixes the camera's
+  exposure there (no auto-exposure). They cover all six of the bar's matched frames and no other.
+- **What it explains:** applied roughly (gain then gamma on every pixel's display value), it
+  brings two of the bar's frames' red-to-green ratio onto the source's (2.82 against 2.85, 2.04
+  against 1.94), from about twice it. Three others overshoot to green, since the tonal ranges
+  weigh it.
+- **So a go would mean volumes too:** settings blended by the camera's place, as engines' post-process
+  volumes do (Unreal's since 2014, Unity's Post-processing v2 since 2017).
+- **Patents:** volume blending has not been searched yet. Search before building it.
+
 **For the owner:**
-- go or no-go;
+- go or no-go, and whether it includes grading volumes;
 - the encoding: LogC only (the source's), or also a plain log2 range for Forge's own scenes' LUTs
   later;
 - whether the district's matched frames should be judged with the source's grading (the aim of
