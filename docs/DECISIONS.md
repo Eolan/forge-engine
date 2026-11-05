@@ -11092,6 +11092,22 @@ app's `--fog-lamp-shadows N`, off by default):**
 - **What the matched frames show:** the district's alleys stand +1 EV against the source's frames.
   Their darkest tenth matches, but their median is 3× and their brightest tenth 2.4× the
   source's. The exposure fits (D-083) can move the level, not the curve's shape.
+- **The source's tables tried offline** (2026-11-05):
+  - **Method:** four views of the benchmark path were captured as scene light (`--capture-linear`).
+    Each was graded through LogC and the source's tables, with one exposure scale per view fitted
+    so its median luminance meets the source frame's.
+  - **Result:** the spread of tones then falls close to the source's, where Forge's curve
+    doubles to triples it. The ratio of the brightest tenth to the darkest:
+
+    | View | Source | Forge, AgX punchy | Through the source's SDR table | Through its HDR table |
+    |---|---|---|---|---|
+    | Alley | 51 | 108 | 37 | 9 |
+    | Second alley | 83 | 142 | 41 | 9 |
+    | Street | 83 | 272 | 118 | 68 |
+    | Bar | 10 | 203 | 28 | 7 |
+
+    The darkest tenth lands within about 1.5× of the source's (0.0037 against 0.0024 in the alley).
+  - **Reading:** the look's shape is its grading, not its light.
 
 **Proposed:**
 1. **A display transform that reads a scene's LUT** (`Tonemap::Lut`, `r.tonemap lut` when a scene
@@ -11114,9 +11130,33 @@ app's `--fog-lamp-shadows N`, off by default):**
    - the pass's cost (one 3-D sample a pixel, inside the existing display pass);
    - 0 px in the village and the Bistro.
 
-**Patents:** a 3-D LUT for colour grading after a log encoding is decades-old practice (film
-scanners, DaVinci, Unreal Engine's grading LUTs since 2014, Unity's since 2017; Hable, 2010). A
-search of the patent databases runs before the build, as D-099's did.
+**Patents** (searched 2026-11-05, web research, not legal advice; Google Patents answered five
+queries, then refused; Justia and FreePatentsOnline refused; Chinese, Japanese and Korean filings
+not covered):
+- **Low risk.** The proposal is Unity's Post-processing v2 "External" grading (beta July 2017,
+  open source): `LinearToLogC` then a 3-D LUT. It is also GPU Gems 2's chapter 24 (Selan, 2005): a
+  3-D texture with trilinear filtering behind a shaper.
+- **More prior art:** ARRI's LogC usage paper (2011, the formula published, no ARRI patent
+  found), OpenColorIO (shaper LUTs, 1.0 in 2011), Unreal Engine's grading LUTs, Frostbite's HDR
+  grading (GDC 2017), O3DE's look modification.
+- **Live patents read, none reading on it:**
+  - ATI/AMD's reduced-LUT polynomial interpolation (US 11,115,563 B2), its LUT addressing by the
+    float's exponent and mantissa (US 10,242,647 B2, US 10,867,580 B2), and its 2^m + 1 + 4p grids
+    (US 10,424,269 B2);
+  - the BBC's display-to-display conversions (US 10,455,209 B2);
+  - Microsoft's histogram-driven tone curves (US 10,176,561 B2);
+  - Dolby's LUTs blended by display peak (US 10,332,481 B2);
+  - Sony Interactive's grading on a second machine (US 12,039,708 B2);
+  - Apple's display LUT circuits.
+- **The rules it keeps:**
+  1. One fixed, published per-channel curve (LogC v3), then the hardware's trilinear sampling of
+     a full, uniform 32³ or 33³ table: no custom addressing, no per-cube correction, never a
+     2^m + 1 + 4p grid.
+  2. The table authored offline and supplied by the scene: never derived or reshaped from the
+     frame's content or histogram, the exposure a stage of its own.
+  3. Before HDR tables blended by display peak or a rendering-intent conversion, search again.
+  4. Before a live grading tool across two machines, read Sony's US 12,039,708 B2.
+  5. LogC named only to describe the curve (ARRI licenses the name for cameras).
 
 **For the owner:**
 - go or no-go;
