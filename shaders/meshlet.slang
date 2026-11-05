@@ -703,13 +703,22 @@ bool lamp_counted(Frame* f, LampRuns r, uint run, uint i)
 // the picked rest in streaks. A street lamp (the outside's region first) lights the whole street.
 float lamp_weight_in(Lamp lamp, float3 world, float3 n, uint region, uint other, float near = 0.0)
 {
+    if (!lamp_in_storey(lamp, world, region))
+        return 0.0;
+    return lamp_weight(lamp, world, n, near);
+}
+
+// Whether `world` is on `lamp`'s storey (`lamp_weight_in`): always, but for a storeyed lamp seen
+// from a region.
+bool lamp_in_storey(Lamp lamp, float3 world, uint region)
+{
     if (lamp_storeyed(lamp) && region != REGION_NONE)
     {
         float dy = world.y - lamp.position_radius.y;
         if (dy < -2.7 || dy > 0.8)
-            return 0.0;
+            return false;
     }
-    return lamp_weight(lamp, world, n, near);
+    return true;
 }
 
 // Whether `lamp` lights its storey only (`lamp_weight_in`): a house's, with rooms for regions; not
@@ -766,15 +775,68 @@ bool lamp_prism(Lamp lamp)
 // halo; the resolve lights them directly, each pixel its own.
 static const float PROBE_LAMP_NEAR = 0.25;
 
-// `hit_lamps`' weight of `lamp` at `hit`: `lamp_weight_in`; for a probe's ray none of a street
-// lamp's, and none nearer than PROBE_LAMP_NEAR. The probes' blend spread a street lamp's bounce
-// over the grass and the path in sharp blocks of their grid, away from the lamp (the owner,
-// 2026-10-18; #254); its direct light and its shadows are the resolve's.
-float hit_lamp_weight(Lamp lamp, RayHit hit, uint region, bool probe)
+// `hit_lamps`' weight of `lamp` at `hit`: `lamp_weight_in`, a flat piece's its cheap weight
+// (`lamp_flat_hit_weight`, #396) unless `exact`; for a probe's ray none of a street lamp's, and
+// none nearer than PROBE_LAMP_NEAR. The probes' blend spread a street lamp's bounce over the grass
+// and the path in sharp blocks of their grid, away from the lamp (the owner, 2026-10-18; #254);
+// its direct light and its shadows are the resolve's.
+float hit_lamp_weight(Lamp lamp, RayHit hit, uint region, bool probe, bool exact)
 {
     if (probe && lamp_outside(lamp))
         return 0.0;
-    return lamp_weight_in(lamp, hit.position, hit.n, region, region, probe ? PROBE_LAMP_NEAR : 0.0);
+    float near = probe ? PROBE_LAMP_NEAR : 0.0;
+    if (lamp_flat(lamp) && !exact)
+        return lamp_in_storey(lamp, hit.position, region) ? lamp_flat_hit_weight(lamp, hit.position, hit.n, near) : 0.0;
+    return lamp_weight_in(lamp, hit.position, hit.n, region, region, near);
+}
+
+// The least cosine `lamp_flat_hit_weight` takes, from the piece's axis and from the hit's normal.
+static const float FLAT_HIT_LEAST = 0.05;
+
+// A flat piece's weight at a ray's hit (#396): the light of its rectangle's point nearest the hit,
+// Lambert's cosines from there over the distance squared (held over `near`), each cosine at least
+// FLAT_HIT_LEAST so that no hit its exact light (`lamp_rect_share`) reaches is left out, and none
+// over that light's bound, π over its area (`near`'s too). The picked lamp's light is then its
+// exact weight over this one (`hit_lamp_exact_factor`): the same sum, unbiased, without a polygon's
+// four edges for every lamp weighed; from its nearest point, a hit by a long strip's end is not
+// weighed as from its middle (the review: the ratio ran to thousands there). Each hit weighing its
+// flat lamps exactly cost an authored city's benchmark path 0.3 ms with its long tubes as flat
+// pieces.
+float lamp_flat_hit_weight(Lamp lamp, float3 world, float3 n, float near)
+{
+    float3 c = lamp.position_radius.xyz - world;
+    float dist2 = dot(c, c);
+    float reach = lamp.colour_reach.w;
+    // Out of reach, or behind the piece: none, as its exact light.
+    if (dist2 >= reach * reach || dot(c, lamp.beam.xyz) >= 0.0)
+        return 0.0;
+    float3 u;
+    float3 v;
+    lamp_rect_axes(lamp, u, v);
+    float3 nearest = c + u * clamp(-dot(c, u), -lamp.beam_edge.z, lamp.beam_edge.z) + v * clamp(-dot(c, v), -lamp.beam_edge.w, lamp.beam_edge.w);
+    float near2 = max(dot(nearest, nearest), 1e-8);
+    float3 l = nearest * rsqrt(near2);
+    float emit = max(-dot(l, lamp.beam.xyz), FLAT_HIT_LEAST);
+    float ndl = max(dot(n, l), FLAT_HIT_LEAST);
+    float bound = 3.14159265 / max(4.0 * lamp.beam_edge.z * lamp.beam_edge.w, 1e-12);
+    if (near > 0.0)
+        bound = min(bound, 1.0 / (near * near));
+    float share = min(emit * ndl / max(near2, near * near), bound);
+    float window = saturate(1.0 - pow(sqrt(dist2) / reach, 4.0));
+    return dot(lamp.colour_reach.rgb, float3(0.2126, 0.7152, 0.0722)) * share * window * window;
+}
+
+// The picked flat piece's exact weight at the hit over the one it was picked by
+// (`lamp_flat_hit_weight`): the factor its light takes. 1 for any other lamp, and where the pick
+// weighed it exactly.
+float hit_lamp_exact_factor(Lamp lamp, RayHit hit, uint region, bool probe, bool exact)
+{
+    if (!lamp_flat(lamp) || exact)
+        return 1.0;
+    float cheap = hit_lamp_weight(lamp, hit, region, probe, false);
+    if (cheap <= 0.0)
+        return 0.0;
+    return lamp_weight_in(lamp, hit.position, hit.n, region, region, probe ? PROBE_LAMP_NEAR : 0.0) / cheap;
 }
 
 // Mirrors `GpuLamp` in crates/forge-render/src/lamps.rs (D-065): a small sphere light, or a flat
@@ -6950,7 +7012,9 @@ float lamp_weight(Lamp lamp, float3 world, float3 n, float near = 0.0)
 
 // The light at a ray's hit of `lamp`, chosen among the lamps in reach with the chance its weight's
 // share of `total` (`hit_lamps_weighed`), through one shadow ray: its colour of luminance 1 times
-// every lamp's light, w / (w / total). `n` the hit's random number (a flat piece's point on it).
+// every lamp's weight, w / (w / total); a flat piece picked by its cheap weight then takes its exact
+// over it (`hit_lamp_exact_factor`, the caller's). `n` the hit's random number (a flat piece's point
+// on it).
 float3 hit_lamp_through(Frame* f, RayHit hit, Lamp lamp, uint n, float total)
 {
     // Aimed from where it starts (`lamp_ray`, #298): aimed from the hit and started SHADOW_BIAS
@@ -6983,9 +7047,9 @@ static const uint HIT_LAMP_DRAWS = 16u;
 
 // `hit_lamps_weighed` over many lamps by resampled importance sampling: `HIT_LAMP_DRAWS` lamps
 // drawn uniformly from the `reach` in the hit's two runs (`first` in the first), one of them kept
-// with the chance of its weight among theirs (a reservoir), and every lamp's light estimated as
-// their weights' sum times `reach / HIT_LAMP_DRAWS`: unbiased, its noise the probes' and the
-// bounce's denoisers take. The pick (the lamp count for none), the estimate, and the hit's random
+// with the chance of its weight among theirs (a reservoir), and every lamp's weight estimated as
+// their weights' sum times `reach / HIT_LAMP_DRAWS` (a flat piece's its cheap one, its exact taken
+// after the pick, #396): unbiased, its noise the probes' and the bounce's denoisers take. The pick (the lamp count for none), the estimate, and the hit's random
 // number advanced past the draws, so a flat piece's point on it owes nothing to the pick.
 uint hit_lamps_draw(Frame* f, RayHit hit, uint region, uint seed, bool probe, LampRuns runs, uint first, uint reach, out float total, out uint n)
 {
@@ -7000,7 +7064,7 @@ uint hit_lamps_draw(Frame* f, RayHit hit, uint region, uint seed, bool probe, La
         uint e = min(uint(float(n >> 8) * (1.0 / 16777216.0) * float(reach)), reach - 1u);
         uint entry = e < first ? runs.run[0].x + e : runs.run[1].x + (e - first);
         uint i = lamp_at(f, runs, entry);
-        float w = hit_lamp_weight(f[0].lamps[i], hit, region, probe);
+        float w = hit_lamp_weight(f[0].lamps[i], hit, region, probe, false);
         if (w <= 0.0)
             continue;
         sum += w;
@@ -7029,6 +7093,9 @@ float3 hit_lamps_weighed(Frame* f, RayHit hit, uint region, uint seed, bool prob
     float total = 0.0;
     uint n = 0u;
     uint chosen = count;
+    // A mirror's hit (`sample` false: its light neither accumulated nor denoised) weighs its flat
+    // pieces exactly, their light without noise; the others by their cheap weight (#396).
+    bool exact = !sample;
     if (sample && reach > HIT_LAMPS_EXACT)
         chosen = hit_lamps_draw(f, hit, region, seed, probe, runs, first, reach, total, n);
     else
@@ -7036,7 +7103,7 @@ float3 hit_lamps_weighed(Frame* f, RayHit hit, uint region, uint seed, bool prob
         for (uint r = 0u; r < 2u; r++)
         {
             for (uint e = runs.run[r].x; e < runs.run[r].y; e++)
-                total += hit_lamp_weight(f[0].lamps[lamp_at(f, runs, e)], hit, region, probe);
+                total += hit_lamp_weight(f[0].lamps[lamp_at(f, runs, e)], hit, region, probe, exact);
         }
         if (total <= 0.0)
             return float3(0.0);
@@ -7053,7 +7120,7 @@ float3 hit_lamps_weighed(Frame* f, RayHit hit, uint region, uint seed, bool prob
             for (uint e = runs.run[r].x; e < runs.run[r].y; e++)
             {
                 uint i = lamp_at(f, runs, e);
-                float w = hit_lamp_weight(f[0].lamps[i], hit, region, probe);
+                float w = hit_lamp_weight(f[0].lamps[i], hit, region, probe, exact);
                 if (w <= 0.0)
                     continue;
                 chosen = i;
@@ -7065,13 +7132,16 @@ float3 hit_lamps_weighed(Frame* f, RayHit hit, uint region, uint seed, bool prob
     }
     if (chosen >= count)
         return float3(0.0);
-    return hit_lamp_through(f, hit, f[0].lamps[chosen], n, total);
+    // A flat piece was picked by its cheap weight: its light takes its exact one over it (#396).
+    Lamp picked = f[0].lamps[chosen];
+    return hit_lamp_through(f, hit, picked, n, total) * hit_lamp_exact_factor(picked, hit, region, probe, exact);
 }
 
 // The lamps' light on a ray's hit (D-065: the probes lit by the lamps, and the mirror rays' hits),
 // in the resolve's units: one lamp of those that light region `region` (`lamp_lights`;
-// REGION_NONE: all) whose reach the hit is in, picked by its unshadowed light there, and one
-// shadow ray to its middle (a flat piece's to a point of its disc), the light over the chance it
+// REGION_NONE: all) whose reach the hit is in, picked by its unshadowed light there (a flat piece's
+// cheap weight, but at a mirror's hit, #396), and one shadow ray to its middle (a flat piece's to a
+// point of its rectangle), the light over the chance it
 // had of being picked. A probe's updates average the picks as they average its rays' directions; a
 // room's walls send its lamps' light back to its probes, one bounce a frame (#53). `seed`: the
 // ray's own number, mixed with the frame's. `probe`: a probe's ray, which leaves the street lamps

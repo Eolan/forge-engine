@@ -2944,6 +2944,12 @@ street 5.8 / 8.7. VRAM 3.9 GB (2.3 GB geometry: #387, pages about a tenth full).
   - **From half its reflection** (`DECAL_MIRROR_LEAST`, faded in to 0.8; kept): 15.67 and 15.81 ms
     without, 15.71 and 15.86 with; `shading/reflections` 0.220 and 0.240 → 0.260 and 0.263,
     `shading/standard` +0.03. Only scenes whose decals lay a roughness map run either.
+- **Flat lamps weighed cheaply at the rays' hits** (#396, 2026-11-05; the same path, the private
+  district's tubes of 4 m or more as flat pieces against as points): exact weights at every hit cost
+  +0.3 ms whatever the tubes' number (the polygon integral for each lamp weighed); the cheap weights
+  from the rectangle's nearest point, the exact light for the picked one alone: points 15.46, 15.63
+  and 15.72 ms, flat pieces 15.69, 15.80 and 15.88 (+0.19; `gi/probe rays` and `gi/trace` +0.06 to
+  +0.2, noisy).
 
 ## Instances scaled per axis: the 96-byte record (#380, 2026-11-01)
 

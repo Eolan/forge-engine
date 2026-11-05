@@ -5816,6 +5816,31 @@ its night goes (the lamps' weighing is); the option stays for authored data, and
 district matches the raster mode (its lights then reach through walls) or the ray-traced one is the
 owner's call.
 
+**Flat lamps weighed cheaply at the rays' hits** (2026-11-05, #396): a ray's hit (the probes', the
+bounce's, the caches') picks one lamp of those in reach by its weight, its unshadowed light. A flat
+piece's weight was its rectangle's exact light (`lamp_rect_share`, a clipped polygon's four edges)
+for every lamp weighed. The private district, with its long tubes as flat pieces (its viewer's), paid
+about 0.3 ms for it whatever their number (145, 366 or 1,155 of them).
+- **Now:** `lamp_flat_hit_weight`, the light from its rectangle's point nearest the hit (Lambert's
+  cosines from there, each at least 0.05, over the distance squared), none over the exact light's
+  bound (π over its area). The picked piece's light then takes its exact weight over this one
+  (`hit_lamp_exact_factor`): unbiased, since the cheap weight is over 0 wherever the exact one is.
+- **A mirror's hit** (its light neither accumulated nor denoised) still weighs its flat pieces
+  exactly, their light without noise.
+- **The numbers:**
+  - **The district's path** (2560 × 1440, DLSS Quality, interleaved after a warm-up), its tubes
+    of 4 m or more as flat pieces against as points:
+    - weighed exactly: 16.13 and 16.18 ms against 15.83 and 15.86 (+0.3);
+    - from their middles: about even, within the runs' noise;
+    - from their nearest points (kept): 15.69 to 15.88 against 15.46 to 15.72 over three pairs
+      (+0.19).
+  - **The Bistro's night** (its 160 glowing pieces' lamps, the probes' light): the 16 × 9 tiles'
+    mean |log2| 0.000 against the build before, the frame ×1.000. Pixels differ by noise alone
+    (11 % of them, 1,011 by over 5 %).
+  - **The village's map-check views:** 0 to 36 pixels from the build before (the bounce's noise).
+- **Next** (#396): a tube emission, a segment with a closed-form diffuse light, for the strips
+  themselves.
+
 ## D-066 — Pieces with sockets: one connector schema for generation, the anomaly check and player building ✅ (proposed 2026-10-16 on the owner's walk of #266; the owner's go the same evening)
 
 **The question:** the owner, walking the village: "would using some kind of snap system with the
