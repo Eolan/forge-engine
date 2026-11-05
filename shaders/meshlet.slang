@@ -408,8 +408,8 @@ public struct DecalKind
     public float4 facing;    // x: the cosine to the box's y under which it is gone, y: over which whole
     public uint alpha;       // DECAL_PREMULTIPLIED, DECAL_STRAIGHT or DECAL_MASK
     public uint strip;       // 1: a strip, its u wrapped within its cell (`uv_rect`)
-    public uint alpha_pad1;
-    public uint alpha_pad2;
+    public uint normal;      // a colour decal's tangent-space normal map, TEXTURE_NONE without
+    public float normal_strength; // its slopes times this
     public float4 uv_rect;   // the part of its texture it shows: u, v of its corner, its width and height
 };
 
@@ -418,6 +418,8 @@ public struct DecalKind
 static const uint DECAL_PREMULTIPLIED = 0u;
 static const uint DECAL_STRAIGHT = 1u;
 static const uint DECAL_MASK = 2u;
+// A decal normal map's least z (`apply_decals`): its slopes, each over z, held under 8.
+static const float DECAL_LEAST_Z = 0.125;
 
 // The decals' grid (D-074): columns of `cell` metres (x, z) in an open-addressed hash of
 // `slot_mask` + 1 slots (x, z, first, count; count 0 an empty slot), each column's decals at
@@ -4739,8 +4741,10 @@ uint2 column_run(uint4* slots, uint slot_mask, float cell, float3 world)
 // box's faces along its axis, and on the surfaces that do not face that axis (the ground under a
 // wall's grime). Its texture's gradients are its box's axes dotted with the surface's analytic
 // change per pixel, scaled as the rows' textures are (`texture_lod_scale`): no halo where the
-// surface ends, its mips and anisotropy whole.
-void apply_decals(Frame* f, Surface s, inout float3 albedo, inout float3 n, bool rows)
+// surface ends, its mips and anisotropy whole. A colour decal's normal map (`DecalKind::normal`)
+// adds its slopes, along the box's x and z laid on the surface, times its coverage, to `bend`:
+// the caller bends its final normal by it (`decal_bent`), its own map's or the row's.
+void apply_decals(Frame* f, Surface s, inout float3 albedo, inout float3 n, inout float3 bend, bool rows)
 {
     DecalGrid* g = f[0].decals;
     if (g == nullptr)
@@ -4778,6 +4782,21 @@ void apply_decals(Frame* f, Surface s, inout float3 albedo, inout float3 n, bool
         if (k.row == DECAL_NO_ROW)
         {
             albedo = albedo * (1.0 - t.a * strength) + t.rgb * k.tint.rgb * strength;
+            // A decal covers the relief under it as it covers its colour (a poster over a crack).
+            bend *= 1.0 - t.a * strength;
+            if (k.normal != TEXTURE_NONE && t.a * strength > 0.0)
+            {
+                // Its slopes on the surface: the box's x (u) and z (v) laid in the surface's
+                // plane, the map's +y up the image, towards -v (Forge's mesh maps' way), each
+                // over the map's z, so a texel's tilt is the map's.
+                float2 slope = sample_image_grad(k.normal, k.sampler, uv, gx, gy).xy * 2.0 - 1.0;
+                slope /= max(sqrt(saturate(1.0 - dot(slope, slope))), DECAL_LEAST_Z);
+                float3 T = quat_turn(d.rotation, float3(1.0, 0.0, 0.0), false);
+                float3 B = quat_turn(d.rotation, float3(0.0, 0.0, 1.0), false);
+                T -= s.n * dot(s.n, T);
+                B -= s.n * dot(s.n, B);
+                bend += (slope.x * T - slope.y * B) * (k.normal_strength * t.a * strength);
+            }
             continue;
         }
         float mask = t.a * strength;
@@ -4787,14 +4806,31 @@ void apply_decals(Frame* f, Surface s, inout float3 albedo, inout float3 n, bool
         standard_surface(f[0].materials[k.row], s, row_albedo, row_n);
         albedo = lerp(albedo, row_albedo * k.tint.rgb, mask);
         n = normalize(lerp(n, row_n, mask));
+        bend *= 1.0 - mask;
     }
 }
 
-// `apply_decals` for a class without row decals: their colour alone.
-void apply_decals(Frame* f, Surface s, inout float3 albedo)
+// `n` bent by the decals' slopes (`apply_decals`'s `bend`); left as it is, to the bit, without.
+float3 decal_bent(float3 n, float3 bend)
+{
+    return any(bend != 0.0) ? normalize(n + bend) : n;
+}
+
+// `apply_decals` for the layered class: its row decals' normals in `n`, the colour decals' slopes
+// bending it after them.
+void apply_decals(Frame* f, Surface s, inout float3 albedo, inout float3 n, bool rows)
+{
+    float3 bend = float3(0.0);
+    apply_decals(f, s, albedo, n, bend, rows);
+    n = decal_bent(n, bend);
+}
+
+// `apply_decals` for a class without row decals: their colour, and their slopes in `bend` for the
+// caller's final normal (`decal_bent`).
+void apply_colour_decals(Frame* f, Surface s, inout float3 albedo, inout float3 bend)
 {
     float3 n = s.n;
-    apply_decals(f, s, albedo, n, false);
+    apply_decals(f, s, albedo, n, bend, false);
 }
 
 // The albedo and the normal a standard row gives the surface: the row's two colours mixed by
@@ -4961,7 +4997,8 @@ LightInputs uv_mapped_light(Frame* f, Material mat, Surface s)
         base *= sample_image_grad(mat.albedo_texture, mat.sampler, uv, gx, gy).rgb;
     if (leaves)
         base = leaf_underside(base, mat.scattering, s);
-    apply_decals(f, s, base);
+    float3 decal_bend = float3(0.0);
+    apply_colour_decals(f, s, base, decal_bend);
     float roughness = mat.roughness;
     float metal = mat.metallic;
     bool levels = (mat.flags & MATERIAL_FLAG_LEVELS) != 0u;
@@ -5021,6 +5058,7 @@ LightInputs uv_mapped_light(Frame* f, Material mat, Surface s)
         float3 bent = (t.x * T - t.y * B) * scale + t.z * N;
         n = normalize(mul(s.normal_frame, bent));
     }
+    n = decal_bent(n, decal_bend);
     float alpha = clamp(roughness, 0.02, 1.0);
     alpha *= alpha;
     // RenderLayer::specular_power, kept over 0: at roughness 1 the exponent is 0, and pow(0, 0) is NaN
@@ -5369,9 +5407,10 @@ StandardInputs standard_inputs(Frame* f, Material mat, Surface s)
         else
         {
             standard_surface(mat, s, albedo, n);
-            apply_decals(f, s, albedo);
+            float3 decal_bend = float3(0.0);
+            apply_colour_decals(f, s, albedo, decal_bend);
             li.albedo = albedo;
-            li.n = n;
+            li.n = decal_bent(n, decal_bend);
             li.emissive = emission(f, mat);
         }
     }

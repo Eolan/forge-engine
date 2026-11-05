@@ -1820,6 +1820,11 @@ something stands out). Two things to watch:
     house front) and 8 m (0.840–0.844) cost more than 4 m.
     With the stains and cracks on the paving (1 210 decals), two runs each way: 0.816 →
     0.863–0.869 ms on the house front, 0.905 → 0.968–0.971 ms over the junction.
+  - *2026-11-05, the colour decals' normal maps (D-074):* the private district's benchmark path
+    (2560 × 1440, DLSS Quality, 5 000 frames, 132 of its 329 decal kinds with a normal map):
+    `shading/standard` 2.180 → 2.207 ms, the frame 14.448 → 14.446 ms. Its decals as a whole
+    cost 0.35–0.39 ms (`--no-decals`: the frame 13.68 → 13.33 ms, `shading/standard` 2.157 →
+    1.767). A scene without decal normal maps draws to the bit as before.
   - *2026-10-19, the street lamps beyond the set (#284):* the village at 22:00 under DLAA, EV 3,
     receding from the junction 12 m up for 100 m (3 000 frames, the mean): `shading/standard`
     1.026 → 1.072 ms and the frame 4.916 → 4.955 ms with the far lamps (`--no-far-lamps` the

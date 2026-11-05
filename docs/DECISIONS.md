@@ -7180,6 +7180,25 @@ it). The village's thirteen views are 0 px from the same build without it. Their
 inputs (a gradient map's recolour, normal, roughness and parallax maps) wait for the colour decals
 to be drawn there and compared with the game's pictures.
 
+**The colour decals' normal maps** (2026-11-05, #304: "an optional normal", decided above, built
+now):
+- **The fields:** `DecalKind::normal` and `normal_strength`. The map is read as the kind's
+  texture is (its atlas cell, a strip's repeats, the same gradients). Its red and green are the
+  slopes along the box's `x` (the texture's `u`) and up the image (towards −`v`), as Forge reads a
+  mesh's maps.
+- **The bend:** both axes are laid in the surface's plane. The map's slopes, each over its z (so
+  a texel tilts as the map says), times the decal's coverage (its alpha times its strength), add to
+  a bend. A decal painted over another covers its relief as it covers its colour. Each class bends
+  its final normal by it (`decal_bent`), after its own normal map, so the dents and cracks a decal
+  carries catch the light whatever the surface's own map. The map is linear; its coverage is the
+  kind's texture's (no decal of relief alone yet).
+- **Without a normal map nothing changes, to the bit:** the bend stays zero and the normal is not
+  renormalised. The village's thirteen views are 0 px from HEAD's build.
+- **The private district:** 132 of its 329 decal kinds carry a normal map (40 of their 47 maps are
+  in the archives). Its broken concrete and rubble now show relief under a low sun (0.02–0.08 % of
+  a street view's pixels).
+- **Still waiting:** the decals' roughness and parallax maps.
+
 *(research: decals.md; D-007, D-013, D-021, D-026, D-028, D-047, D-065; issue #304)*
 
 ## D-075 — Forests as a ladder per tree, grass as a GPU pass near the camera ✅ (proposed 2026-10-19, #302, #300; the owner's go the same day: "follow your recommendations")
@@ -10863,6 +10882,61 @@ live patent found reads on items 1–4 as written.
   volumes (MIT, 2022).
 - **Before the shadowed option:** run the full-text queries again (the site blocked the later
   ones), since applications from the last 18 months are not yet published.
+
+**The shadowed option's patent search (2026-11-05, web research, not legal advice):**
+- **The question:** the lamps' fog shadowed, either by one ray a froxel to a lamp drawn by its
+  unshadowed weight, or by a ray to every lamp above a weight. Both are steadied by D-032's
+  reprojected history.
+- **Where it searched:**
+  - Google Patents answered for "volumetric fog" (priority from 2019, 82 hits, read by title)
+    and for "volumetric fog" + "shadow ray" (one hit, NetEase's CN115591235A, a model-rendering
+    patent), then refused every request.
+  - The EPO's data service, claims mirrors and about 30 web queries filled in. FreePatentsOnline,
+    Justia, Patentscope and Espacenet's API refused automated requests.
+- **What it found:** no live patent read on either form. The nearest:
+  - **NVIDIA's light importance caching** (US 11,756,254 B2 and US 12,374,024 B2, granted, to
+    about 2040; the latter is the "pending US 2023/0419590" above) claims choosing rays per
+    region, a non-cubic voxel among them, from values that earlier rays found. Forge's weights
+    are analytic, never learned from rays.
+  - **NVIDIA's ReSTIR family** (US 11,948,246, US 12,361,635 B1, ReGIR US 12,299,801) resamples
+    reservoirs and reuses the previous frame's samples. A fresh weighted draw each frame does
+    neither.
+  - **NVIDIA's spatiotemporal blue noise** (US 11,727,621 B2 and continuations, to about 2041)
+    builds its masks by importance sampling and swaps. A hash, or a classic blue-noise tile,
+    stays clear.
+  - **NVIDIA's shadow denoisers** (US 11,600,036 B2, US 11,727,535, US 10,740,954) set their
+    filters from the shadows' temporal variance. The volume's plain exponential history does not.
+  - **Disney's "Distribution caching for direct lights"** (US 9,619,922 B2, to about 2034)
+    caches light lists, distributions and a visibility list at points. Its claims could not be
+    read.
+  - **Not relevant:** Sony's EP 4700708 A1 and its US family (2024–2025) upscale froxel grids by
+    learning and claim no lighting.
+  - **Chinese filings** (Tencent, NetEase, Perfect World, Sichuan University on soft shadows in
+    volumetric fog): titles only; they matter for sales there.
+- **Prior art:**
+  - Ward's adaptive shadow testing (1991): the lights in order of contribution, the small ones
+    skipped, as the threshold form.
+  - Shirley, Wang and Zimmerman (1996): one light by its unshadowed contribution, one ray.
+  - Wronski (2014) and Hillaire (2015).
+  - Unreal 4.16 (2017): froxel fog with shadowed lamps and a reprojected history.
+  - AMD's stochastic light culling for media (2016, 2022).
+  - Heitz et al.'s ratio estimator (2018).
+  - RTX Remix 0.1.0 (MIT, 2023): one visibility ray a froxel to a chosen light, accumulated over
+    frames.
+  - Unreal 5.5's MegaLights (2024).
+- **The rules a shadowed fog keeps:**
+  1. The weights analytic and unshadowed, every frame: no visibility cache, no learned
+     importance, nothing fed back from the rays.
+  2. No reservoirs, no RIS, no reuse of a neighbour's or the last frame's lamp.
+  3. The history blends radiance alone: no variance-driven filter, no penumbra masks.
+  4. The random numbers from a hash (PCG) or a classic blue-noise tile shifted by the golden ratio
+     each frame.
+  5. The lists per world column, every lamp in reach: no distant-light distributions, no
+     visibility lists.
+- **The threshold form is the clearer.** It is deterministic, older than every claim found, and
+  needs no random number.
+- **Before shipping the single-ray form:** read the claim 1 of Disney's US 9,619,922 and the
+  granted claims of US 12,374,024.
 
 **Step 1 built (2026-11-04): the boxes and the lamps, unshadowed** (`forge_render::FogVolume`,
 `shaders/fog.slang`, the city app's `Running::fog_boxes`, `--no-fog`).

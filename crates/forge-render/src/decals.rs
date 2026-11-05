@@ -16,7 +16,8 @@
 //! now. Textures made elsewhere (a production's
 //! block-compressed ones) come with their alpha apart (`DecalAlpha::Straight`) or as a mask over
 //! the kind's tint (`DecalAlpha::Mask`), and a kind may show one cell of an atlas
-//! (`DecalKind::uv_rect`).
+//! (`DecalKind::uv_rect`). A colour decal may carry a normal map (`DecalKind::normal`), whose
+//! slopes bend the surface's normal where it covers it.
 
 use crate::columns::{ColumnTables, place};
 use bytemuck::{Pod, Zeroable};
@@ -73,6 +74,18 @@ pub struct DecalKind {
     /// masks, the surface takes that row's colour (times [`Self::tint`]) and normal, as a layered
     /// ground's layer; the layered class alone draws them for now. `None`: a colour decal.
     pub row: Option<MaterialId>,
+    /// A colour decal's tangent-space normal map (D-074), read as its texture is (its atlas cell,
+    /// its strip's repeats): its red and green the slopes along the box's `x` (the texture's `u`)
+    /// and up the image (towards −`v`, the box's −`z`), as Forge reads a mesh's maps. Where the
+    /// decal covers the surface (its alpha times its strength) it bends the surface's normal,
+    /// whatever the surface's own map: the cracks and dents a decal carries catch the light. A
+    /// decal painted over it covers its relief as it covers its colour. The map is linear (uploaded
+    /// with `srgb` false: read as sRGB, a flat texel would tilt by about 30°), and its coverage is
+    /// the kind's texture's alpha, colour and relief together (no decal of relief alone yet).
+    /// `None`: the surface's normal kept (Forge's own decals).
+    pub normal: Option<TextureId>,
+    /// The slopes of [`Self::normal`] times this (1: as the map gives them).
+    pub normal_strength: f32,
 }
 
 /// A decal: a box in the scene's frame and its kind.
@@ -133,7 +146,9 @@ struct GpuDecalKind {
     alpha: u32,
     /// 1: a strip, its `u` wrapped within its cell.
     strip: u32,
-    pad: [u32; 2],
+    /// Its normal map, `TEXTURE_NONE` without one.
+    normal: u32,
+    normal_strength: f32,
     uv_rect: [f32; 4],
 }
 
@@ -245,7 +260,12 @@ impl DecalSet {
                     DecalAlpha::Mask => 2,
                 },
                 strip: u32::from(k.strip),
-                pad: [0; 2],
+                normal: k.normal.map_or(crate::material::TEXTURE_NONE, &sampled),
+                normal_strength: if k.normal.is_some() {
+                    k.normal_strength
+                } else {
+                    0.0
+                },
                 uv_rect: k.uv_rect,
             })
             .collect();
@@ -281,6 +301,8 @@ mod tests {
             depth_fade: 0.2,
             facing: [0.2, 0.5],
             row: None,
+            normal: None,
+            normal_strength: 1.0,
         }
     }
 
@@ -365,5 +387,25 @@ mod tests {
         assert_eq!(kinds.iter().map(|k| k.alpha).collect::<Vec<_>>(), [0, 1, 2]);
         assert_eq!(kinds[0].uv_rect, [0.0, 0.0, 1.0, 1.0]);
         assert_eq!(kinds[2].uv_rect, [0.5, 0.25, 0.5, 0.25]);
+    }
+
+    #[test]
+    fn a_kind_without_a_normal_map_bends_nothing() {
+        let bumped = DecalKind {
+            normal: Some(TextureId(7)),
+            normal_strength: 0.5,
+            ..kind(1)
+        };
+        let set = DecalSet {
+            kinds: vec![kind(0), bumped],
+            decals: vec![decal(0.0, 0.0, 1)],
+        };
+        let t = set.tables(|id| id.0 + 100).expect("tables");
+        let kinds: &[GpuDecalKind] = bytemuck::cast_slice(&t.bytes[t.kinds as usize..]);
+        assert_eq!(
+            (kinds[0].normal, kinds[0].normal_strength),
+            (crate::material::TEXTURE_NONE, 0.0)
+        );
+        assert_eq!((kinds[1].normal, kinds[1].normal_strength), (107, 0.5));
     }
 }

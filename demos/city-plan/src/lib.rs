@@ -7700,6 +7700,8 @@ impl Scenario for PlanScenario {
                 depth_fade: 0.5,
                 facing: [0.6, 0.85],
                 row: None,
+                normal: None,
+                normal_strength: 1.0,
             };
             builder.set_decals(forge_render::DecalSet {
                 kinds: vec![
@@ -7713,6 +7715,8 @@ impl Scenario for PlanScenario {
                         depth_fade: 0.3,
                         facing: [0.3, 0.6],
                         row: None,
+                        normal: None,
+                        normal_strength: 1.0,
                     },
                     stamp(stain, 1.0, 1),
                     stamp(cracks, 0.9, 2),
