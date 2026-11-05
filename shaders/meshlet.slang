@@ -4834,16 +4834,6 @@ float3 decal_bent(float3 n, float3 bend)
     return any(bend != 0.0) ? normalize(n + bend) : n;
 }
 
-// `apply_decals` for the layered class: its row decals' normals in `n`, the colour decals' slopes
-// bending it after them. Their roughness is not taken yet (#393).
-void apply_decals(Frame* f, Surface s, inout float3 albedo, inout float3 n, bool rows)
-{
-    float3 bend = float3(0.0);
-    float2 rough = float2(0.0, 1.0);
-    apply_decals(f, s, albedo, n, bend, rough, rows);
-    n = decal_bent(n, bend);
-}
-
 // `apply_decals` for a class without row decals: their colour, their slopes in `bend` for the
 // caller's final normal (`decal_bent`), and their roughness in `rough` (from (0, 1)) for its
 // final roughness (`r * rough.y + rough.x`, or `decal_power`).
@@ -5748,7 +5738,13 @@ float3 shade_layered(Frame* f, uint row, Material mat, Surface s)
                 specular_power = lerp(a.specular_power, b.specular_power, blend);
         }
         albedo = lerp(albedo * tint, body.rgb, body.a);
-        apply_decals(f, s, albedo, n, true);
+        // Its row decals' normals in `n`, the colour decals' slopes bending it after them, and
+        // their roughness over its power (`decal_power`).
+        float3 decal_bend = float3(0.0);
+        float2 decal_rough = float2(0.0, 1.0);
+        apply_decals(f, s, albedo, n, decal_bend, decal_rough, true);
+        n = decal_bent(n, decal_bend);
+        specular_power = decal_power(specular_power, decal_rough);
     }
     float3 shadow = s.shadow;
     if (s.shore != nullptr)

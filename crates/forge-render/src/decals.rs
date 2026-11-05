@@ -90,7 +90,7 @@ pub struct DecalKind {
     /// [`Self::roughness_bias`], clamped to 0 to 1, is the (perceptual) roughness it lays where it
     /// covers the surface (its alpha times its strength), painted over the surface's own as its
     /// colour is: a stain of wet blood glossy on dry asphalt, a logo's paint on a matt wall. The
-    /// map is linear (uploaded with `srgb` false). The layered ground does not take it yet.
+    /// map is linear (uploaded with `srgb` false). Every class takes it, the layered ground too.
     /// `None`: the surface's own roughness where it covers (Forge's own decals): it covers a
     /// roughness another decal laid under it, as it covers that decal's relief.
     pub roughness: Option<TextureId>,

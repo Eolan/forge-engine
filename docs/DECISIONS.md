@@ -7242,7 +7242,8 @@ decided above):
 - **Where:** a UV-mapped row takes it before its roughness becomes a specular power, and so does
   each layer of a layered material (each walks the decals, #393's point 3). A row without UVs has
   only a power: `decal_power` turns it back into a roughness, lays the decals' over it and makes
-  the power again. The layered ground does not take it yet.
+  the power again, as the layered ground does over its blended power (added the same morning; the
+  village's views unchanged).
 - **Without a roughness map nothing changes:** `r × 1 + 0` in the UV path, and the power left as it
   is in the other.
 - **The private district:** 114 of its 329 decal kinds carry one (24 of their 30 maps are in the
