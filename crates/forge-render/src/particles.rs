@@ -111,6 +111,16 @@ pub struct Effect {
     /// It is drawn as a streak along its flight, as a shutter sees it.
     #[serde(default)]
     pub streak: bool,
+    /// The share of the sun's light a lit puff scatters (1, the default: all of it); the sky's
+    /// stays whole. An artist's control: steam lit by a low sun in a shaded street outshone its
+    /// source's plume, which reads grey in the shade and only a little brighter in the sun.
+    #[serde(default = "full_sun")]
+    pub sun: f32,
+}
+
+/// [`Effect::sun`]'s default: the sun's whole light.
+fn full_sun() -> f32 {
+    1.0
 }
 
 /// Reads effects in the form of `data/particles.toml`, in the file's order.
@@ -261,9 +271,11 @@ struct GpuEffect {
     curl: f32,
     curl_size: f32,
     draw: u32,
+    sun: f32,
+    pad: [f32; 3],
 }
 
-const _: () = assert!(std::mem::size_of::<GpuEffect>() == 64);
+const _: () = assert!(std::mem::size_of::<GpuEffect>() == 80);
 
 /// An effect's flipbook as `particles.slang` numbers it: 0 none (a procedural puff), 1 the baked
 /// smoke, 2 the baked fire.
@@ -297,6 +309,8 @@ impl GpuEffect {
                     (1 << 24) | (((b.clamp(0.0, 1.0) * 255.0).round() as u32) << 16)
                 })
                 | (u32::from(e.streak) << 25),
+            sun: e.sun.max(0.0),
+            pad: [0.0; 3],
         }
     }
 }

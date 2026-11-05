@@ -2913,6 +2913,9 @@ street 5.8 / 8.7. VRAM 3.9 GB (2.3 GB geometry: #387, pages about a tenth full).
     (p99 17.80–18.10 against 17.75–17.86); `particles/composite` 0.04 ms, `particles/draw` 0.23 as
     before. The puffs' sun, five shadow rays and up to four short ones each (D-064's amendment):
     `particles/advance` 0.001 ms with about 1,500 particles alive.
+  - **The steam's narrower columns** (puffs up to 1.8 m, not 3.2; six a second, not four):
+    `particles/draw` 0.23 → 0.135 ms, 1,867 particles alive at most; the frame 15.79 ms (p99
+    17.70), one run after a warm-up.
   - **The fog's history:** `fog/light` 0.43 → 0.46–0.47 ms (its zone, beside the particles'
     draw). The frame stays within the runs' spread: 14.80 and 15.73 ms without, 15.62 and 15.95 ms
     with (one run without had the lamps' ReSTIR 0.3 ms faster too).

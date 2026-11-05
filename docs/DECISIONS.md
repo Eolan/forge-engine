@@ -5022,6 +5022,23 @@ one pops a lot", "same for other smoke/fog emitters outside".
     scene with the particles in it) keep the old order and the reactive mask.
   - **Patents:** none found in a search (2026-11-05). Epic's guide to temporal upscalers moves
     translucency's pass for the same reason.
+- **The steam's look** (the same day). The owner's still of the manhole's column was a bright
+  ball standing out of its shaded street. Beside the source's frames:
+  - **The source's columns:** grey in the shade and only a little brighter in the sun, and
+    narrower and taller (frames 28 and 37).
+  - **Ours:** puffs swelling to 3.2 m made a ball, and the low sun lit it orange-white.
+  - **Opacity alone, tried:** 4.5 % and 3 % faded the shade's steam away and left the sunlit
+    shaft the brightest thing in the alley.
+  - **The fix:**
+    - **A per-effect share of the sun's light** (`Effect::sun`, `sun` in `particles.toml`, 1 by
+      default; the sky's light stays whole). The lab's smoke is unchanged to the pixel.
+    - **The columns:** a fifth of the sun, 10 % opaque at birth, puffs up to 1.8 m, rising
+      1.0–1.8 m/s, six a second. The vents take a fifth of the sun too, 8.6 % opaque.
+  - **The 14 frames:** geometric mean +0.12 → +0.08 EV, RMS 0.77 → 0.75 (0.63 without steam).
+    `particles/draw` on the path 0.23 → 0.135 ms, the narrower puffs covering fewer pixels.
+  - **Left open:** a column at a street grate in frame 37's view, where the source shows none
+    (its emitter may run only under some condition), and the tallest plumes (20 m) drawn as
+    columns.
 
 ## D-065 — Lighting the insides: lamps by clustered lists until ReSTIR's patents are settled ✅ (proposed 2026-10-16, #270; the owner's go 2026-10-17: both, compared)
 

@@ -80,6 +80,10 @@ struct Effect
     float curl;      // m/s
     float curl_size; // metres
     uint draw;       // DRAW_SMOKE or DRAW_GLOW
+    float sun;       // the share of the sun's light it scatters (an artist's control, 1 by default)
+    float pad0;
+    float pad1;
+    float pad2;
 };
 
 // Must match GpuBlock in particles.rs.
@@ -442,7 +446,7 @@ void advance_main(uint3 id : SV_DispatchThreadID)
         float radius = lerp(e.radius.x, e.radius.y, saturate((now - q.birth) / q.life));
         float lit = sun_share(f, q.position, radius, q.seed);
         q.lit = q.lit < 0.0 ? lit : lerp(lit, q.lit, exp(-max(span, 0.0) / SUN_EASE));
-        q.sun = 4.0 * phase * q.lit;
+        q.sun = 4.0 * phase * q.lit * e.sun;
     }
     f[0].ring[slot] = q;
 }
