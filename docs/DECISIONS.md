@@ -11459,6 +11459,12 @@ round the sun. Forge draws a deep-blue clear sky and a crisp far city. Beyond th
     from 0.57 to 0.56.
   - The distance turned blue (the air's Rayleigh share is blue) where the source's is white. So
     the gap is aerosols and an authored fog, not more air.
+- **A second test (2026-11-05 evening): the aerosols** (Earth's Mie scattering and absorption)
+  times 3 and 6, everything else as it stands.
+  - The 14 frames' rms 0.56 → 0.54 and 0.53. Frame 41 −0.70 → −0.58 and −0.48, frame 37 −0.12 →
+    −0.02; frame 44 +0.12 → +0.22.
+  - At ×6 the sky pales towards the horizon and the sun gets a white glow, as the source's frame
+    41 shows it. The sun's share and the meter were not refitted for it.
 
 **Options.**
 1. **Aerosols only:** a scene's atmosphere with more aerosol (Mie) scattering.
