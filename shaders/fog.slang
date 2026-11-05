@@ -371,7 +371,16 @@ void fog_light_main(uint3 id : SV_DispatchThreadID)
                     float3 to_lamp = d / max(dist, 1e-6);
                     float window = saturate(1.0 - pow(dist / reach, 4.0));
                     float least = max(lamp.position_radius.w, half_size);
-                    float3 lux = lamp.colour_reach.rgb / max(dist2, least * least) * window * window * lamp_beam(lamp, to_lamp);
+                    // A tube's light along its line, its phase from its nearest point (#396).
+                    if (lamp_tube(lamp))
+                    {
+                        float3 along = lamp.beam.xyz * clamp(dot(-d, lamp.beam.xyz), -lamp.beam_edge.x, lamp.beam_edge.x);
+                        float3 nearest = d + along;
+                        to_lamp = nearest / max(length(nearest), 1e-6);
+                    }
+                    float3 lux = lamp_tube(lamp)
+                        ? lamp.colour_reach.rgb * (lamp_tube_fog(lamp, world, least) * window * window)
+                        : lamp.colour_reach.rgb / max(dist2, least * least) * window * window * lamp_beam(lamp, to_lamp);
                     float share = 1.0 - asfloat(lamp.flags.y);
                     lamps += share * lux * fog_phase(dot(-direction, -to_lamp), g[0].phase.x);
                     // Kept among the strongest, carried down past the weaker ones.
@@ -424,6 +433,10 @@ void fog_light_main(uint3 id : SV_DispatchThreadID)
                         break;
                     Lamp lamp = f[0].lamps[index];
                     float3 d = lamp.position_radius.xyz - world;
+                    // A tube's ray to its point nearest the froxel (#396), not its middle: one
+                    // occluder before a long strip's middle took all of its light.
+                    if (lamp_tube(lamp))
+                        d += lamp.beam.xyz * clamp(dot(-d, lamp.beam.xyz), -lamp.beam_edge.x, lamp.beam_edge.x);
                     float dist = length(d);
                     RayDesc ray;
                     ray.Origin = world;
@@ -449,7 +462,15 @@ void fog_light_main(uint3 id : SV_DispatchThreadID)
             float3 to_lamp = d / max(dist, 1e-6);
             float window = saturate(1.0 - pow(dist / reach, 4.0));
             float least = max(lamp.position_radius.w, half_size);
-            float3 lux = lamp.colour_reach.rgb / max(dist2, least * least) * window * window * lamp_beam(lamp, to_lamp);
+            // A tube's light along its line, its phase from its nearest point (#396).
+            if (lamp_tube(lamp))
+            {
+                float3 nearest = d + lamp.beam.xyz * clamp(dot(-d, lamp.beam.xyz), -lamp.beam_edge.x, lamp.beam_edge.x);
+                to_lamp = nearest / max(length(nearest), 1e-6);
+            }
+            float3 lux = lamp_tube(lamp)
+                ? lamp.colour_reach.rgb * (lamp_tube_fog(lamp, world, least) * window * window)
+                : lamp.colour_reach.rgb / max(dist2, least * least) * window * window * lamp_beam(lamp, to_lamp);
             lamps += (1.0 - asfloat(lamp.flags.y)) * lux * fog_phase(dot(-direction, -to_lamp), g[0].phase.x);
         }
         // The sun through a shadow ray.

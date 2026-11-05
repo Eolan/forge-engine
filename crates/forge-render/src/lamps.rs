@@ -82,10 +82,20 @@ pub struct Lamp {
 }
 
 impl Lamp {
-    /// How far its light counts, metres: its [`reach`], its [`Self::range`] if shorter (a range
-    /// that is not a number counts as none).
+    /// How far from its position its light counts, metres: its [`reach`] (a tube's past its ends,
+    /// [`Emission::extent`]), its [`Self::range`] if shorter (a range that is not a number counts as
+    /// none).
     pub fn reach(&self) -> f32 {
+        // A tube's from its middle (#396): its light's reach past its ends. An authored range is a
+        // sphere about its middle, as an imported light's attenuation radius is (the private
+        // district's: with their ranges taken past their ends, its tubes cost 0.2 ms more in
+        // ReSTIR's pass and lit its sign alike). A lamp that lights nothing reaches nothing.
         let reach = reach(self.candela);
+        let reach = if reach > 0.0 {
+            reach + self.emission.extent()
+        } else {
+            0.0
+        };
         match self.range {
             Some(r) if !r.is_nan() => reach.min(r.max(0.0)),
             _ => reach,
@@ -190,9 +200,46 @@ pub enum Emission {
         /// Its glass's area seen from below over that seen from the side.
         down: f32,
     },
+    /// A tube or a strip of light (#396): a segment `2 × half_length` long along `axis` (unit)
+    /// through [`Lamp::position`], [`Lamp::radius`] thick, glowing as a Lambertian cylinder. Its
+    /// intensity is its candela across its axis times the sine of the angle from it, its flux π²
+    /// times that candela (π × its luminance × its side's area). Its diffuse light is its line's,
+    /// in closed form, clipped at a surface's horizon (`lamp_tube_share`); its highlight is lit
+    /// from the point of it nearest the mirror ray (after Karis 2013 and Picott 1992); its shadow
+    /// rays aim at points along it. As a point at its middle, a sign's 9 m wash strip lit a hot
+    /// spot on the letters it washes.
+    Tube {
+        /// The way it runs, unit.
+        axis: Vec3,
+        /// Half its length, metres.
+        half_length: f32,
+    },
 }
 
 impl Emission {
+    /// A tube or strip along `axis` (any length but not zero), `half_length` metres each side of
+    /// its middle ([`Emission::Tube`]).
+    pub fn tube(axis: Vec3, half_length: f32) -> Emission {
+        debug_assert!(
+            axis != Vec3::ZERO && half_length > 0.0,
+            "a tube needs an axis and a length: {axis} {half_length}"
+        );
+        // Two millimetres at least: a tube of none would light nothing by its line and its
+        // highlight and ReSTIR's ribbon still would.
+        Emission::Tube {
+            axis: axis.normalize(),
+            half_length: half_length.max(1e-3),
+        }
+    }
+
+    /// How far its light reaches beyond its middle's: a tube's half length, else 0.
+    pub fn extent(&self) -> f32 {
+        match *self {
+            Emission::Tube { half_length, .. } => half_length.max(0.0),
+            _ => 0.0,
+        }
+    }
+
     /// A street lamp's head, full cut-off: all of its light down to 60° off the vertical, none from
     /// 85°. Lit every way, its bulb lit the facade over it round its housing's shadow, a dark
     /// funnel over each lamp (the owner, 2026-10-18).
@@ -259,6 +306,10 @@ impl Emission {
                 let s = out.y.clamp(-1.0, 1.0);
                 (1.0 - s * s).sqrt() + up * s.max(0.0) + down * (-s).max(0.0)
             }
+            Emission::Tube { axis, .. } => {
+                let c = out.dot(axis).clamp(-1.0, 1.0);
+                (1.0 - c * c).sqrt()
+            }
         }
     }
 
@@ -278,6 +329,7 @@ impl Emission {
                 let pi = std::f32::consts::PI;
                 pi * pi + pi * (up + down)
             }
+            Emission::Tube { .. } => std::f32::consts::PI * std::f32::consts::PI,
         }
     }
 
@@ -298,8 +350,57 @@ impl Emission {
                 ([axis.x, axis.y, axis.z, 1.0], [0.0, turn, half.x, half.y])
             }
             Emission::Prism { up, down } => ([0.0, 1.0, 0.0, 0.0], [up, down, -1.0, 0.0]),
+            Emission::Tube { axis, half_length } => (
+                [axis.x, axis.y, axis.z, 0.0],
+                [half_length.max(0.0), 0.0, -2.0, 0.0],
+            ),
         }
     }
+}
+
+/// A tube's diffuse light on a surface at `world` facing `n` (unit), per candela of its peak
+/// intensity (#396): the integral along it of the sine from its axis times the surface's cosine
+/// over the distance squared, over its length, the segment clipped at the surface's horizon, in
+/// closed form. The CPU mirror of `lamp_tube_share` in `meshlet.slang`. `middle`, `axis` (unit),
+/// `half_length` and `radius` (the nearest a surface takes its line, metres) are the tube's.
+pub fn tube_share(
+    middle: Vec3,
+    axis: Vec3,
+    half_length: f32,
+    radius: f32,
+    world: Vec3,
+    n: Vec3,
+) -> f32 {
+    let c = middle - world;
+    let along = c.dot(axis);
+    let across = c - axis * along;
+    let h = across.length().max(radius.max(1e-3));
+    // On its axis none, as the GPU's.
+    let normal = if across.length() > 1e-6 {
+        across / across.length()
+    } else {
+        Vec3::ZERO
+    };
+    let (nn, nt) = (n.dot(normal), n.dot(axis));
+    let (mut s1, mut s2) = (along - half_length, along + half_length);
+    if nt.abs() > 1e-6 {
+        let s0 = -h * nn / nt;
+        if nt > 0.0 {
+            s1 = s1.max(s0);
+        } else {
+            s2 = s2.min(s0);
+        }
+    } else if nn <= 0.0 {
+        return 0.0;
+    }
+    if s2 <= s1 {
+        return 0.0;
+    }
+    let g = |s: f32| {
+        let q = h * h + s * s;
+        0.5 * (nn * (s / q + (s / h).atan() / h) - nt * h / q)
+    };
+    ((g(s2) - g(s1)) / (2.0 * half_length.max(1e-6))).max(0.0)
 }
 
 /// Mirrors `Lamp` in `meshlet.slang`.
@@ -317,7 +418,9 @@ pub struct GpuLamp {
     /// light is whole.
     pub beam: [f32; 4],
     /// x: the cosine beyond which a cone's light is none; for a flat piece ([`Emission::Flat`]):
-    /// y its turn, zw its half sizes (z over 0 marks it flat); else yzw 0.
+    /// y its turn, zw its half sizes (z over 0 marks it flat); for a lantern
+    /// ([`Emission::Prism`]) its shares up and down, z -1; for a tube ([`Emission::Tube`]) x its
+    /// half length, z -2; else yzw 0.
     pub beam_edge: [f32; 4],
     /// x: [`LAMP_SHADOWLESS`] when it casts no shadow ([`Lamp::shadows`]); y: one less
     /// [`Lamp::fog`], as float bits (a zeroed record lights the fog whole); zw 0.
@@ -943,6 +1046,119 @@ impl NearLamps {
         }
         let [first, n] = self.columns[(c.y as u32 * NEAR_SIDE + c.x as u32) as usize];
         Some(&self.indices[first as usize..(first + n) as usize])
+    }
+}
+
+#[cfg(test)]
+mod tube_tests {
+    use super::*;
+
+    /// The tube's light by a midpoint sum along it: the sine from its axis times the surface's
+    /// cosine over the distance squared, per candela, over its length.
+    fn summed(middle: Vec3, axis: Vec3, half: f32, world: Vec3, n: Vec3) -> f64 {
+        let steps = 20_000;
+        let ds = 2.0 * f64::from(half) / f64::from(steps);
+        let mut sum = 0.0f64;
+        for k in 0..steps {
+            let s = -f64::from(half) + (f64::from(k) + 0.5) * ds;
+            let p = middle.as_dvec3() + axis.as_dvec3() * s;
+            let d = p - world.as_dvec3();
+            let dist = d.length();
+            let cos_r = n.as_dvec3().dot(d) / dist;
+            if cos_r <= 0.0 {
+                continue;
+            }
+            let sin_e = (1.0 - (d.dot(axis.as_dvec3()) / dist).powi(2))
+                .max(0.0)
+                .sqrt();
+            sum += sin_e * cos_r / (dist * dist) * ds;
+        }
+        sum / (2.0 * f64::from(half))
+    }
+
+    #[test]
+    fn a_tubes_closed_form_matches_its_integral() {
+        let middle = Vec3::new(0.0, 3.0, 0.0);
+        let cases = [
+            // Under its middle, facing it; under an end; beside it, a wall; tilted; half under
+            // the horizon (a wall at the tube's end, the segment crossing its plane).
+            (Vec3::X, Vec3::ZERO, Vec3::Y),
+            (Vec3::X, Vec3::new(1.2, 0.0, 0.0), Vec3::Y),
+            (Vec3::X, Vec3::new(0.3, 2.5, 0.8), Vec3::NEG_Z),
+            (
+                Vec3::new(1.0, 0.3, 0.2).normalize(),
+                Vec3::new(-0.5, 1.0, 0.4),
+                Vec3::new(0.2, 0.9, -0.3).normalize(),
+            ),
+            (Vec3::X, Vec3::new(0.6, 3.1, 0.0), Vec3::NEG_X),
+        ];
+        for (axis, world, n) in cases {
+            let half = 1.5;
+            let closed = f64::from(tube_share(middle, axis, half, 0.01, world, n));
+            let sum = summed(middle, axis, half, world, n);
+            assert!(
+                (closed - sum).abs() <= 2e-3 * sum.max(1e-3),
+                "{world} {n}: {closed} against {sum}"
+            );
+        }
+        // Far away, a point of its candela: across its axis, facing it.
+        let far = tube_share(
+            Vec3::ZERO,
+            Vec3::X,
+            0.5,
+            0.01,
+            Vec3::new(0.0, -100.0, 0.0),
+            Vec3::Y,
+        );
+        assert!((far - 1e-4).abs() < 2e-7, "{far}");
+        // Behind the surface: none.
+        assert_eq!(
+            tube_share(middle, Vec3::X, 1.0, 0.01, Vec3::ZERO, Vec3::NEG_Y),
+            0.0
+        );
+    }
+
+    #[test]
+    fn a_tube_keeps_its_flux_reach_and_record() {
+        let pi = std::f32::consts::PI;
+        let tube = Emission::tube(Vec3::Z * 2.0, 4.5);
+        assert!((tube.solid_angle() - pi * pi).abs() < 1e-5);
+        assert_eq!(tube.share(Vec3::Z), 0.0);
+        assert!((tube.share(Vec3::X) - 1.0).abs() < 1e-6);
+        assert_eq!(tube.extent(), 4.5);
+        let lamp = Lamp {
+            emission: tube,
+            candela: 100.0,
+            range: Some(25.0),
+            ..DARK
+        };
+        // Its range a sphere about its middle; without one, its light's reach past its ends.
+        assert_eq!(lamp.reach(), 25.0);
+        let unranged = Lamp {
+            range: None,
+            ..lamp
+        };
+        assert!((unranged.reach() - (reach(100.0) + 4.5)).abs() < 1e-4);
+        let g = gpu_lamp(&lamp, 1.0);
+        assert_eq!(g.beam, [0.0, 0.0, 1.0, 0.0]);
+        assert_eq!(g.beam_edge, [4.5, 0.0, -2.0, 0.0]);
+        // Any other lamp's reach is its own.
+        assert_eq!(
+            Lamp {
+                candela: 100.0,
+                ..DARK
+            }
+            .reach(),
+            reach(100.0)
+        );
+        // A tube that lights nothing reaches nothing.
+        let unlit = Lamp {
+            emission: tube,
+            candela: 100.0,
+            range: Some(0.0),
+            ..DARK
+        };
+        assert_eq!(unlit.reach(), 0.0);
     }
 }
 

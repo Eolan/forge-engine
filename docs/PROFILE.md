@@ -2950,6 +2950,16 @@ street 5.8 / 8.7. VRAM 3.9 GB (2.3 GB geometry: #387, pages about a tenth full).
   from the rectangle's nearest point, the exact light for the picked one alone: points 15.46, 15.63
   and 15.72 ms, flat pieces 15.69, 15.80 and 15.88 (+0.19; `gi/probe rays` and `gi/trace` +0.06 to
   +0.2, noisy).
+- **Tubes** (#396, 2026-11-05; the same path, interleaved after a warm-up, the evening's runs
+  ±0.3 to 0.5 ms apart): the private district's two-sided strips of a metre or more as one tube
+  each (`Emission::Tube`), against their flat pieces (from 4 m) and points.
+  - **Kept, its range a sphere about its middle:** 16.99 and 16.80 ms; flat pieces 16.90 and
+    16.71; points 16.33 and 17.38. `shadow/lamp restir` 3.20 and 3.18 against 3.02 and 3.07
+    (flat pieces) and 3.03 and 3.29 (points).
+  - **Its range taken past its ends:** 17.63 and 17.05 ms, `shadow/lamp restir` 3.45 and 3.32: more
+    pixels in a strip's reach took a sample and a shadow ray. The sign lit alike.
+  - **The tubes' number** does not count: from 4 m and from 1 m, 17.30 and 17.35 ms on average
+    over two pairs each (before the review's fixes, their ranges past their ends).
 
 ## Instances scaled per axis: the 96-byte record (#380, 2026-11-01)
 

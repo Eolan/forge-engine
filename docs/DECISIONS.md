@@ -5838,8 +5838,55 @@ about 0.3 ms for it whatever their number (145, 366 or 1,155 of them).
     mean |log2| 0.000 against the build before, the frame ×1.000. Pixels differ by noise alone
     (11 % of them, 1,011 by over 5 %).
   - **The village's map-check views:** 0 to 36 pixels from the build before (the bounce's noise).
-- **Next** (#396): a tube emission, a segment with a closed-form diffuse light, for the strips
-  themselves.
+- **Then** (#396): a tube emission for the strips themselves (below).
+
+**A tube emission** (2026-11-05, #396): a tube or strip of light as one lamp, `Emission::Tube`: a
+segment along an axis, as thick as the lamp's radius, glowing as a Lambertian cylinder. Its
+intensity is its candela across its axis times the sine from it; its flux is π² times that candela.
+- **Why:** the private district's strips. As one point, a sign's 9 m wash strip, 30 cm in front of
+  its letters, lit a hot spot on them. As two flat pieces back to back (above), the wash was even,
+  at two lamps a strip.
+- **Its light:**
+  - *Diffuse:* its line's, in closed form (Nishita, Okamura and Nakamae 1985; Picott 1992), the
+    segment clipped at the surface's horizon (`lamp_tube_share`). The CPU's `lamps::tube_share`
+    is tested against a sum along the tube.
+  - *Highlight:* from its point nearest the mirror ray, lit by the line's light (its sine over the
+    distance squared, along it) and the lobe's share of it: Karis 2013's representative point
+    and line normalization.
+  - *Shadow rays:* to points along its part above the surface's horizon (`lamp_tube_target`);
+    the penumbra filter's spread evenly along that part.
+  - *ReSTIR DI:* a point uniform along it, the tube a ribbon as wide as it facing the surface. Its
+    estimate averages to the closed form.
+  - *The fog:* its line's light without the surface's cosine; the phase and the shadow ray from
+    its nearest point.
+  - *Reach:* its light's past its ends (`Emission::extent`). An authored range is a sphere about
+    its middle, as an imported light's attenuation radius is.
+- **Patents** (searched 2026-11-05):
+  - **Pixar's US 7,872,649** (live to about 2029) projects a line light onto a plane through the
+    shaded point. This shape is not taken: the line is integrated in space and clipped at the
+    horizon.
+  - **Sony's US 9,262,860** (equi-angular sampling along a camera ray in a medium) is not taken
+    either: the fog takes the line's light in closed form.
+  - **No patent found** on the closed form (1985, 1992) or on Epic's representative point (2013's
+    published course notes).
+- **A read-only review** found five faults before the push, all fixed:
+  - the highlight lit by the whole line's peak at one point, up to 15 times ReSTIR's beside a strip;
+  - shadow rays to the part behind the horizon;
+  - the penumbra filter's rays bunched at the middle;
+  - the fog's shadow ray to the middle;
+  - the resolve without the denoiser treating it as a bulb.
+- **The numbers:**
+  - **The sign** (the private district's viewer): its letters washed evenly by day and at night,
+    as by the flat pieces; no hot spot.
+  - **The district's path** (2560 × 1440, DLSS Quality, interleaved after a warm-up): 16.99 and
+    16.80 ms against 16.90 and 16.71 with the flat pieces, at a lamp a strip. With the ranges taken
+    past the ends, 17.63 and 17.05 (`docs/PROFILE.md`).
+  - **Its 14 frames against the source's:** geo mean +0.03, rms 0.47 (the flat pieces' +0.02,
+    0.48).
+  - **The Bistro's night** (no tubes; its lanterns' test changed): the 16 × 9 tiles' mean |log2|
+    0.000 against the build before, the frame ×1.000.
+  - **The village's map-check views:** as before this work (every view's mean at most 0.002 from
+    the accepted set, `enter`'s standing 0.046).
 
 ## D-066 — Pieces with sockets: one connector schema for generation, the anomaly check and player building ✅ (proposed 2026-10-16 on the owner's walk of #266; the owner's go the same evening)
 

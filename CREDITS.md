@@ -573,6 +573,16 @@ soft edges, their pixel-wide minimum, their reactive mask and their hash:
     Herbert Freeman and Ruth Shapira, "Determining the Minimum-Area Encasing Rectangle for an
     Arbitrary Closed Curve", *Communications of the ACM* 18(7), 1975; the hull by Andrew's
     monotone chain (below).
+- **A tube or strip of light** (`Emission::Tube`, `lamp_tube_share`, #396):
+  - *Its diffuse light in closed form:* a linear source's irradiance, Tomoyuki Nishita, Isao
+    Okamura, Eihachiro Nakamae, "Shading Models for Point and Linear Sources", *ACM Transactions
+    on Graphics* 4(2), 1985; Kevin P. Picott, "Extensions of the Linear and Area Lighting
+    Models", *IEEE Computer Graphics and Applications* 12(2), 1992. Forge's form takes a
+    Lambertian cylinder's intensity (the sine from its axis) and clips the line at the surface's
+    horizon.
+  - *Its highlight:* Brian Karis, "Real Shading in Unreal Engine 4", SIGGRAPH 2013: the
+    representative point (the line's point nearest the mirror ray) and the line's energy
+    normalization.
 
 **City plans** (`forge_procgen::city`, D-059):
 - **Streets from a tensor field.** Guoning Chen, Gregory Esch, Peter Wonka, Pascal Müller,

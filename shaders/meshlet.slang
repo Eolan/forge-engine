@@ -758,6 +758,8 @@ float lamp_beam(Lamp lamp, float3 to_lamp)
     float c = dot(-to_lamp, lamp.beam.xyz);
     if (lamp_flat(lamp))
         return saturate(c);
+    if (lamp_tube(lamp))
+        return sqrt(saturate(1.0 - c * c));
     if (lamp_prism(lamp))
         return sqrt(saturate(1.0 - c * c)) + lamp.beam_edge.x * max(c, 0.0) + lamp.beam_edge.y * max(-c, 0.0);
     return smoothstep(lamp.beam_edge.x, lamp.beam.w, c);
@@ -766,7 +768,130 @@ float lamp_beam(Lamp lamp, float3 to_lamp)
 // Whether `lamp` is a lantern (`Emission::Prism`, #372): its axis up, `beam_edge.z` -1.
 bool lamp_prism(Lamp lamp)
 {
-    return lamp.beam_edge.z < 0.0;
+    return lamp.beam_edge.z < 0.0 && lamp.beam_edge.z > -1.5;
+}
+
+// Whether `lamp` is a tube (`Emission::Tube`, #396): a segment along its axis `beam.xyz`, half its
+// length `beam_edge.x` each side of its middle, its sphere's radius thick, `beam_edge.z` -2; a
+// Lambertian cylinder, its intensity its candela across its axis by the sine from it.
+bool lamp_tube(Lamp lamp)
+{
+    return lamp.beam_edge.z < -1.5;
+}
+
+// A tube seen from a surface at `world` facing `n` (unit): its line's distance `h` (at least its
+// radius), the surface's normal along the way to the line (`nn`) and along its axis (`nt`), and its
+// span from the line's point nearest the surface (its middle at `along`), clipped at the surface's
+// horizon: s1 to s2, none where s2 <= s1.
+struct TubeView
+{
+    float h;
+    float nn;
+    float nt;
+    float along;
+    float s1;
+    float s2;
+};
+
+TubeView lamp_tube_view(Lamp lamp, float3 world, float3 n)
+{
+    TubeView v;
+    float3 axis = lamp.beam.xyz;
+    float half_length = lamp.beam_edge.x;
+    float3 c = lamp.position_radius.xyz - world;
+    v.along = dot(c, axis);
+    float3 across = c - axis * v.along;
+    float across_length = length(across);
+    v.h = max(across_length, max(lamp.position_radius.w, 1e-3));
+    float3 normal = across_length > 1e-6 ? across / across_length : float3(0.0);
+    v.nn = dot(n, normal);
+    v.nt = dot(n, axis);
+    v.s1 = v.along - half_length;
+    v.s2 = v.along + half_length;
+    if (abs(v.nt) > 1e-6)
+    {
+        float s0 = -v.h * v.nn / v.nt;
+        if (v.nt > 0.0)
+            v.s1 = max(v.s1, s0);
+        else
+            v.s2 = min(v.s2, s0);
+    }
+    else if (v.nn <= 0.0)
+        v.s2 = v.s1;
+    return v;
+}
+
+// A tube's diffuse light on a surface at `world` facing `n` (unit), per candela of its peak
+// intensity (#396): along it, the sine from its axis by the surface's cosine over the distance
+// squared, over its length, the segment clipped at the surface's horizon, in closed form (the
+// line's distance P0 and the place s along it from there: ½[(n·N)(s/(h²+s²) + atan(s/h)/h) −
+// (n·T) h/(h²+s²)] between the ends). The mirror of `lamps::tube_share`.
+float lamp_tube_share(Lamp lamp, float3 world, float3 n)
+{
+    TubeView v = lamp_tube_view(lamp, world, n);
+    if (v.s2 <= v.s1)
+        return 0.0;
+    float q1 = v.h * v.h + v.s1 * v.s1;
+    float q2 = v.h * v.h + v.s2 * v.s2;
+    float g1 = 0.5 * (v.nn * (v.s1 / q1 + atan(v.s1 / v.h) / v.h) - v.nt * v.h / q1);
+    float g2 = 0.5 * (v.nn * (v.s2 / q2 + atan(v.s2 / v.h) / v.h) - v.nt * v.h / q2);
+    return max(g2 - g1, 0.0) / max(2.0 * lamp.beam_edge.x, 1e-6);
+}
+
+// The point of a tube, from its middle, `u` of the way along its part above the horizon of a
+// surface at `world` facing `n` (`lamp_tube_view`): where a shadow ray aims, so that none crosses
+// the surface towards a part of it the light already leaves out. `hidden` where all of it lies
+// behind.
+float3 lamp_tube_target(Lamp lamp, float3 world, float3 n, float u, out bool hidden)
+{
+    TubeView v = lamp_tube_view(lamp, world, n);
+    hidden = v.s2 <= v.s1;
+    return lamp.beam.xyz * (lerp(v.s1, v.s2, u) - v.along);
+}
+
+// A tube's light at a point of the fog at `world` (no surface's cosine), per candela, its line's
+// nearest place held at least `least` away: along it, the sine from its axis over the distance
+// squared, over its length (s / (h √(h² + s²)) between the ends).
+float lamp_tube_fog(Lamp lamp, float3 world, float least)
+{
+    float3 axis = lamp.beam.xyz;
+    float half_length = lamp.beam_edge.x;
+    float3 c = lamp.position_radius.xyz - world;
+    float along = dot(c, axis);
+    float h = max(length(c - axis * along), max(least, 1e-3));
+    float s1 = along - half_length;
+    float s2 = along + half_length;
+    return (s2 / (h * sqrt(h * h + s2 * s2)) - s1 / (h * sqrt(h * h + s1 * s1))) / max(2.0 * half_length, 1e-6);
+}
+
+// The point of a tube (from its middle) nearest the ray from `world` along `r` (unit): its
+// highlight's (Karis 2013's representative point, after Picott 1992), clamped to its ends.
+float3 lamp_tube_point(Lamp lamp, float3 world, float3 r)
+{
+    float3 axis = lamp.beam.xyz;
+    float half_length = lamp.beam_edge.x;
+    float3 l0 = lamp.position_radius.xyz - axis * half_length - world;
+    float3 ld = axis * (2.0 * half_length);
+    float rd = dot(r, ld);
+    float t = (dot(r, l0) * rd - dot(l0, ld)) / max(dot(ld, ld) - rd * rd, 1e-6);
+    return axis * (2.0 * half_length * saturate(t) - half_length);
+}
+
+// The share of a tube's light its highlight takes, the whole line's light put at its point nearest
+// the mirror ray (`lamp_tube_point`): a lobe narrower than the line, seen from `dist` away, takes
+// only the part of it within the lobe. Karis 2013's line normalization, the lobe's α (`alpha`)
+// over α widened by half the line's angle.
+float lamp_tube_spread(Lamp lamp, float alpha, float dist)
+{
+    float angle = saturate(2.0 * lamp.beam_edge.x / max(dist, 1e-3));
+    return alpha / max(saturate(alpha + 0.5 * angle), 1e-6);
+}
+
+// The point of a tube's line `along` of the way from its first end (0) to its other (1), from its
+// middle: where its shadow rays aim.
+float3 lamp_tube_along(Lamp lamp, float along)
+{
+    return lamp.beam.xyz * (lamp.beam_edge.x * (2.0 * along - 1.0));
 }
 
 // The least distance a probe ray's hit takes a lamp's light from, metres (#294). The surfaces inside
@@ -851,7 +976,8 @@ public struct Lamp
                                    // the cosine within which its light is whole (`lamp_beam`, #288)
     public float4 beam_edge;       // x: the cosine beyond which a cone's light is none; yzw: a flat
                                    // piece's turn and half sizes (`lamp_flat`), else 0; a
-                                   // lantern's (`lamp_prism`): its shares up and down, -1, 0
+                                   // lantern's (`lamp_prism`): its shares up and down, -1, 0; a
+                                   // tube's (`lamp_tube`): x its half length, z -2
     public uint4 flags;            // x: LAMP_SHADOWLESS when it casts no shadow; y: the share of its light the fog does not scatter (float bits, D-099); zw 0
 };
 
@@ -4107,9 +4233,23 @@ void lamps_at<let SHADOWS : int>(Frame* f, ProbeField* probes, float3 world, flo
             g_lamp_diffuse += illuminance;
             // Its light at normal incidence (ReSTIR's carries the interpolated normal's n·l)
             // through GGX at the mapped normal (D-086).
-            float size = 0.5 * min(lamp.position_radius.w / max(dist, 1e-3), 1.0);
-            g_lamp_specular += ggx_light(shading_n, view, dir, ggx_alpha2(specular_power, size * size), f0)
-                * highlight_share(specular_weight) * illuminance / max(dot(n, dir), 1e-3);
+            float3 normal_light = illuminance / max(dot(n, dir), 1e-3);
+            float spread = 1.0;
+            float3 to_point = to_lamp;
+            if (lamp_tube(lamp))
+            {
+                // A tube's (#396): from its point nearest the mirror ray, its light at normal
+                // incidence its line's over its cosine-weighted (the cosines' mean along it), and
+                // the lobe's share (`lamp_add`'s). By its middle's cosine, a long strip's end
+                // above a surface its middle lies under lit the highlight up to a thousandfold.
+                to_point += lamp_tube_point(lamp, world, reflect(-view, shading_n));
+                normal_light = illuminance * min(lamp_tube_fog(lamp, world, lamp.position_radius.w) / max(lamp_tube_share(lamp, world, n), 1e-9), 1e3);
+                spread = lamp_tube_spread(lamp, sqrt(ggx_alpha2(specular_power, 0.0)), dist);
+            }
+            float point_dist = length(to_point);
+            float size = 0.5 * min(lamp.position_radius.w / max(point_dist, 1e-3), 1.0);
+            g_lamp_specular += ggx_light(shading_n, view, to_point / max(point_dist, 1e-6), ggx_alpha2(specular_power, size * size), f0)
+                * highlight_share(specular_weight) * normal_light * spread;
         }
     }
 }
@@ -4153,6 +4293,8 @@ void lamp_add<let SHADOWS : int>(Frame* f, Lamp lamp, uint i, float scale, float
         bool hidden = false;
         if (lamp_flat(lamp))
             offset = lamp_rect_target(lamp, world, n, disc_to_square(sqrt(u.x) * float2(cos(a), sin(a))), hidden);
+        else if (lamp_tube(lamp))
+            offset = lamp_tube_target(lamp, world, n, frac(u.y + 0.618034 * float(i)), hidden);
         else
         {
             float3 t;
@@ -4169,6 +4311,24 @@ void lamp_add<let SHADOWS : int>(Frame* f, Lamp lamp, uint i, float scale, float
     // Let go between 80 % and all of its reach, so its edge does not show.
     float window = saturate(1.0 - pow(dist / reach, 4.0));
     float to_units = 1.0 / max(f[0].sun_illuminance, 1e-9);
+    // A tube (#396): its line's diffuse light, and its highlight from its point nearest the mirror
+    // ray, as a bulb of its radius there lit by the line's light (its sine over the distance squared
+    // along it, ReSTIR's on average) and the lobe's share of it (`lamp_tube_spread`). The whole
+    // line's peak at that point lit a strip's highlight up to 15 times ReSTIR's beside it.
+    if (lamp_tube(lamp))
+    {
+        g_lamp_diffuse += lamp.colour_reach.rgb * (lamp_tube_share(lamp, world, shading_n) * window * window * to_units * scale);
+        float3 point = lamp.position_radius.xyz + lamp_tube_point(lamp, world, reflect(-view, shading_n)) - world;
+        float point_dist = length(point);
+        float3 point_dir = point / max(point_dist, 1e-6);
+        if (dot(n, point_dir) <= 0.0)
+            return;
+        float3 point_light = lamp.colour_reach.rgb
+            * (lamp_tube_fog(lamp, world, radius) * window * window * to_units * scale * lamp_tube_spread(lamp, sqrt(ggx_alpha2(specular_power, 0.0)), dist));
+        float point_size = 0.5 * min(radius / max(point_dist, 1e-3), 1.0);
+        g_lamp_specular += ggx_light(shading_n, view, point_dir, ggx_alpha2(specular_power, point_size * point_size), f0) * highlight_share(specular_weight) * point_light;
+        return;
+    }
     float3 normal_light = lamp.colour_reach.rgb / max(dist2, radius * radius) * (window * window * to_units * scale * lamp_beam(lamp, dir));
     // A flat piece's diffuse light is its rectangle's, also where its middle lies behind the
     // surface (the Cornell box's tall block, whose plane cuts the quad of light).
@@ -6992,10 +7152,10 @@ float lamp_weight(Lamp lamp, float3 world, float3 n, float near = 0.0)
     // A flat piece's: its rectangle's exact light (`lamp_rect_share`, bounded by π times its
     // luminance), held under a lamp's of its intensity at `near` for the probes' halo (#294):
     // beside a small bright piece it reached π/2 times its luminance.
-    if (lamp_flat(lamp))
+    if (lamp_flat(lamp) || lamp_tube(lamp))
     {
         float w = saturate(1.0 - pow(dist / reach, 4.0));
-        float share = lamp_rect_share(lamp, world, n);
+        float share = lamp_flat(lamp) ? lamp_rect_share(lamp, world, n) : lamp_tube_share(lamp, world, n);
         if (near > 0.0)
             share = min(share, 1.0 / (near * near));
         return dot(lamp.colour_reach.rgb, float3(0.2126, 0.7152, 0.0722)) * share * w * w;
@@ -7030,6 +7190,12 @@ float3 hit_lamp_through(Frame* f, RayHit hit, Lamp lamp, uint n, float total)
         uint h = n * 0x85EBCA6Bu;
         h ^= h >> 13;
         offset = lamp_rect_target(lamp, hit.position, hit.n, float2(float(h & 0xFFFFu), float(h >> 16)) * (2.0 / 65536.0) - 1.0, hidden);
+    }
+    else if (lamp_tube(lamp))
+    {
+        uint h = n * 0x85EBCA6Bu;
+        h ^= h >> 13;
+        offset = lamp_tube_target(lamp, hit.position, hit.n, float(h & 0xFFFFu) / 65536.0, hidden);
     }
     if (hidden || (!lamp_shadowless(lamp) && !g_lamps_unshadowed && ray_blocked(f, lamp_ray(lamp, hit.position, hit.n, hit.shadow_start, offset))))
         return float3(0.0);
@@ -9073,6 +9239,17 @@ float2 lamp_look(Frame* f, Lamp lamp, float3 world, float3 n, float bias, float2
             return float2(1.0);
         return float2(ray_blocked(f, lamp_ray(lamp, world, n, bias, offset)) ? 0.0 : 1.0, 1.0);
     }
+    if (lamp_tube(lamp))
+    {
+        // Uniform along its part above the horizon: the disc's point taken back to the square.
+        bool hidden;
+        float3 offset = lamp_tube_target(lamp, world, n, saturate(0.5 + 0.5 * disc_to_square(disc).x), hidden);
+        if (hidden)
+            return float2(0.0);
+        if (lamp_shadowless(lamp))
+            return float2(1.0);
+        return float2(ray_blocked(f, lamp_ray(lamp, world, n, bias, offset)) ? 0.0 : 1.0, 1.0);
+    }
     if (lamp_shadowless(lamp))
         return float2(1.0);
     float3 d = lamp.position_radius.xyz - world;
@@ -9094,6 +9271,8 @@ float3 lamp_lux(Lamp lamp, float3 world, float3 n)
     float window = saturate(1.0 - pow(dist / lamp.colour_reach.w, 4.0));
     if (lamp_flat(lamp))
         return lamp.colour_reach.rgb * (lamp_rect_share(lamp, world, n) * window * window);
+    if (lamp_tube(lamp))
+        return lamp.colour_reach.rgb * (lamp_tube_share(lamp, world, n) * window * window);
     return lamp.colour_reach.rgb / max(dist2, radius * radius) * (max(ndl, 0.0) * window * window) * lamp_beam(lamp, d / max(dist, 1e-6));
 }
 

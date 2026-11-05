@@ -331,12 +331,46 @@ RAB_LightSample restir_flat_sample(Lamp lamp, RAB_Surface surface, float2 uv)
     return s;
 }
 
+// A point of tube `lamp` (#396) by `uv`, uniform along it, seen from `surface`: the tube as a ribbon
+// as wide as it is (2r) facing the surface, its cosine there the sine from its axis, its luminance
+// its peak intensity over the ribbon's area (2r × its length). Over the ribbon its light sums to
+// the line's (`lamp_tube_share`). Its shadow ray ends its radius short of its line.
+RAB_LightSample restir_tube_sample(Lamp lamp, RAB_Surface surface, float2 uv)
+{
+    RAB_LightSample s = RAB_EmptyLightSample();
+    s.shadowless = lamp_shadowless(lamp);
+    float3 d = lamp.position_radius.xyz - surface.world;
+    float reach = lamp.colour_reach.w;
+    float dist2 = dot(d, d);
+    if (dist2 >= reach * reach)
+        return s;
+    float radius = max(lamp.position_radius.w, 1e-3);
+    s.position = lamp.position_radius.xyz + lamp_tube_along(lamp, uv.x);
+    float3 to = s.position - surface.world;
+    float to2 = dot(to, to);
+    float c = dot(to, lamp.beam.xyz) / sqrt(max(to2, 1e-12));
+    float facing = sqrt(saturate(1.0 - c * c));
+    if (facing <= 1e-4 || to2 <= radius * radius)
+        return s;
+    float area = 4.0 * radius * max(lamp.beam_edge.x, 1e-4);
+    s.solid_angle_pdf = to2 / (area * facing);
+    s.short_of = radius;
+    if (!restir_lights(lamp, surface.world.y, surface.region, surface.other))
+        return s;
+    float window = saturate(1.0 - pow(sqrt(dist2) / reach, 4.0));
+    s.radiance = lamp.colour_reach.rgb / area * (window * window);
+    return s;
+}
+
 // A point of `lamp` seen from `surface`, by `uv`: of its sphere, uniform over the cone the sphere
-// fills; of a flat piece's rectangle, uniform in area (`restir_flat_sample`).
+// fills; of a flat piece's rectangle, uniform in area (`restir_flat_sample`); of a tube, uniform
+// along it (`restir_tube_sample`).
 RAB_LightSample RAB_SamplePolymorphicLight(RAB_LightInfo lamp, RAB_Surface surface, float2 uv)
 {
     if (lamp_flat(lamp))
         return restir_flat_sample(lamp, surface, uv);
+    if (lamp_tube(lamp))
+        return restir_tube_sample(lamp, surface, uv);
     RAB_LightSample s = RAB_EmptyLightSample();
     s.shadowless = lamp_shadowless(lamp);
     float radius = lamp.position_radius.w;
@@ -668,10 +702,15 @@ void lamp_restir_main(uint3 id : SV_DispatchThreadID)
             float3 normal_light = chosen.radiance / chosen.solid_angle_pdf * RTXDI_GetDIReservoirInvPdf(state);
             diffuse_lux = normal_light * saturate(dot(shading_n, dir));
             Lamp lamp = f[0].lamps[index];
-            float3 to_middle = lamp.position_radius.xyz - world;
+            // A tube's from its point nearest the mirror ray (#396, `lamp_add`'s).
+            float3 to_middle = lamp.position_radius.xyz - world
+                + (lamp_tube(lamp) ? lamp_tube_point(lamp, world, reflect(-view, shading_n)) : float3(0.0));
             float middle = length(to_middle);
             float size = 0.5 * min(lamp.position_radius.w / max(middle, 1e-3), 1.0);
             float3 highlight = ggx_light(shading_n, view, to_middle / max(middle, 1e-6), ggx_alpha2(power, size * size), f0) * normal_light;
+            // A tube's whole light at one point: the lobe's share of it (`lamp_tube_spread`).
+            if (lamp_tube(lamp))
+                highlight *= lamp_tube_spread(lamp, sqrt(ggx_alpha2(power, 0.0)), length(lamp.position_radius.xyz - world));
             specular_lux = min(highlight, float3(65000.0)) / restir_specular_albedo(f, f0, power, shading_n, view);
         }
         // The distance to the light's point, as NRD asks for direct light.
