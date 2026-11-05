@@ -11061,3 +11061,56 @@ app's `--fog-lamp-shadows N`, off by default):**
   The landing had been lit by red haze through its walls. The source, path traced with shadowed
   fog, keeps it bright, so the landing lacks light of its own, which this shows. **Off by
   default** until the landing's light is found. The village and the Bistro have no fog volumes.
+
+## D-100 — A scene's own colour grading: a 3-D LUT after a log encoding, as a display transform 🟡 (proposed 2026-11-05; D-045, D-083, D-084, D-094)
+
+**The need.** The private district's look is graded by its source.
+- **How the source grades:** its environment's `ColorGradingAreaSettings` encodes the exposed scene
+  colour in ARRI's LogC, reads a 32 × 32 × 32 LUT (RGBA32F) and shows the result linearly (its
+  SDR `TonemappingModeLinear`; `forceHdrLut` takes the HDR table).
+- **What Forge does:** it tone maps with one of its curves (AgX's punchy look a stop brighter by
+  default, D-045; ACES as Falcor's for the Bistro, D-084).
+- **The curves differ along the grey axis** (display-linear output):
+
+  | Exposed scene value | Source's SDR table | Source's HDR table | Forge's AgX punchy (+1 stop) |
+  |---|---|---|---|
+  | 0.18 (mid grey) | 0.25 | 0.33 | 0.21 |
+  | 0.7 | 0.78 | 1.05 (clips) | 0.55 |
+  | 1.4 | 0.94 | 2.06 (clips) | 0.72 |
+
+  The source's curve is steeper through the mid-tones and reaches white about two stops sooner.
+- **What the matched frames show:** the district's alleys stand +1 EV against the source's frames.
+  Their darkest tenth matches, but their median is 3× and their brightest tenth 2.4× the
+  source's. The exposure fits (D-083) can move the level, not the curve's shape.
+
+**Proposed:**
+1. **A display transform that reads a scene's LUT** (`Tonemap::Lut`, `r.tonemap lut` when a scene
+   gives one):
+   - the pre-exposed colour encoded by a named log curve (ARRI LogC v3 EI 800 first; linear as
+     an option);
+   - looked up trilinearly in a 3-D table (32³ or 33³, RGBA16F) bound bindless;
+   - written display-linear, then sRGB-encoded as now.
+
+   It is chosen at run time like the others, never baked into lighting, with a CPU mirror and its
+   tests (`display.rs`). The HDR presets keep ACES 2.0 (D-070's HDR path): a scene LUT is SDR only
+   at first.
+2. **`Look::grading`:** a scene supplies its table and encoding. Forge ships no table of its own:
+   the village and the Bistro keep their curves, and nothing changes for them.
+3. **The private district** (its viewer, never in git) hands over its source's table. The exposure
+   offset (`GAME_EV100`) is then refitted on the 14 matched frames: the aim is the percentiles'
+   shape, not only their mean.
+4. **Measured:**
+   - the 14 frames' percentiles (p10/p50/p90) against the source's;
+   - the pass's cost (one 3-D sample a pixel, inside the existing display pass);
+   - 0 px in the village and the Bistro.
+
+**Patents:** a 3-D LUT for colour grading after a log encoding is decades-old practice (film
+scanners, DaVinci, Unreal Engine's grading LUTs since 2014, Unity's since 2017; Hable, 2010). A
+search of the patent databases runs before the build, as D-099's did.
+
+**For the owner:**
+- go or no-go;
+- the encoding: LogC only (the source's), or also a plain log2 range for Forge's own scenes' LUTs
+  later;
+- whether the district's matched frames should be judged with the source's grading (the aim of
+  D-083's calibration) or with Forge's own look.
