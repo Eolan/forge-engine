@@ -124,7 +124,8 @@ pub fn fsr_sharpness(default: f64) -> Spec<f64> {
     )
 }
 
-/// [`tonemap`]'s choices, in [`Tonemap::ALL`]'s order, then the analytic reference.
+/// [`tonemap`]'s choices, in [`Tonemap::ALL`]'s order, then the analytic reference and a
+/// scene's grading table (D-100).
 pub const TONEMAPS: &[&str] = &[
     "agx",
     "agx-punchy",
@@ -133,6 +134,7 @@ pub const TONEMAPS: &[&str] = &[
     "aces2",
     "aces-narkowicz",
     "aces2-analytic",
+    "lut",
 ];
 
 /// The tone curve.
@@ -142,7 +144,8 @@ pub fn tonemap(default: Tonemap) -> Spec<usize> {
         TONEMAPS,
         tonemap_index(default),
         "The tone curve: agx, agx-punchy, aces, neutral, aces2, aces-narkowicz (Falcor's) \
-         (aces2-analytic, the reference); toggle steps through them.",
+         (aces2-analytic, the reference; lut, a scene's own grading table, D-100); toggle \
+         steps through them.",
     )
 }
 
@@ -572,7 +575,10 @@ mod tests {
 
     #[test]
     fn choices_map_both_ways() {
-        for t in Tonemap::ALL.into_iter().chain([Tonemap::Aces2Analytic]) {
+        for t in Tonemap::ALL
+            .into_iter()
+            .chain([Tonemap::Aces2Analytic, Tonemap::SceneLut])
+        {
             assert_eq!(tonemap_of(tonemap_index(t)), t, "{}", t.name());
         }
         for mode in [SwRaster::Off, SwRaster::Auto, SwRaster::On] {

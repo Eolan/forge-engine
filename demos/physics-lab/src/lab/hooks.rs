@@ -293,6 +293,7 @@ impl Scenario for LabScenario {
             tonemap: kind
                 .authored()
                 .map(|_| forge_render::Tonemap::AcesNarkowicz),
+            grading: None,
         }
     }
 

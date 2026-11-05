@@ -6,6 +6,7 @@
 module tonemap;
 
 import aces2;
+import bindless;
 import exact;
 import noise;
 
@@ -20,6 +21,9 @@ public static const uint TONEMAP_AGX_PUNCHY = 5;
 // ACES as Narkowicz fitted it, per channel after a 0.6 pre-exposure: Falcor's ToneMapper default,
 // the curve of NVIDIA's Bistro renders and of Falcor's references (D-084).
 public static const uint TONEMAP_ACES_NARKOWICZ = 6;
+// A scene's own grading table (D-100, display.rs `Grading`): its log encoding, then its 3-D table.
+// AgX punchy without one.
+public static const uint TONEMAP_SCENE_LUT = 7;
 
 // What the ACES 2.0 curves read (crates/forge-render/src/display.rs, `ToneTables`): the
 // baked tables' bindless indices and the transform's parameters, SDR and the HDR preset's.
@@ -30,8 +34,36 @@ public struct ToneTables
     public Aces2Params* aces2;
     public Aces2Params* hdr;  // the HDR preset's parameters (aces2.rs, `Hdr::gpu_params`)
     public float hdr_max;     // the HDR table's top (aces2.rs, `Hdr::lut_max`)
-    public uint pad;
+    public uint scene_lut;    // a scene's grading table (D-100), 0xFFFFFFFF for none
+    public float scene_size;  // its points per axis
+    public uint scene_encoding; // GRADING_* (display.rs, `GradingEncoding`)
 };
+
+// How a scene's grading table's input is encoded (display.rs, `GradingEncoding::encode`).
+public static const uint GRADING_LOGC3 = 0; // ARRI LogC v3, EI 800
+
+float3 grading_encode(float3 x, uint encoding)
+{
+    float3 log_part = 0.247190 * log10(5.555556 * x + 0.052272) + 0.385537;
+    float3 linear_part = 5.367655 * x + 0.092809;
+    return select(x > 0.010591, log_part, linear_part);
+}
+
+// A scene's grading (D-100): the pre-exposed colour encoded, then its table, laid out as ACES 2.0's
+// (`aces2_lut`: a strip of slices, blue across them, red along each, green down), sampled by the
+// hardware's bilinear filter within two slices and blended between them; display-linear out.
+float3 scene_lut(float3 color, ToneTables tables)
+{
+    float n = tables.scene_size;
+    float3 u = saturate(grading_encode(max(color, 0.0), tables.scene_encoding)) * (n - 1.0);
+    float slice = min(floor(u.z), n - 2.0);
+    float f = u.z - slice;
+    float width = n * n;
+    float2 uv = float2((u.x + 0.5 + slice * n) / width, (u.y + 0.5) / n);
+    float3 c0 = sample_image_level(tables.scene_lut, SAMPLER_LINEAR_CLAMP, uv, 0.0).rgb;
+    float3 c1 = sample_image_level(tables.scene_lut, SAMPLER_LINEAR_CLAMP, uv + float2(n / width, 0.0), 0.0).rgb;
+    return lerp_exact(c0, c1, f);
+}
 
 // How the display image is encoded (display.rs, `OutputEncoding`, issue #94).
 public static const uint OUTPUT_SRGB_TARGET = 0; // the target encodes sRGB on write
@@ -187,7 +219,9 @@ public float3 tonemap(float3 color, uint curve, ToneTables tables)
         return aces2_lut(max(color, 0.0), tables.lut);
     if (curve == TONEMAP_ACES2_ANALYTIC)
         return aces2_analytic(max(color, 0.0), tables.aces2);
-    return agx(color, curve == TONEMAP_AGX_PUNCHY);
+    if (curve == TONEMAP_SCENE_LUT && tables.scene_lut != 0xFFFFFFFFu)
+        return scene_lut(color, tables);
+    return agx(color, curve == TONEMAP_AGX_PUNCHY || curve == TONEMAP_SCENE_LUT);
 }
 
 public float3 encode_srgb(float3 linear)

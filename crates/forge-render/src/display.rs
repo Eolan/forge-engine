@@ -4,7 +4,8 @@
 //! The tone curve is data chosen at run time ([`Tonemap`]), never baked into lighting: AgX
 //! is the engine default (hue-safe), the ACES fit the contrasty film look (the ballad uses
 //! it: its toe keeps space black), Khronos PBR Neutral the view that keeps base colours for
-//! material checks, ACES 2.0 the Academy's current output transform ([`crate::aces2`]). The
+//! material checks, ACES 2.0 the Academy's current output transform ([`crate::aces2`]), and a
+//! scene's own grading table where it gives one ([`Grading`], D-100). The
 //! ballad applies it in the pass that shows TAA's history (`temporal/sharpen`, or `temporal/show`
 //! unsharpened); [`Display`] is the stand-alone pass for paths without temporal filtering. The CPU
 //! functions below mirror the shader and pin its behaviour in tests.
@@ -46,6 +47,10 @@ pub enum Tonemap {
     /// default, so a Forge frame and a Falcor reference compare under one curve (D-084). Bright
     /// saturated colours go to yellow and white (a hot lantern).
     AcesNarkowicz,
+    /// A scene's own grading table (D-100, [`Grading`], given by the scene's look): the
+    /// pre-exposed colour encoded by its log curve, looked up in its 3-D table, display-linear out.
+    /// Without a table, AgX punchy. Not in the cycle (`--tonemap lut`, `r.tonemap lut`).
+    SceneLut,
 }
 
 impl Tonemap {
@@ -69,6 +74,7 @@ impl Tonemap {
             Tonemap::Aces2Analytic => 4,
             Tonemap::AgXPunchy => 5,
             Tonemap::AcesNarkowicz => 6,
+            Tonemap::SceneLut => 7,
         }
     }
 
@@ -82,6 +88,7 @@ impl Tonemap {
             Tonemap::Aces2 => "aces2",
             Tonemap::Aces2Analytic => "aces2-analytic",
             Tonemap::AcesNarkowicz => "aces-narkowicz",
+            Tonemap::SceneLut => "lut",
         }
     }
 
@@ -95,6 +102,7 @@ impl Tonemap {
             Tonemap::Aces2 => "ACES 2.0 (SDR, table)",
             Tonemap::Aces2Analytic => "ACES 2.0 (SDR, per pixel)",
             Tonemap::AcesNarkowicz => "ACES (Narkowicz fit, Falcor's)",
+            Tonemap::SceneLut => "Scene table (D-100)",
         }
     }
 
@@ -106,11 +114,12 @@ impl Tonemap {
 
     /// CPU mirror of `tonemap()` in the shader: linear display colour in [0, 1] (before the
     /// sRGB encoding). Both ACES 2.0 curves give the transform itself; the table's error
-    /// against it is measured in [`crate::aces2`].
+    /// against it is measured in [`crate::aces2`]. A scene's table is the scene's: its curve
+    /// here is the shader's without one (AgX punchy), [`Grading::apply`] its mirror with one.
     pub fn apply(self, color: Vec3) -> Vec3 {
         let display = match self {
             Tonemap::AgX => agx(color, false),
-            Tonemap::AgXPunchy => agx(color, true),
+            Tonemap::AgXPunchy | Tonemap::SceneLut => agx(color, true),
             Tonemap::Aces => aces(color),
             Tonemap::PbrNeutral => pbr_neutral(color),
             Tonemap::AcesNarkowicz => aces_narkowicz(color),
@@ -128,14 +137,120 @@ impl FromStr for Tonemap {
     fn from_str(text: &str) -> std::result::Result<Self, Self::Err> {
         Self::ALL
             .into_iter()
-            .chain([Tonemap::Aces2Analytic])
+            .chain([Tonemap::Aces2Analytic, Tonemap::SceneLut])
             .find(|t| t.name().eq_ignore_ascii_case(text))
             .ok_or_else(|| {
                 format!(
-                    "unknown tone curve {text:?}: agx, agx-punchy, aces, neutral, aces2, aces-narkowicz or aces2-analytic"
+                    "unknown tone curve {text:?}: agx, agx-punchy, aces, neutral, aces2, aces-narkowicz, aces2-analytic or lut"
                 )
             })
     }
+}
+
+/// How a [`Grading`] table's input is encoded: a published log curve the table was made for.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum GradingEncoding {
+    /// ARRI's LogC v3 at EI 800 (ARRI's 2011 formula; the name only describes the curve): a
+    /// linear toe under 0.010591, a log2-like slope over it, 0.18 at 0.391.
+    #[default]
+    LogC3,
+}
+
+impl GradingEncoding {
+    /// The shader's index.
+    fn index(self) -> u32 {
+        match self {
+            GradingEncoding::LogC3 => 0,
+        }
+    }
+
+    /// An encoded value back to linear ([`Self::encode`] inverted): the colour a table's grid
+    /// point stands for.
+    pub fn decode(self, v: f32) -> f32 {
+        match self {
+            GradingEncoding::LogC3 => {
+                if v > 5.367655 * 0.010591 + 0.092809 {
+                    (10f32.powf((v - 0.385537) / 0.247190) - 0.052272) / 5.555556
+                } else {
+                    (v - 0.092809) / 5.367655
+                }
+            }
+        }
+    }
+
+    /// A linear value encoded (`grading_encode` in `tonemap.slang`).
+    pub fn encode(self, x: f32) -> f32 {
+        match self {
+            GradingEncoding::LogC3 => {
+                if x > 0.010591 {
+                    0.247190 * (5.555556 * x + 0.052272).log10() + 0.385537
+                } else {
+                    5.367655 * x + 0.092809
+                }
+            }
+        }
+    }
+}
+
+/// A scene's own colour grading (D-100): a uniform 3-D table authored offline and given by the
+/// scene, never derived from the frame. The pre-exposed colour is encoded per channel by
+/// `encoding`, then looked up trilinearly; the table's values are display-linear colours. Shown by
+/// [`Tonemap::SceneLut`].
+#[derive(Clone, Debug, PartialEq)]
+pub struct Grading {
+    /// The table's points along each axis (32 or 33 usually), at least 2.
+    pub size: u32,
+    /// `size`³ display-linear colours, red fastest, then green, then blue (`r + n (g + n b)`).
+    pub texels: Vec<[f32; 3]>,
+    /// The curve its input is encoded by.
+    pub encoding: GradingEncoding,
+}
+
+impl Grading {
+    /// Whether the table holds `size`³ colours of a usable size.
+    pub fn is_valid(&self) -> bool {
+        self.size >= 2 && self.texels.len() == (self.size as usize).pow(3)
+    }
+
+    /// CPU mirror of `scene_lut()` in `tonemap.slang` (before the shader's half-float storage):
+    /// the encoded colour (negatives as 0) placed in the grid, trilinear between its eight
+    /// neighbours, clamped to [0, 1]. The table must be valid ([`Self::is_valid`]).
+    pub fn apply(&self, color: Vec3) -> Vec3 {
+        debug_assert!(
+            self.is_valid(),
+            "a grading table of {} colours",
+            self.texels.len()
+        );
+        let n = self.size as usize;
+        let at = |c: f32| {
+            let u = (self.encoding.encode(c.max(0.0)).clamp(0.0, 1.0)) * (n - 1) as f32;
+            let i = (u.floor() as usize).min(n - 2);
+            (i, u - i as f32)
+        };
+        let (r, g, b) = (at(color.x), at(color.y), at(color.z));
+        let texel = |dr: usize, dg: usize, db: usize| {
+            Vec3::from(self.texels[r.0 + dr + n * (g.0 + dg + n * (b.0 + db))])
+        };
+        let mut out = Vec3::ZERO;
+        for (db, wb) in [(0, 1.0 - b.1), (1, b.1)] {
+            for (dg, wg) in [(0, 1.0 - g.1), (1, g.1)] {
+                for (dr, wr) in [(0, 1.0 - r.1), (1, r.1)] {
+                    out += texel(dr, dg, db) * (wr * wg * wb);
+                }
+            }
+        }
+        out.clamp(Vec3::ZERO, Vec3::ONE)
+    }
+}
+
+/// A scene's grading table on the GPU ([`ToneTables::set_grading`]).
+struct SceneTable {
+    /// The [`Grading`] it was made from, by address: a scene's look hands over one for its life.
+    from: usize,
+    _lut: Image,
+    lut: SampledImageId,
+    size: u32,
+    encoding: GradingEncoding,
 }
 
 /// What the ACES 2.0 curves read on the GPU (issue #76): the baked table, a bindless
@@ -148,6 +263,8 @@ pub struct ToneTables {
     lut: SampledImageId,
     params: Buffer,
     hdr: Option<HdrTables>,
+    /// A scene's grading table (D-100), when its look gives one.
+    scene: Option<SceneTable>,
 }
 
 /// One HDR preset's table and parameters.
@@ -168,7 +285,10 @@ pub struct ToneTablesPush {
     aces2: u64,
     hdr: u64,
     hdr_max: f32,
-    pad: u32,
+    /// A scene's grading table (D-100), `u32::MAX` for none; its points per axis; its encoding.
+    scene_lut: u32,
+    scene_size: f32,
+    scene_encoding: u32,
 }
 
 impl ToneTables {
@@ -201,7 +321,60 @@ impl ToneTables {
             lut: sampled,
             params,
             hdr: None,
+            scene: None,
         })
+    }
+
+    /// Uploads a scene's grading table (D-100) as a strip of `size` slices of `size`² texels, as
+    /// ACES 2.0's table is laid out (RGBA16F), or drops it with `None`. Again only when the
+    /// grading changes (a table lives as long as the program: its address names it). A table
+    /// that is not `size`³ colours is refused, and the one shown kept.
+    pub fn set_grading(&mut self, grading: Option<&'static Grading>) -> Result<()> {
+        let wanted = grading.map(|g| g as *const Grading as usize);
+        if self.scene.as_ref().map(|s| s.from) == wanted {
+            return Ok(());
+        }
+        if let Some(grading) = grading
+            && !grading.is_valid()
+        {
+            return Err(forge_gpu::GpuError::Unsupported(format!(
+                "a grading table of size {} holds {} colours, not {}",
+                grading.size,
+                grading.texels.len(),
+                (grading.size as usize).pow(3)
+            )));
+        }
+        if let Some(old) = self.scene.take() {
+            self.device.wait_idle();
+            self.device.release_sampled_image(old.lut);
+        }
+        let Some(grading) = grading else {
+            return Ok(());
+        };
+        let size = grading.size;
+        let lut = self.device.create_image_with_data(
+            ImageDesc {
+                width: size * size,
+                height: size,
+                format: vk::Format::R16G16B16A16_SFLOAT,
+                usage: vk::ImageUsageFlags::SAMPLED,
+                aspect: vk::ImageAspectFlags::COLOR,
+                mip_levels: 1,
+                name: "scene grading table",
+            },
+            &aces2::lut_texels(&grading.texels, size),
+        )?;
+        let sampled = self
+            .device
+            .register_sampled_image(lut.view(), vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL);
+        self.scene = Some(SceneTable {
+            from: grading as *const Grading as usize,
+            _lut: lut,
+            lut: sampled,
+            size,
+            encoding: grading.encoding,
+        });
+        Ok(())
     }
 
     /// Uploads `preset`'s table (baked on its first use in the process, 10–15 ms) and
@@ -261,7 +434,9 @@ impl ToneTables {
             aces2: self.params.address(),
             hdr,
             hdr_max,
-            pad: 0,
+            scene_lut: self.scene.as_ref().map_or(u32::MAX, |s| s.lut.0),
+            scene_size: self.scene.as_ref().map_or(0.0, |s| s.size as f32),
+            scene_encoding: self.scene.as_ref().map_or(0, |s| s.encoding.index()),
         }
     }
 }
@@ -271,6 +446,9 @@ impl Drop for ToneTables {
         self.device.release_sampled_image(self.lut);
         if let Some(hdr) = self.hdr.take() {
             self.device.release_sampled_image(hdr.lut);
+        }
+        if let Some(scene) = self.scene.take() {
+            self.device.release_sampled_image(scene.lut);
         }
     }
 }
@@ -527,6 +705,9 @@ struct DisplayPush {
     local: LocalExposurePush,
 }
 
+// Vulkan guarantees 128 bytes of push constants; the pass's block must fit them.
+const _: () = assert!(std::mem::size_of::<DisplayPush>() <= 128);
+
 /// The stand-alone display pass.
 pub struct Display {
     device: Arc<Device>,
@@ -560,6 +741,12 @@ impl Display {
             tables,
             scotopic: 0.0,
         })
+    }
+
+    /// A scene's grading table (D-100), shown when the curve is [`Tonemap::SceneLut`]; `None`
+    /// drops it (that curve then shows AgX punchy). Uploaded once for each table given.
+    pub fn set_grading(&mut self, grading: Option<&'static Grading>) -> Result<()> {
+        self.tables.set_grading(grading)
     }
 
     /// Follows the output (issue #94): a new target format recompiles the pass (call it while
@@ -790,6 +977,75 @@ mod tests {
     }
 
     #[test]
+    fn logc3_puts_grey_where_arri_publishes_it() {
+        // ARRI's LogC v3 at EI 800: 18 % grey at 0.391, the toe's join continuous.
+        let e = GradingEncoding::LogC3;
+        assert!((e.encode(0.18) - 0.391).abs() < 1e-3);
+        let cut = 0.010591;
+        assert!((e.encode(cut - 1e-6) - e.encode(cut + 1e-6)).abs() < 1e-4);
+        assert!(e.encode(1.0) > e.encode(0.18) && e.encode(0.0) > 0.0);
+        for x in [0.0, 0.005, 0.18, 1.0, 40.0] {
+            assert!((e.decode(e.encode(x)) - x).abs() < 1e-4 * x.max(1.0), "{x}");
+        }
+    }
+
+    #[test]
+    fn an_identity_table_gives_the_colour_back() {
+        let n = 33u32;
+        let grid = |i: usize| {
+            GradingEncoding::LogC3
+                .decode(i as f32 / (n - 1) as f32)
+                .clamp(0.0, 1.0)
+        };
+        let mut texels = Vec::new();
+        for b in 0..n as usize {
+            for g in 0..n as usize {
+                for r in 0..n as usize {
+                    texels.push([grid(r), grid(g), grid(b)]);
+                }
+            }
+        }
+        let table = Grading {
+            size: n,
+            texels,
+            encoding: GradingEncoding::LogC3,
+        };
+        assert!(table.is_valid());
+        for c in [
+            Vec3::new(0.18, 0.18, 0.18),
+            Vec3::new(0.02, 0.5, 0.9),
+            Vec3::new(0.0, 0.001, 0.3),
+        ] {
+            let out = table.apply(c);
+            // Linear between log-spaced points: within a few percent, exact at the points.
+            assert!(
+                (out - c).abs().max_element() < 0.02 * c.max_element().max(0.05),
+                "{c} → {out}"
+            );
+        }
+        // Over the table's top: its last point, clamped to the display.
+        assert_eq!(table.apply(Vec3::splat(1e6)), Vec3::ONE);
+    }
+
+    #[test]
+    fn a_table_of_the_wrong_size_is_refused() {
+        let table = Grading {
+            size: 4,
+            texels: vec![[0.0; 3]; 63],
+            encoding: GradingEncoding::LogC3,
+        };
+        assert!(!table.is_valid());
+        assert!(
+            !Grading {
+                size: 1,
+                texels: vec![[0.0; 3]],
+                encoding: GradingEncoding::LogC3
+            }
+            .is_valid()
+        );
+    }
+
+    #[test]
     fn outputs_follow_the_target_format() {
         use OutputEncoding as E;
         assert_eq!(E::for_format(vk::Format::B8G8R8A8_SRGB), E::SrgbTarget);
@@ -799,8 +1055,8 @@ mod tests {
         assert!(E::Pq.is_hdr() && !E::Srgb.is_hdr());
         // The blocks the shaders mirror.
         assert_eq!(std::mem::size_of::<OutputPush>(), 32);
-        assert_eq!(std::mem::size_of::<ToneTablesPush>(), 32);
-        assert_eq!(std::mem::size_of::<DisplayPush>(), 112);
+        assert_eq!(std::mem::size_of::<ToneTablesPush>(), 40);
+        assert_eq!(std::mem::size_of::<DisplayPush>(), 120);
     }
 
     #[test]

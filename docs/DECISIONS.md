@@ -11113,7 +11113,7 @@ app's `--fog-lamp-shadows N`, off by default):**
   fog, keeps it bright, so the landing lacks light of its own, which this shows. **Off by
   default** until the landing's light is found. The village and the Bistro have no fog volumes.
 
-## D-100 — A scene's own colour grading: a 3-D LUT after a log encoding, as a display transform 🟡 (proposed 2026-11-05; D-045, D-083, D-084, D-094)
+## D-100 — A scene's own colour grading: a 3-D LUT after a log encoding, as a display transform ✅ (proposed 2026-11-05; the owner's go the same day: "Follow recommendations"; D-045, D-083, D-084, D-094)
 
 **The need.** The private district's look is graded by its source.
 - **How the source grades:** its environment's `ColorGradingAreaSettings` encodes the exposed scene
@@ -11151,8 +11151,8 @@ app's `--fog-lamp-shadows N`, off by default):**
   - **Reading:** the look's shape is its grading, not its light.
 
 **Proposed:**
-1. **A display transform that reads a scene's LUT** (`Tonemap::Lut`, `r.tonemap lut` when a scene
-   gives one):
+1. **A display transform that reads a scene's LUT** (`Tonemap::SceneLut`, `r.tonemap lut` when a
+   scene gives one):
    - the pre-exposed colour encoded by a named log curve (ARRI LogC v3 EI 800 first; linear as
      an option);
    - looked up trilinearly in a 3-D table (32³ or 33³, RGBA16F) bound bindless;
@@ -11235,9 +11235,41 @@ not covered):
     3. Before a release in China, check CN112206519B; once Sony's application is granted, read
        its claims.
 
-**For the owner:**
-- go or no-go, and whether it includes grading volumes;
-- the encoding: LogC only (the source's), or also a plain log2 range for Forge's own scenes' LUTs
-  later;
-- whether the district's matched frames should be judged with the source's grading (the aim of
-  D-083's calibration) or with Forge's own look.
+**The owner's go, as read (2026-11-05, "Follow recommendations"):** the proposal as written; LogC
+only for now; SDR only; the district judged with its source's grading (D-083's aim). Grading
+volumes are a second step, under the rules above.
+
+**Built (2026-11-05):**
+- **The curve:** `Tonemap::SceneLut` (`r.tonemap lut`, `--tonemap lut`; not in the cycle), shader
+  index 7. A scene gives its table through `Look::grading` (a `&'static Grading`: `size`³
+  display-linear colours, red fastest, and its `GradingEncoding`, LogC v3 alone so far), which
+  `Display::set_grading` uploads once. Without a table the curve shows AgX punchy.
+- **The table's layout:** a 2-D strip of `size` slices, as ACES 2.0's table is (`aces2_lut`):
+  the hardware's bilinear filter within two slices, the shader's blend between them. A 3-D image
+  would have needed a new kind of bindless binding. The strip is the long-published layout of
+  real-time grading tables (Unreal's 256 × 16 strips, Unity's `Lut2D`): a full, uniform grid
+  read at fixed places, no custom addressing (rule 1 kept).
+- **The CPU mirror:** `Grading::apply`, its tests (LogC v3's 18 % at 0.391, an identity table, the
+  sizes). The start-up tone check (`meshlets --tone-check`) runs a fixed 17³ table on the GPU against
+  it: 0.164 of an 8-bit code at most.
+- **The push block:** `ToneTablesPush` 32 → 40 bytes, `DisplayPush` 112 → 120 (Vulkan's guaranteed
+  128 asserted at compile time).
+- **Elsewhere nothing changes:** the village's thirteen map-check views are 0 px from the build
+  before.
+- **The cost:** on the private district's benchmark path (DLSS Quality at 2560 × 1440),
+  `post/display transform` 0.039 / 0.037 ms with the table against 0.044 / 0.040 with AgX punchy.
+- **The private district through its source's table** (its viewer hands it over; the exposure's
+  offset refitted to −1.28 EV, the offset on its range and its compensation alike, since the
+  clamped frames follow the range and the metered ones the compensation):
+
+  | 14 matched frames | AgX punchy | The source's table |
+  |---|---|---|
+  | geometric mean EV, rms | +0.19, 0.83 | +0.02, 0.64 |
+  | median EV, rms | +0.63, 1.26 | −0.05, 0.71 |
+  | p90 / p10 against the source's, log2 mean and rms | +1.21, 1.80 | +0.11, 0.78 |
+
+  The bar's colours (red over green, blue over green, the source's first): frame 18 2.86 / 0.33
+  against 5.19 / 1.12 with AgX and 2.20 / 0.31 through the table; frame 19 1.94 / 0.47 against
+  3.72 / 1.22 and 2.09 / 0.51; frame 21 1.25 / 0.44 against 0.71 / 0.35 and 1.09 / 0.46.
+
+**Next:** the grading volumes (the bar's own grading and its fixed exposure), under the rules above.

@@ -257,8 +257,9 @@ impl Drop for Bench {
                     hdr_analytic_codes = %format_args!("{:.3}", result.hdr_analytic),
                     hdr_table_codes = %format_args!("{:.3}", result.hdr_table),
                     %hdr_table_error,
+                    scene_table_codes = %format_args!("{:.3}", result.scene),
                     colours = result.colours,
-                    "tone check passed: every ACES 2.0 path, SDR and HDR, agrees with the CPU transform"
+                    "tone check passed: every ACES 2.0 path, SDR and HDR, and a scene's grading table agree with the CPU"
                 );
             } else {
                 tracing::error!(
@@ -268,8 +269,9 @@ impl Drop for Bench {
                     hdr_analytic_codes = result.hdr_analytic,
                     hdr_table_codes = result.hdr_table,
                     %hdr_table_error,
+                    scene_table_codes = result.scene,
                     colours = result.colours,
-                    "tone check FAILED: an ACES 2.0 path is a code or more from the CPU's"
+                    "tone check FAILED: an ACES 2.0 path or the scene grading table is a code or more from the CPU's"
                 );
             }
         }

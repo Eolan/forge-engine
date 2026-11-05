@@ -198,7 +198,7 @@ command line": `--no-ao` and `--set r.ao=0` give the same image to the pixel.
 | `r.dlss.mode` | how much smaller DLSS renders under `r.aa dlss` (#377); FSR's mode where DLSS cannot run | quality, balanced, performance, ultra-performance | quality |
 | `r.fsr.mode` | how much smaller FSR renders under `r.aa fsr` (#377) | native, quality (1.5 × smaller), balanced (1.7), performance (2), ultra-performance (3) | native |
 | `r.fsr.sharpen`, `r.fsr.sharpness` | RCAS over FSR's image (D-070), and how strong on AMD's scale | 0, 1; 0..1 | 1; 0.5 |
-| `r.tonemap` | the tone curve | agx, agx-punchy, aces, neutral, aces2, aces2-analytic | agx-punchy |
+| `r.tonemap` | the tone curve | agx, agx-punchy, aces, neutral, aces2, aces-narkowicz, aces2-analytic, lut (a scene's grading table, D-100) | agx-punchy |
 | `r.bloom`, `r.bloom.strength` | bloom, its share of the image | 0, 1; 0..1 | 1; 0.04 |
 | `r.exposure.local` | local exposure, D-067 | off, on, view | off |
 | `r.brightness` | the player's brightness (#377): stops added to the metered exposure's compensation (a fixed exposure stays as set); the asteroids and the planet have it too | -2..2 | 0 |

@@ -118,6 +118,9 @@ pub struct Look {
     /// The scene's tone curve where `--tonemap` names none (AgX punchy otherwise): an authored
     /// scene's renders made under another.
     pub tonemap: Option<Tonemap>,
+    /// The scene's own grading table (D-100), shown under [`Tonemap::SceneLut`]: an authored
+    /// scene graded by its source's table. Held for the program's life.
+    pub grading: Option<&'static forge_render::Grading>,
 }
 
 /// An environment map as a scene's sky and sun (D-084): the light its authors set, for
@@ -163,6 +166,7 @@ impl Default for Look {
             shade_adapt: None,
             environment: None,
             tonemap: None,
+            grading: None,
         }
     }
 }

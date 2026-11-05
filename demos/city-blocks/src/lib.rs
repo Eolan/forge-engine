@@ -1492,7 +1492,9 @@ impl Gallery {
         let ffx = fsr
             .as_ref()
             .and_then(|_| amd_fsr(args.fsr_amd, &ctx.device, ctx.extent()));
-        let display = forge_render::Display::new(&ctx.device, &ctx.shaders, ctx.output.format)?;
+        let mut display = forge_render::Display::new(&ctx.device, &ctx.shaders, ctx.output.format)?;
+        // The scene's own grading table (D-100), shown under `r.tonemap lut`.
+        display.set_grading(look.grading)?;
         // Known before the scene, whose streamed pages it loads first (#121).
         let mut camera = start_camera(&args, scenario.as_ref().map(|s| s.camera()))?;
         if let Some(fov) = args.fov {

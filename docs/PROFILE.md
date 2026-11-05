@@ -126,6 +126,9 @@ exposure (EV100, target, compensation, curve) the last.
   its cross. DLAA, for comparison, takes 0.48 ms.
 - DLAA by default where it runs (D-045), the same room: `temporal/DLSS` 0.463 ms, then
   `post/display transform` 0.020 with bloom mixed in (`post/bloom` 0.041, as under TAA).
+- A scene's own grading table (D-100, `r.tonemap lut`: LogC v3, then two fetches of a 32³ strip),
+  the private district's benchmark path at 2560 × 1440 under DLSS Quality, two runs each way:
+  `post/display transform` 0.039 / 0.037 ms against 0.044 / 0.040 with AgX punchy.
 - FSR 3.1 at the output's size (D-070, `--set r.aa=fsr`), the city at 1600 × 900: its eight
   passes 0.31 ms against `temporal/DLSS`'s 0.63 ms. They are `temporal/FSR accumulate` 0.131,
   `shading pyramid` 0.045, `reactivity` 0.041, `luma instability` 0.029, `inputs` 0.025,
