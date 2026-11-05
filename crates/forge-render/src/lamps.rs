@@ -206,8 +206,8 @@ pub enum Emission {
     /// times that candela (π × its luminance × its side's area). Its diffuse light is its line's,
     /// in closed form, clipped at a surface's horizon (`lamp_tube_share`); its highlight is lit
     /// from the point of it nearest the mirror ray (after Karis 2013 and Picott 1992); its shadow
-    /// rays aim at points along it. As a point at its middle, a sign's 9 m wash strip lit a hot
-    /// spot on the letters it washes.
+    /// rays aim at points along it. Its light still falls off as one over the distance from its
+    /// line: laid a few centimetres before a surface, it burns a band along itself.
     Tube {
         /// The way it runs, unit.
         axis: Vec3,

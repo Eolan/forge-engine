@@ -5843,9 +5843,14 @@ about 0.3 ms for it whatever their number (145, 366 or 1,155 of them).
 **A tube emission** (2026-11-05, #396): a tube or strip of light as one lamp, `Emission::Tube`: a
 segment along an axis, as thick as the lamp's radius, glowing as a Lambertian cylinder. Its
 intensity is its candela across its axis times the sine from it; its flux is π² times that candela.
-- **Why:** the private district's strips. As one point, a sign's 9 m wash strip, 30 cm in front of
-  its letters, lit a hot spot on them. As two flat pieces back to back (above), the wash was even,
-  at two lamps a strip.
+- **Why:** the private district's strips, one lamp each in place of one point or two flat pieces
+  back to back (above).
+- **What it did not cure** (corrected the same evening; the entry first said a sign's strip washed
+  its letters from 30 cm, a figure not measured). The sign's hot spot that started this came from
+  a strip 4 cm in front of its letters, the source's stand-in for the sign's glow on the street.
+  Point, flat pieces and tube each lit the letters more faithfully, and burnt a band across them.
+  The cure is in the district's viewer: such a light stays, and the glow it sits on takes no
+  light. The source's own frames show those letters evenly lit by their glow.
 - **Its light:**
   - *Diffuse:* its line's, in closed form (Nishita, Okamura and Nakamae 1985; Picott 1992), the
     segment clipped at the surface's horizon (`lamp_tube_share`). The CPU's `lamps::tube_share`
@@ -5876,8 +5881,8 @@ intensity is its candela across its axis times the sine from it; its flux is π�
   - the fog's shadow ray to the middle;
   - the resolve without the denoiser treating it as a bulb.
 - **The numbers:**
-  - **The sign** (the private district's viewer): its letters washed evenly by day and at night,
-    as by the flat pieces; no hot spot.
+  - **The sign** (the private district's viewer): as with the flat pieces, a band along the strip
+    by day and at night in place of one hot spot (above).
   - **The district's path** (2560 × 1440, DLSS Quality, interleaved after a warm-up): 16.99 and
     16.80 ms against 16.90 and 16.71 with the flat pieces, at a lamp a strip. With the ranges taken
     past the ends, 17.63 and 17.05 (`docs/PROFILE.md`).
