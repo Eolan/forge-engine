@@ -10826,6 +10826,11 @@ fine filth, leaks, scratches; 6,834 with a normal), the grime that breaks a laye
   move, the bathroom's shimmer unchanged (1.344 %).
 - **Left:** four of the district's 112 microblends, which the archives do not hold by name. The
   look is the owner's to judge on a walk.
+- **A row with levels met by a ray** (2026-11-06): the rays read a metal/rough map's green and
+  blue, and a row with levels has single-channel maps, whose green and blue are 0. No row with
+  levels was met directly until a plain row took them, whose hits would have read no metal, a
+  metal seen in a mirror as diffuse. They now read as the shading does, each map's mean through
+  its levels.
 
 ## D-096 — Authored worlds cooked into packages and streamed by cell ✅ (proposed 2026-11-01 and followed under the owner's word of the night, "Follow recommendations until 10 am"; #214, #338, D-053, D-077, D-094)
 

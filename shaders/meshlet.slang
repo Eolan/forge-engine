@@ -6956,8 +6956,17 @@ RayHit ray_hit_seen(Frame* f, uint instance, uint primitive, float2 b, float3 or
     // A metal/rough map (roughness in green, metalness in blue) times the factors, as the shading
     // takes them, its mean (the 1 × 1 mip): a row with a map has factors of 1, and the factors
     // alone made every mapped row of the Bistro a whole metal to the mirror rays (the review of
-    // 2026-10-31).
-    if (mat.metal_rough_texture != TEXTURE_NONE)
+    // 2026-10-31). A row with levels has each map single-channel, remapped (`uv_mapped_light`'s, D-095).
+    if ((mat.flags & MATERIAL_FLAG_LEVELS) != 0u)
+    {
+        hit.roughness = mat.levels.x;
+        hit.metal = mat.levels.z;
+        if (mat.metal_rough_texture != TEXTURE_NONE)
+            hit.roughness = lerp(mat.levels.x, mat.levels.y, sample_image_level(mat.metal_rough_texture, SAMPLER_LINEAR_REPEAT, float2(0.5, 0.5), 16.0).r);
+        if (mat.occlusion_texture != TEXTURE_NONE)
+            hit.metal = lerp(mat.levels.z, mat.levels.w, sample_image_level(mat.occlusion_texture, SAMPLER_LINEAR_REPEAT, float2(0.5, 0.5), 16.0).r);
+    }
+    else if (mat.metal_rough_texture != TEXTURE_NONE)
     {
         float4 mr = sample_image_level(mat.metal_rough_texture, SAMPLER_LINEAR_REPEAT, float2(0.5, 0.5), 16.0);
         hit.roughness *= mr.g;
