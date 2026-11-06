@@ -358,7 +358,7 @@ RAB_LightSample restir_tube_sample(Lamp lamp, RAB_Surface surface, float2 uv)
     if (!restir_lights(lamp, surface.world.y, surface.region, surface.other))
         return s;
     float window = lamp_tube_window(lamp, d);
-    s.radiance = lamp.colour_reach.rgb / area * (window * window);
+    s.radiance = lamp.colour_reach.rgb / area * (window * window * lamp_wedge_at(lamp, surface.world));
     return s;
 }
 

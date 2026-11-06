@@ -798,6 +798,18 @@ float lamp_wedge_beam(Lamp lamp, float3 to_lamp)
     return smoothstep(lamp.beam_edge.y, lamp.beam.w, dot(-to_lamp, facing));
 }
 
+// A tube's share of its light at `world` by its beam: 1 but for a wedge's, by the way to its line's nearest
+// point. In its line's closed forms (`lamp_tube_share`, `lamp_tube_fog`), so every path that lights with
+// them takes it.
+float lamp_wedge_at(Lamp lamp, float3 world)
+{
+    if (!lamp_wedge(lamp))
+        return 1.0;
+    float3 d = lamp.position_radius.xyz - world;
+    float3 nearest = d + lamp.beam.xyz * clamp(-dot(d, lamp.beam.xyz), -lamp.beam_edge.x, lamp.beam_edge.x);
+    return lamp_wedge_beam(lamp, nearest / max(length(nearest), 1e-6));
+}
+
 // A tube seen from a surface at `world` facing `n` (unit): its line's distance `h` (at least its
 // radius), the surface's normal along the way to the line (`nn`) and along its axis (`nt`), and its
 // span from the line's point nearest the surface (its middle at `along`), clipped at the surface's
@@ -854,7 +866,7 @@ float lamp_tube_share(Lamp lamp, float3 world, float3 n)
     float q2 = v.h * v.h + v.s2 * v.s2;
     float g1 = 0.5 * (v.nn * (v.s1 / q1 + atan(v.s1 / v.h) / v.h) - v.nt * v.h / q1);
     float g2 = 0.5 * (v.nn * (v.s2 / q2 + atan(v.s2 / v.h) / v.h) - v.nt * v.h / q2);
-    return max(g2 - g1, 0.0) / max(2.0 * lamp.beam_edge.x, 1e-6);
+    return max(g2 - g1, 0.0) / max(2.0 * lamp.beam_edge.x, 1e-6) * lamp_wedge_at(lamp, world);
 }
 
 // The point of a tube, from its middle, `u` of the way along its part above the horizon of a
@@ -880,7 +892,7 @@ float lamp_tube_fog(Lamp lamp, float3 world, float least)
     float h = max(length(c - axis * along), max(least, 1e-3));
     float s1 = along - half_length;
     float s2 = along + half_length;
-    return (s2 / (h * sqrt(h * h + s2 * s2)) - s1 / (h * sqrt(h * h + s1 * s1))) / max(2.0 * half_length, 1e-6);
+    return (s2 / (h * sqrt(h * h + s2 * s2)) - s1 / (h * sqrt(h * h + s1 * s1))) / max(2.0 * half_length, 1e-6) * lamp_wedge_at(lamp, world);
 }
 
 // The point of a tube (from its middle) nearest the ray from `world` along `r` (unit): its

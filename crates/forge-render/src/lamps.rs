@@ -150,7 +150,7 @@ pub fn room_lumens(
 /// Which way a lamp's light goes (#288): the share of its peak intensity ([`Lamp::candela`])
 /// in each direction, the same in every path that lights with it (the resolve, the light lists'
 /// picks, the probes' and the mirror rays' hits, ReSTIR DI's target), through `lamp_beam` in
-/// `meshlet.slang`. A wedge's beam is the fog's alone ([`Emission::Wedge`]).
+/// `meshlet.slang`. A wedge's beam is in its line's closed forms instead ([`Emission::Wedge`]).
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub enum Emission {
     /// The same every way: a bare bulb, a glass globe, a pendant's open shade.
@@ -215,7 +215,7 @@ pub enum Emission {
     /// A long lamp's beam: a [`Emission::Tube`]'s line, its light going out across the line about
     /// the way it faces ([`Emission::wedge`]), a cone's step in the angle from that way to the
     /// line's nearest point: a wedge along the lamp with rounded ends, where a cone from its middle
-    /// fills the wrong shape. The fog takes the wedge; a surface takes it as its tube, with no beam.
+    /// fills the wrong shape. Surfaces and the fog take it alike, in the tube's closed forms.
     Wedge {
         /// The way its line runs, unit.
         axis: Vec3,

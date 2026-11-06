@@ -379,7 +379,7 @@ void fog_light_main(uint3 id : SV_DispatchThreadID)
                         to_lamp = nearest / max(length(nearest), 1e-6);
                     }
                     float3 lux = lamp_tube(lamp)
-                        ? lamp.colour_reach.rgb * (lamp_tube_fog(lamp, world, least) * window * window * (lamp_wedge(lamp) ? lamp_wedge_beam(lamp, to_lamp) : 1.0))
+                        ? lamp.colour_reach.rgb * (lamp_tube_fog(lamp, world, least) * window * window)
                         : lamp.colour_reach.rgb / max(dist2, least * least) * window * window * lamp_beam(lamp, to_lamp);
                     float share = 1.0 - asfloat(lamp.flags.y);
                     lamps += share * lux * fog_phase(dot(-direction, -to_lamp), g[0].phase.x);
@@ -469,7 +469,7 @@ void fog_light_main(uint3 id : SV_DispatchThreadID)
                 to_lamp = nearest / max(length(nearest), 1e-6);
             }
             float3 lux = lamp_tube(lamp)
-                ? lamp.colour_reach.rgb * (lamp_tube_fog(lamp, world, least) * window * window * (lamp_wedge(lamp) ? lamp_wedge_beam(lamp, to_lamp) : 1.0))
+                ? lamp.colour_reach.rgb * (lamp_tube_fog(lamp, world, least) * window * window)
                 : lamp.colour_reach.rgb / max(dist2, least * least) * window * window * lamp_beam(lamp, to_lamp);
             lamps += (1.0 - asfloat(lamp.flags.y)) * lux * fog_phase(dot(-direction, -to_lamp), g[0].phase.x);
         }
