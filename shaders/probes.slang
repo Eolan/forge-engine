@@ -1234,9 +1234,9 @@ float far_room_share(ProbeField* field, uint region, out float3 lamps)
 // none in a room, between the two across a doorway. The probes' light towards a mirror direction
 // says how much light comes from there, whatever gives it, and a room's floor took a lamp's bounce
 // or a door's daylight for its share of the sky: a red bar's floor read blue-white at a grazing
-// view, in the sky's own colour. A share of a room's windows (`far_room_share`, for its diffuse
-// light) is no use here: the sky is hundreds of times as bright as the room, and 6 % of it still
-// lit that floor. A smooth surface's mirror ray sees a real window for itself.
+// view, in the sky's own colour. A room's share of its windows (`far_room_share`, for its diffuse
+// light) is no use here: the sky is far brighter than the room, and that share still lit the
+// floor. A smooth surface's mirror ray sees a real window for itself.
 float room_sky(RegionHit mask)
 {
     float near = mask.region == REGION_OUTSIDE ? 1.0 : 0.0;
