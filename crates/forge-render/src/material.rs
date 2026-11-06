@@ -398,6 +398,11 @@ pub const MATERIAL_MULTILAYER: u32 = 32768;
 /// its own): its texture, then its tiles, contrast, normal strength and offset as float bits.
 pub const MATERIAL_MICROBLEND: u32 = 65536;
 
+/// [`GpuMaterial`]'s flags: with [`MATERIAL_INTERIOR`], the rooms as pictures of rooms
+/// ([`forge_core::material::RoomAtlas`]): the atlas in the colour map's slot, a room's size in
+/// `uv_u` and the atlas's rooms across and down in `uv_v`.
+pub const MATERIAL_ROOM_ATLAS: u32 = 131072;
+
 /// The textures a world's materials sample, uploaded with their mips and visible to every
 /// shader through the bindless set. Released when dropped.
 pub struct TextureSet {
@@ -941,7 +946,10 @@ pub fn gpu_rows(table: &MaterialTable, textures: Option<&TextureSet>) -> Vec<Gpu
         .enumerate()
         .map(|(row, m)| {
             let r = &m.render;
-            let uv = r.uv.unwrap_or_default();
+            // A window's pictures of rooms: only behind glass, and they take the UVs' slots.
+            let atlas = r.room_atlas.filter(|_| r.interior);
+            let mapping = r.uv.filter(|_| atlas.is_none());
+            let uv = mapping.unwrap_or_default();
             // A layered material whose layers lie inside the table (else drawn as its own colours).
             let rows = table.rows().len();
             let multilayer = r.multilayer.filter(|m| {
@@ -959,7 +967,7 @@ pub fn gpu_rows(table: &MaterialTable, textures: Option<&TextureSet>) -> Vec<Gpu
                 specular_power: r.specular_power(),
                 scatter: r.scatter,
                 specular: r.specular,
-                albedo_texture: texture(r.albedo_texture),
+                albedo_texture: texture(atlas.map(|a| a.texture).or(r.albedo_texture)),
                 normal_texture: texture(r.normal_texture),
                 inv_texture_scale: 1.0 / r.texture_scale.max(1e-3),
                 normal_strength: r.normal_strength,
@@ -971,7 +979,12 @@ pub fn gpu_rows(table: &MaterialTable, textures: Option<&TextureSet>) -> Vec<Gpu
                     bubble_scattering(r.bubbles)
                 },
                 flags: if r.hex_tiling { MATERIAL_HEX_TILING } else { 0 }
-                    | if r.uv.is_some() { MATERIAL_UV } else { 0 }
+                    | if mapping.is_some() { MATERIAL_UV } else { 0 }
+                    | if atlas.is_some() {
+                        MATERIAL_ROOM_ATLAS
+                    } else {
+                        0
+                    }
                     | if uv.alpha_cutoff.is_some() {
                         MATERIAL_MASKED
                     } else {
@@ -1051,9 +1064,18 @@ pub fn gpu_rows(table: &MaterialTable, textures: Option<&TextureSet>) -> Vec<Gpu
                 sampler: forge_gpu::SamplerKind::AnisotropicWrap as u32
                     + 3 * uv.wrap[0].index()
                     + uv.wrap[1].index(),
-                uv_u: [uv.transform[0], uv.transform[1], uv.transform[2]],
+                // A window's rooms: their size and their atlas's shape, read by `interior_atlas`.
+                uv_u: atlas.map_or([uv.transform[0], uv.transform[1], uv.transform[2]], |a| {
+                    a.room.map(|v| v.max(1e-3))
+                }),
                 metallic: uv.metallic,
-                uv_v: [uv.transform[3], uv.transform[4], uv.transform[5]],
+                uv_v: atlas.map_or([uv.transform[3], uv.transform[4], uv.transform[5]], |a| {
+                    [
+                        a.cells[0].round().max(1.0),
+                        a.cells[1].round().max(1.0),
+                        0.0,
+                    ]
+                }),
                 roughness: r.roughness,
                 occlusion_strength: uv.occlusion_strength,
                 alpha_cutoff: uv.alpha_cutoff.unwrap_or(0.0),
@@ -1168,6 +1190,49 @@ mod tests {
         // The byte rule: 51 / 255 is 0.2 exactly, so byte 50 is ice and byte 51 is not.
         assert!(f32::from(50_u8) / 255.0 < 0.2);
         assert!(f32::from(51_u8) / 255.0 >= 0.2);
+    }
+
+    #[test]
+    fn a_room_atlas_stands_behind_glass_and_takes_the_uvs_slots() {
+        let atlas = forge_core::material::RoomAtlas {
+            texture: TextureId(0),
+            cells: [2.2, 0.0],
+            room: [3.0, 0.0, 4.0],
+        };
+        let mapping = UvMapping {
+            alpha_cutoff: Some(0.5),
+            ..UvMapping::default()
+        };
+        let mut table = MaterialTable::new();
+        table.add(Material::new(
+            "rooms",
+            RenderLayer {
+                interior: true,
+                room_atlas: Some(atlas),
+                uv: Some(mapping),
+                ..RenderLayer::default()
+            },
+        ));
+        table.add(Material::new(
+            "no glass",
+            RenderLayer {
+                room_atlas: Some(atlas),
+                uv: Some(mapping),
+                ..RenderLayer::default()
+            },
+        ));
+        let rows = gpu_rows(&table, None);
+        let rooms = &rows[1];
+        assert_ne!(rooms.flags & MATERIAL_ROOM_ATLAS, 0);
+        assert_eq!(rooms.flags & (MATERIAL_UV | MATERIAL_MASKED), 0);
+        // Bad data can't divide by nothing in the shader.
+        assert_eq!(rooms.uv_u, [3.0, 1e-3, 4.0]);
+        assert_eq!(rooms.uv_v, [2.0, 1.0, 0.0]);
+        // Without glass it is an ordinary row, as if no atlas were named.
+        let plain = &rows[2];
+        assert_eq!(plain.flags & MATERIAL_ROOM_ATLAS, 0);
+        assert_ne!(plain.flags & MATERIAL_UV, 0);
+        assert_ne!(plain.flags & MATERIAL_MASKED, 0);
     }
 
     #[test]

@@ -609,7 +609,7 @@ soft edges, their pixel-wide minimum, their reactive mask and their hash:
   footprint. Emil Persson's phone-wire antialiasing (GPU Pro 5, 2014): thin geometry fading by
   its coverage instead of thinning under a pixel; here the coverage is dithered against the
   frame's noise for TAA to average.
-- **Rooms behind the windows** (`interior_room` in `shaders/meshlet.slang`, D-060). Joost van
+- **Rooms behind the windows** (`interior_room` and `interior_atlas` in `shaders/meshlet.slang`, D-060). Joost van
   Dongen, "Interior Mapping: A new technique for rendering realistic buildings", Computer
   Graphics International 2008: the view ray traced into a room box behind the glass, in the
   window's own space. No patent found on the technique itself (`building-structure.md`).

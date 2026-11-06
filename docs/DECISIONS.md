@@ -4465,6 +4465,29 @@ luminance (a quarter since, below), so the room shows at night instead of a whit
 only, so Celsys's claim is not met: no door is ever drawn see-through. The rooms are not yet the
 units' rooms: the same box for every window (`demos/city-plan.md`, "Rooms behind the windows").
 
+**Rooms as pictures of rooms (built 2026-11-06, `RoomAtlas`).** A window can show an authored kit's
+baked pictures in place of the drawn room: `RenderLayer::room_atlas` gives the atlas, its rooms
+across and down, and a room's size in the mesh's metres.
+- **The ray:** it meets the room's box behind the glass (`interior_atlas`). The point it meets goes
+  to the picture as the picture was taken from the glass, narrowing towards the back wall.
+- **Which picture:** a room's own, by a hash of where it stands.
+- **Its light:** the row's `emissive` lights it whole, and no curtain is drawn. A far window reads
+  the mip level its pixel covers, down to the atlas's mean.
+- **Rays:** a mirror or a bounce that meets it takes the pictures' mean under the same lamp, so
+  they agree with the view.
+- **The row:** it needs `interior`, and it reads no UVs, since the rooms stand in the mesh's metres.
+- **Other rows:** a row without an atlas draws its room as before.
+- **Patents, read 2026-11-06 (our reading, not legal advice):**
+  - **Celsys US 12,700,170:** windows only, so its claim is not met, as above.
+  - **Bosch US 10,380,790:** claim 1 starts from a façade texture's window cutout layer and the
+    floors found in it. Here the grid stands in the mesh's own metres at the row's given size, and
+    no façade texture is read. Only the opening of claim 1 could be read (the page cut it off).
+  - **Sony US 12,293,452 (to about 2039):** its claims need planar layers parallel to the window,
+    duplicated and resized for a second room, and two windows on one connected room with a
+    parallax offset between their layers and reflections shaded from it. Here each room is one
+    picture, with no layers and nothing shared between windows. Reread those claims before adding
+    a layer atlas (curtains drawn as planes behind the glass).
+
 **Lit by their residents (built 2026-10-15).** With an hour, each home's windows light by its
 household: at home and awake or not. The day plans say where people are, and a sleep model was
 added: waking before the first outing, bed at the role's hour or after coming home. A window

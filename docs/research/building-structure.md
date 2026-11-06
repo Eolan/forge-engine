@@ -147,11 +147,13 @@ Expiry dates are Google Patents' estimates; the search was web-only and not exha
 | US 8,152,613 B2 [51] | Sony Interactive | claim 1: remove the tiles inside a damage radius and split those it crosses; claim 9: stress nodes per tile under gravity and a restoring force, breaking over a threshold | granted 2012, active, to about 2030-07-26 | the nearest to "panels and stress". A connectivity check or Blast-style bond forces differ. **Ask the owner before an overload pass.** |
 | US 12,700,170 B2 [52] | Celsys (Japanese priority 2021) | full rendering of the user's room, interior mapping for the others, a partly transparent door to show passability, swapping as the user moves | granted 2026-08-04, to about 2042 | close to "enter one room, fake the rest". No door-transparency cue, no per-room swapping; **ask before building**. |
 | EP 3238179 B1 / US 10,380,790 [53] | Robert Bosch | window lighting and interior maps, rooms inferred from texture coordinates | EP granted 2026, US 2019, to about 2035 | Forge takes its rooms from the building's data: low risk |
+| US 12,293,452 B2 [57] | Sony (priority 2018) | room shaders for animated films: planar layers parallel to the window, duplicated and resized for a second room, two windows on one connected room with a parallax offset between layers, reflections shaded from it | granted 2025-05-06, to about 2039 | D-060's rooms are a traced box or one picture, with no layers: not met. Reread before adding a layer atlas |
 | US 12,220,640 B2 [54] | Electronic Arts | a floor-plan generator and furniture layout by a graph neural network | granted 2025, to about 2043 | no learned layout; rule-based growth is from 2010 papers |
 | US 10,427,046 B2 [55] | Take-Two | loading assets (interior parts among them) by metadata tags | granted 2019, to about 2037 | a narrow claim: low risk |
 | US 6,456,289 [56] | Georgia Tech | animating fracture with finite elements | filed 1999, expired by term [unverified] | free |
 
-No patents found on interior mapping itself, the 2010 floor-plan papers, RealBlast, Geo-Mod,
+No patents found on interior mapping itself (the Bosch and Sony claims above are narrower forms of
+it, the Celsys one a combination with it), the 2010 floor-plan papers, RealBlast, Geo-Mod,
 Teardown, Frostbite's or Embark's destruction.
 
 ## 5. Recommendation for Forge
@@ -249,3 +251,4 @@ Teardown, Frostbite's or Embark's destruction.
 54. \* https://patents.google.com/patent/US12220640
 55. \* https://patents.google.com/patent/US10427046B2/en
 56. https://patents.google.com/patent/US6456289B1/en (a search result, not opened)
+57. \* https://patents.google.com/patent/US12293452B2/en

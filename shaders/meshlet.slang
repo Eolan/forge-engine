@@ -171,6 +171,7 @@ static const uint MATERIAL_FLAG_GLAZED = 2048;  // a window's glass a probe's ra
 static const uint MATERIAL_FLAG_LAMP = 4096;    // a lamp's glowing part: the probes' rays take none of its glow (D-065)
 static const uint MATERIAL_FLAG_LEVELS = 16384; // a layered material's layer: roughness and metalness from single-channel maps, remapped to `levels`
 static const uint MATERIAL_FLAG_MULTILAYER = 32768; // a layered material (D-095): its layers rows after it, from `first_layer`
+static const uint MATERIAL_FLAG_ROOM_ATLAS = 131072; // with INTERIOR: the rooms as pictures of rooms (`RoomAtlas`)
 static const uint MATERIAL_FLAG_MICROBLEND = 65536; // a layered material's layer with a microblend in its mask slots: texture, tiles, contrast, normal strength, offset u, v (float bits)
 static const uint MATERIAL_FLAG_DRAWN_AFTER = 8192; // left out of the visibility pass, drawn after the resolve; the rays meet it (D-065's glass)
 static const uint CUTOUT_GROUND_WINDOW = 1u << 31; // `cluster_cutouts`: windowed ground reaching into the ground window (#197)
@@ -5642,6 +5643,38 @@ float3 interior_room(float3 o, float3 d, uint id, float footprint, bool shop)
     return lerp(c, mean, smoothstep(0.06, 0.25, footprint));
 }
 
+// How far a room's picture (`RoomAtlas`) narrows at the back wall: the wall fills 1 / (1 + this) of it.
+static const float ROOM_ATLAS_NARROWING = 0.667;
+
+// The room behind a window as a picture of it (`RoomAtlas`, its size in `uv_u`, its atlas's shape in
+// `uv_v`): the ray from the glass meets the room's box, and the point it meets goes to the picture as
+// the picture was taken from the glass, narrowing towards the back wall. Each room in a row picks its
+// picture by where it stands.
+float3 interior_atlas(Material mat, float3 o, float3 d, uint id, float footprint)
+{
+    float3 size = mat.uv_u;
+    float2 cells = mat.uv_v.xy;
+    float2 cell = floor(o.xy / size.xy);
+    float3 lo = float3(cell * size.xy, o.z - size.z);
+    float3 hi = float3((cell + 1.0) * size.xy, o.z);
+    float3 inv = 1.0 / d;
+    float3 far = max((lo - o) * inv, (hi - o) * inv);
+    float3 p = o + d * min(far.x, min(far.y, far.z));
+    float2 q = saturate((p.xy - lo.xy) / size.xy);
+    float depth = saturate((o.z - p.z) / size.z);
+    float2 uv = 0.5 + (q - 0.5) / (1.0 + depth * ROOM_ATLAS_NARROWING);
+    float3 h = hash_color(id ^ uint(int(cell.x) * 7919 + int(cell.y) * 104729));
+    uint count = uint(cells.x * cells.y);
+    uint room = min(uint(h.x * float(count)), count - 1u);
+    uint across = uint(cells.x);
+    float2 at = (float2(float(room % across), float(room / across)) + uv) / cells;
+    // The level whose texels a pixel covers: a far window's room its picture's mean.
+    uint width, height;
+    g_sampled_images[NonUniformResourceIndex(mat.albedo_texture)].GetDimensions(width, height);
+    float level = log2(max(footprint * float(width) / (cells.x * size.x), 1.0));
+    return sample_image_level(mat.albedo_texture, mat.sampler, at, level).rgb;
+}
+
 // A standard row's light inputs (D-086): worked out before its lamps, so their highlights take
 // the pixel's own normal, lobe and reflectance; `n` the surface's normal before a pane's bend (its
 // room's daylight takes it), `uv` read by its UVs, `interior` a pane over a room.
@@ -5759,10 +5792,15 @@ float3 standard_light(Frame* f, Material mat, Surface s, StandardInputs si)
         // Each window's room by where it stands, so a city that gains or loses an instance
         // keeps its rooms (by its index, every window after it changed room).
         bool shop = (mat.flags & MATERIAL_FLAG_SHOP) != 0;
-        float3 room = interior_room(s.object_position, d, s.instance_place, max(length(s.dpdx), length(s.dpdy)), shop);
+        bool atlas = (mat.flags & MATERIAL_FLAG_ROOM_ATLAS) != 0;
+        float3 room;
+        if (atlas)
+            room = interior_atlas(mat, s.object_position, d, s.instance_place, max(length(s.dpdx), length(s.dpdy)));
+        else
+            room = interior_room(s.object_position, d, s.instance_place, max(length(s.dpdx), length(s.dpdy)), shop);
         float3 h = hash_color(s.instance_place);
-        // A shop keeps its window bare.
-        float curtain = !shop && h.x < ROOM_CURTAINS ? 0.35 + 0.5 * h.x / ROOM_CURTAINS : 0.0;
+        // A shop keeps its window bare, and a picture of a room has its own.
+        float curtain = !atlas && !shop && h.x < ROOM_CURTAINS ? 0.35 + 0.5 * h.x / ROOM_CURTAINS : 0.0;
         // Lit by the daylight the window gets (a white wall's facing out), or the row's lamp.
         float ndl_white;
         // Its own `sky_reflection` would overwrite the pane's mirror ray's request.
@@ -5771,7 +5809,7 @@ float3 standard_light(Frame* f, Material mat, Surface s, StandardInputs si)
         float3 daylight = sun_light(f, float3(1.0, 1.0, 1.0), n, s.n, 1.0, 0.0, s.shadow, s.sky, s.ao, s.view, float3(0.0), s.world, s.probes, false, ndl_white);
         g_reflection_request = request;
         g_reflection_tint = request_tint;
-        float3 lamp = emission(f, mat) * (shop ? ROOM_SHOP_LAMP : ROOM_LAMP);
+        float3 lamp = emission(f, mat) * (atlas ? 1.0 : shop ? ROOM_SHOP_LAMP : ROOM_LAMP);
         float3 seen = lerp(room * (daylight * ROOM_DAYLIGHT + lamp), mat.color_b * (daylight + lamp), curtain);
         // Through the glass, less what it reflects (Schlick).
         float fresnel = mat.reflectance + (1.0 - mat.reflectance) * pow(1.0 - saturate(dot(n, s.view)), 5.0);
@@ -7032,7 +7070,15 @@ RayHit ray_hit_seen(Frame* f, uint instance, uint primitive, float2 b, float3 or
         else
             hit.emissive *= sample_image_level(mat.emissive_texture, SAMPLER_LINEAR_REPEAT, float2(0.5, 0.5), 16.0).rgb;
     }
-    if ((mat.flags & MATERIAL_FLAG_INTERIOR) != 0)
+    if ((mat.flags & MATERIAL_FLAG_ROOM_ATLAS) != 0)
+    {
+        // The rooms as the view reads them, at their pictures' mean: lit whole by the row's lamp,
+        // the daylight through the glass, and no curtain.
+        float3 rooms = sample_image_level(mat.albedo_texture, SAMPLER_LINEAR_REPEAT, float2(0.5, 0.5), 16.0).rgb;
+        hit.albedo = rooms * ROOM_DAYLIGHT;
+        hit.emissive *= rooms;
+    }
+    else if ((mat.flags & MATERIAL_FLAG_INTERIOR) != 0)
         hit.emissive *= ((mat.flags & MATERIAL_FLAG_SHOP) != 0 ? ROOM_SHOP_LAMP : ROOM_LAMP) * 0.55;
     return hit;
 }

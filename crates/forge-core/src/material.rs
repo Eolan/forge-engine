@@ -213,6 +213,21 @@ impl Default for UvMapping {
     }
 }
 
+/// An atlas of pictures of rooms for a window's interior mapping ([`RenderLayer::room_atlas`]): each
+/// picture a room seen from its glass, its back wall in the middle and its walls, floor and ceiling
+/// narrowing to it, as a kit bakes them. Its rows run from the floor up: a picture's floor lies in
+/// its first texels' row.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct RoomAtlas {
+    /// The atlas, a colour map.
+    pub texture: TextureId,
+    /// Its rooms across and down, whole numbers of at least 1 (others are rounded up to that).
+    pub cells: [f32; 2],
+    /// A room's width, height and depth in the mesh's metres, the rooms in rows from its origin
+    /// and the glass on its `z` plane, the room towards -z.
+    pub room: [f32; 3],
+}
+
 /// What the renderer needs of a material. Colours are linear, in units of the light a white
 /// Lambertian surface facing the sun returns (the resolve scales them to luminance).
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -273,6 +288,10 @@ pub struct RenderLayer {
     /// part of the windows. For the kits' windows, whose glass lies on the mesh's `z` plane
     /// with the room towards −z.
     pub interior: bool,
+    /// With `interior` (ignored without it): the rooms as pictures of rooms ([`RoomAtlas`]) in place
+    /// of the drawn ones: no curtain, and the row's `emissive` lights them whole. The rooms stand in
+    /// the mesh's own metres, so such a row reads no UVs: its `uv` is ignored.
+    pub room_atlas: Option<RoomAtlas>,
     /// With `interior`: a shop behind the glass rather than a home: its floor level with the
     /// glass's foot, 6 m deep, shelves of goods on its walls, no curtain, and its lights
     /// brighter than a home's.
@@ -404,6 +423,7 @@ impl Default for RenderLayer {
             hex_tiling: false,
             world_projected: false,
             interior: false,
+            room_atlas: None,
             shop: false,
             glazed: false,
             lamp: false,
