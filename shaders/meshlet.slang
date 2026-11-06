@@ -5236,12 +5236,19 @@ static const float UNDERSIDE_LIFT = 1.5;
 static const float LEAF_DISTORTION = 0.3;
 static const float LEAF_POWER = 4.0;
 
-// Whether a standard row takes the sun through it (`leaf_transmission`): a leaf card's, or a thin
-// surface's that gives a share (`Material::scatter`, an authored frond's: its normal turns to the
-// viewer as any two-sided surface's, where a card's stays unturned).
+// Whether a row is a thin surface that takes the sun through it without being a leaf card: a
+// standard row that gives a share (`Material::scatter`, an authored frond's: its normal turns to
+// the viewer as any two-sided surface's, where a card's stays unturned). Not ice's, whose `scatter`
+// is its own.
+bool sun_through_thin(Material mat)
+{
+    return (mat.flags & MATERIAL_FLAG_FOLIAGE) == 0 && mat.class_index == MATERIAL_CLASS_STANDARD && any(mat.scatter > 0.0);
+}
+
+// Whether a row takes the sun through it (`leaf_transmission`): a leaf card's or a thin surface's.
 bool takes_sun_through(Material mat)
 {
-    return (mat.flags & MATERIAL_FLAG_FOLIAGE) != 0 || any(mat.scatter > 0.0);
+    return (mat.flags & MATERIAL_FLAG_FOLIAGE) != 0 || sun_through_thin(mat);
 }
 
 // The normal a surface's sun shadow takes: its own, or a leaf's turned towards the sun when it
@@ -5821,7 +5828,10 @@ float3 standard_light(Frame* f, Material mat, Surface s, StandardInputs si)
     LightInputs li = si.li;
     float3 n = si.n;
     float ndl;
-    float3 lit = sun_light(f, li.albedo, li.n, s.n, li.power, li.specular, s.shadow, s.sky, li.ao, s.view, li.reflectance, s.world, s.probes, s.traced, ndl) + li.emissive;
+    // A thin surface's side turned from the sun takes it only through the surface: its shadow is the sun's
+    // from the far side, and a bump tilted sunward would catch it whole, in specks (`sun_shadow`).
+    bool averted = sun_through_thin(mat) && dot(s.n, f[0].sun_dir) <= 0.0;
+    float3 lit = sun_light(f, li.albedo, li.n, s.n, li.power, li.specular, averted ? s.shadow * 0.0 : s.shadow, s.sky, li.ao, s.view, li.reflectance, s.world, s.probes, s.traced, ndl) + li.emissive;
     if (si.uv && takes_sun_through(mat))
         lit += leaf_transmission(f, li.albedo, mat.scatter, s);
     if (si.interior)
