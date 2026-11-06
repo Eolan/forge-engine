@@ -11781,9 +11781,13 @@ the distance fog.
     their own luminance, which they keep (`sky_light_whiter`). The sky as drawn and as mirrors show it
     stays blue. The clouds and the distance fog take the sky's own colour back
     (`sky_light_as_it_is`), which is why it stops short of white ([`MOST_WHITE`], 0.95).
-  - **Particles without the share:** steam took the scene's fit to its walls as a lamp from above, and
-    read bright blue-white in shade. A puff now takes the sky's light without the share, its
-    whiteness kept.
+  - **Particles and spray without the share:** steam took the scene's fit to its walls as a lamp from
+    above, and read bright blue-white in shade. A puff now takes the sky's light without the share, its
+    whiteness kept. Its probes' light can't be told apart, so what lamps and the sun put in them falls
+    with it, a known error: a puff under a street lamp takes that light at the same share.
+  - **Left:** a rough reflection (`sky_reflection`) and the water's blur blend towards the whitened
+    irradiance, so a rough patch reads greyer and brighter than a mirror beside it. The former is the
+    light on the surface, as its diffuse takes it; no scene with a share has water.
   - **The private district, at 0.9 with a share of 3:** the 14 frames' median rms 0.62 to 0.49 EV,
     geometric mean rms 0.47 to 0.42, frame 44's colour R/G 1.03 and B/G 0.97 to 1.09 and 0.91 (the
     source's 1.10 and 0.90). The alleys' shade reads R/G 0.96 to 1.04, B/G 0.11 to 0.63.

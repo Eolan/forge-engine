@@ -441,7 +441,8 @@ void advance_main(uint3 id : SV_DispatchThreadID)
             from_down = probe_irradiance(f[0].probes, q.position, -up, -up, -view, sky_down);
         }
         // Without the share a scene gives its surfaces (`SkyParams::light_share`): a fit to a scene's walls,
-        // which lit its steam from above as a lamp.
+        // which lit its steam from above as a lamp. The probes' light can't be told apart, so what lamps
+        // and the sun put in them falls with it: a puff under a street lamp takes it at that share too.
         q.light = 0.5 * (from_up + from_down) * f[0].sun_radiance.w / (PI * sky_light_share(sky[0].irradiance));
         // The sun's share of the puff, eased over SUN_EASE seconds: its five rays' steps as it
         // crosses a shadow's edge blend.

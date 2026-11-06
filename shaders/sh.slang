@@ -53,7 +53,7 @@ public float3 sky_light_on_surfaces(float4* coefficients, float3 c)
 public float3 sky_light_as_it_is(float4* coefficients, float3 e)
 {
     float white = coefficients[SH_COEFFICIENTS + 2].w;
-    return (e - white * dot(e, float3(0.2126, 0.7152, 0.0722))) / ((1.0 - white) * sky_light_share(coefficients));
+    return max((e - white * dot(e, float3(0.2126, 0.7152, 0.0722))) / ((1.0 - white) * sky_light_share(coefficients)), 0.0);
 }
 
 // Irradiance at the normal `n` from coefficients already multiplied by their band's cosine

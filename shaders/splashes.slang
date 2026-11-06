@@ -399,8 +399,9 @@ SplashVaryings vert_main(uint vertex : SV_VertexID)
     float sun = sun_visibility(f, q.position);
     Sky* sky = f[0].sky;
     float scale = f[0].sun_radiance.w;
+    // Without the share a scene gives its surfaces, as the particles' (`SkyParams::light_share`).
     float3 sky_light = 0.5 * (sh_irradiance(sky[0].irradiance, float3(0.0, 1.0, 0.0)) +
-                              sh_irradiance(sky[0].irradiance, float3(0.0, -1.0, 0.0))) * scale / PI;
+                              sh_irradiance(sky[0].irradiance, float3(0.0, -1.0, 0.0))) * scale / (PI * sky_light_share(sky[0].irradiance));
     float3 color = f[0].sun_radiance.rgb * (4.0 * phase * sun) + sky_light;
     if ((q.flags & SPLASH_GRAIN) != 0u)
     {
