@@ -150,7 +150,7 @@ pub fn room_lumens(
 /// Which way a lamp's light goes (#288): the share of its peak intensity ([`Lamp::candela`])
 /// in each direction, the same in every path that lights with it (the resolve, the light lists'
 /// picks, the probes' and the mirror rays' hits, ReSTIR DI's target), through `lamp_beam` in
-/// `meshlet.slang`.
+/// `meshlet.slang`. A wedge's beam is the fog's alone ([`Emission::Wedge`]).
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub enum Emission {
     /// The same every way: a bare bulb, a glass globe, a pendant's open shade.
@@ -212,6 +212,23 @@ pub enum Emission {
         /// Half its length, metres.
         half_length: f32,
     },
+    /// A long lamp's beam: a [`Emission::Tube`]'s line, its light going out across the line about
+    /// the way it faces ([`Emission::wedge`]), a cone's step in the angle from that way to the
+    /// line's nearest point: a wedge along the lamp with rounded ends, where a cone from its middle
+    /// fills the wrong shape. The fog takes the wedge; a surface takes it as its tube, with no beam.
+    Wedge {
+        /// The way its line runs, unit.
+        axis: Vec3,
+        /// Half its length, metres.
+        half_length: f32,
+        /// The way it faces, as a turn about the line, radians, from the first of
+        /// [`Emission::rectangle_axes`]' basis about `axis`.
+        turn: f32,
+        /// The cosine of the half-angle within which the light is whole.
+        inner_cos: f32,
+        /// The cosine of the half-angle beyond which there is none (below `inner_cos`).
+        outer_cos: f32,
+    },
 }
 
 impl Emission {
@@ -230,10 +247,41 @@ impl Emission {
         }
     }
 
-    /// How far its light reaches beyond its middle's: a tube's half length, else 0.
+    /// A long lamp's beam along `axis`, `half_length` metres each side of its middle, facing
+    /// `facing` (taken across the line), whole within the half-angle of cosine `inner_cos` and gone
+    /// beyond that of `outer_cos` ([`Emission::Wedge`]).
+    pub fn wedge(
+        axis: Vec3,
+        half_length: f32,
+        facing: Vec3,
+        inner_cos: f32,
+        outer_cos: f32,
+    ) -> Emission {
+        debug_assert!(
+            axis != Vec3::ZERO && half_length > 0.0,
+            "a wedge needs an axis and a length: {axis} {half_length}"
+        );
+        let axis = axis.normalize();
+        let (t, b) = Emission::rectangle_axes(axis);
+        debug_assert!(
+            facing.dot(t).abs() + facing.dot(b).abs() > 1e-3,
+            "a wedge faces across its line: {facing} along {axis}"
+        );
+        Emission::Wedge {
+            axis,
+            half_length: half_length.max(1e-3),
+            turn: facing.dot(b).atan2(facing.dot(t)),
+            inner_cos: inner_cos.max(outer_cos + 1e-3),
+            outer_cos,
+        }
+    }
+
+    /// How far its light reaches beyond its middle's: a tube's or a wedge's half length, else 0.
     pub fn extent(&self) -> f32 {
         match *self {
-            Emission::Tube { half_length, .. } => half_length.max(0.0),
+            Emission::Tube { half_length, .. } | Emission::Wedge { half_length, .. } => {
+                half_length.max(0.0)
+            }
             _ => 0.0,
         }
     }
@@ -287,7 +335,7 @@ impl Emission {
     }
 
     /// The share of the peak intensity towards the unit direction `out` from the lamp (the CPU's
-    /// `lamp_beam`).
+    /// `lamp_beam`; for a wedge, `lamp_wedge_beam`, `out` the way from its line's nearest point).
     pub fn share(&self, out: Vec3) -> f32 {
         match *self {
             Emission::Every => 1.0,
@@ -308,6 +356,18 @@ impl Emission {
                 let c = out.dot(axis).clamp(-1.0, 1.0);
                 (1.0 - c * c).sqrt()
             }
+            Emission::Wedge {
+                axis,
+                turn,
+                inner_cos,
+                outer_cos,
+                ..
+            } => {
+                let (t, b) = Emission::rectangle_axes(axis);
+                let facing = t * turn.cos() + b * turn.sin();
+                let k = ((out.dot(facing) - outer_cos) / (inner_cos - outer_cos)).clamp(0.0, 1.0);
+                k * k * (3.0 - 2.0 * k)
+            }
         }
     }
 
@@ -327,7 +387,9 @@ impl Emission {
                 let pi = std::f32::consts::PI;
                 pi * pi + pi * (up + down)
             }
-            Emission::Tube { .. } => std::f32::consts::PI * std::f32::consts::PI,
+            Emission::Tube { .. } | Emission::Wedge { .. } => {
+                std::f32::consts::PI * std::f32::consts::PI
+            }
         }
     }
 
@@ -351,6 +413,16 @@ impl Emission {
             Emission::Tube { axis, half_length } => (
                 [axis.x, axis.y, axis.z, 0.0],
                 [half_length.max(0.0), 0.0, -2.0, 0.0],
+            ),
+            Emission::Wedge {
+                axis,
+                half_length,
+                turn,
+                inner_cos,
+                outer_cos,
+            } => (
+                [axis.x, axis.y, axis.z, inner_cos],
+                [half_length.max(0.0), outer_cos, -3.0, turn],
             ),
         }
     }
@@ -412,13 +484,14 @@ pub struct GpuLamp {
     pub colour_reach: [f32; 4],
     /// [`Lamp::regions`].
     pub regions: [u32; LAMP_REGIONS],
-    /// [`Lamp::emission`]: xyz its cone's axis (zero: every way), w the cosine within which its
-    /// light is whole.
+    /// [`Lamp::emission`]: xyz its cone's axis (zero: every way; a tube's or a wedge's line), w the
+    /// cosine within which its light is whole.
     pub beam: [f32; 4],
     /// x: the cosine beyond which a cone's light is none; for a flat piece ([`Emission::Flat`]):
     /// y its turn, zw its half sizes (z over 0 marks it flat); for a lantern
     /// ([`Emission::Prism`]) its shares up and down, z -1; for a tube ([`Emission::Tube`]) x its
-    /// half length, z -2; else yzw 0.
+    /// half length, z -2; for a wedge ([`Emission::Wedge`]) x its half length, y the cut-off's
+    /// cosine, z -3, w its turn; else yzw 0.
     pub beam_edge: [f32; 4],
     /// x: [`LAMP_SHADOWLESS`] when it casts no shadow ([`Lamp::shadows`]); y: one less
     /// [`Lamp::fog`], as float bits (a zeroed record lights the fog whole); zw 0.
@@ -1165,6 +1238,31 @@ mod tube_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_wedge_runs_along_its_lamp_and_faces_its_way() {
+        let line = Vec3::new(1.0, 0.0, 0.2).normalize();
+        let facing = Vec3::NEG_Y;
+        let e = Emission::wedge(line, 1.5, facing, 0.6, 0.45);
+        // As far as its tube, and whole along the way it faces, none behind.
+        assert_eq!(e.extent(), 1.5);
+        assert!((e.share(facing) - 1.0).abs() < 1e-5);
+        assert_eq!(e.share(-facing), 0.0);
+        // The way it faces survives as a turn about its line.
+        let Emission::Wedge { axis, turn, .. } = e else {
+            panic!("a wedge");
+        };
+        let (t, b) = Emission::rectangle_axes(axis);
+        assert!((t * turn.cos() + b * turn.sin() - facing).length() < 1e-5);
+        // The shader tells it from a tube by its mark, and reads its cut-off and turn.
+        let (beam, edge) = e.gpu();
+        assert_eq!(beam[3], 0.6);
+        assert_eq!(edge, [1.5, 0.45, -3.0, turn]);
+        // A line near upright takes the other basis (`rectangle_axes`, `lamp_wedge_beam`).
+        let upright = Emission::wedge(Vec3::Y, 1.0, Vec3::X, 0.6, 0.45);
+        assert!((upright.share(Vec3::X) - 1.0).abs() < 1e-5);
+        assert_eq!(upright.share(Vec3::NEG_X), 0.0);
+    }
 
     #[test]
     fn a_column_lists_every_lamp_of_every_region_that_reaches_it_in_order() {

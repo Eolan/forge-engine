@@ -780,6 +780,24 @@ bool lamp_tube(Lamp lamp)
     return lamp.beam_edge.z < -1.5;
 }
 
+// Whether `lamp` is a wedge (`Emission::Wedge`): a tube, `beam_edge.z` -3, whose light goes out
+// across its line about the way it faces, `beam_edge.w` a turn about the line.
+bool lamp_wedge(Lamp lamp)
+{
+    return lamp.beam_edge.z < -2.5;
+}
+
+// A wedge's share of its light where the way to the line's nearest point is `to_lamp`: a cone's step
+// (`beam.w` whole, `beam_edge.y` none) in the angle from the way it faces, so its shape runs along the
+// lamp. The axes as `Emission::rectangle_axes`.
+float lamp_wedge_beam(Lamp lamp, float3 to_lamp)
+{
+    float3 axis = lamp.beam.xyz;
+    float3 t = normalize(cross(abs(axis.y) < 0.99 ? float3(0.0, 1.0, 0.0) : float3(1.0, 0.0, 0.0), axis));
+    float3 facing = t * cos(lamp.beam_edge.w) + cross(axis, t) * sin(lamp.beam_edge.w);
+    return smoothstep(lamp.beam_edge.y, lamp.beam.w, dot(-to_lamp, facing));
+}
+
 // A tube seen from a surface at `world` facing `n` (unit): its line's distance `h` (at least its
 // radius), the surface's normal along the way to the line (`nn`) and along its axis (`nt`), and its
 // span from the line's point nearest the surface (its middle at `along`), clipped at the surface's
@@ -988,7 +1006,9 @@ public struct Lamp
     public float4 beam_edge;       // x: the cosine beyond which a cone's light is none; yzw: a flat
                                    // piece's turn and half sizes (`lamp_flat`), else 0; a
                                    // lantern's (`lamp_prism`): its shares up and down, -1, 0; a
-                                   // tube's (`lamp_tube`): x its half length, z -2
+                                   // tube's (`lamp_tube`): x its half length, z -2; a wedge's
+                                   // (`lamp_wedge`): x its half length, y the cut-off's cosine, z
+                                   // -3, w its turn
     public uint4 flags;            // x: LAMP_SHADOWLESS when it casts no shadow; y: the share of its light the fog does not scatter (float bits, D-099); zw 0
 };
 

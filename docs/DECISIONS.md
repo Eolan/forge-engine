@@ -5894,6 +5894,13 @@ intensity is its candela across its axis times the sine from it; its flux is Ï€Â
       cost less over the flat pieces and a sign looked alike. The private district's bar strips, 7 and
       8 m long with ranges of 1 to 3 m, then lit only 1 to 3 m round their middles, and the shelves
       under them stayed dark.
+- **A long lamp's beam in the fog (`Emission::Wedge`, 2026-11-06):** a bar lamp's beam is a wedge
+  along its line, not a cone from its middle. The owner saw it on the private district's pool table,
+  where a 3.1 m lamp lit a narrow cone. It is a tube's line in closed form times a cone's step in the
+  angle from the way it faces to the line's nearest point, so its shape runs along the lamp with
+  rounded ends and no lobes (a row of cones showed lobes at 0.75 m). The fog takes the wedge; a surface
+  takes it as its tube, with no beam. Other lamps are unchanged. A web search the same day found no
+  patent on it; it adds a cone's step to the closed form below and takes no line light onto a plane.
 - **Patents** (searched 2026-11-05):
   - **Pixar's US 7,872,649** (live to about 2029) projects a line light onto a plane through the
     shaded point. This shape is not taken: the line is integrated in space and clipped at the
