@@ -7466,6 +7466,18 @@ decided above):
   - Only a scene with a decal kind that lays a roughness map pays either.
 - **Elsewhere:** the village's decals carry no roughness map, so its option is off: its thirteen
   map-check views are 0 px from the build before.
+- **What smooths a surface fills its relief** (2026-11-06, `decal_fill`): the mirror rays over a
+  bumpy ground's normal map each went their own way, so a puddle read as a field of sparkles.
+  - **Now:** a decal's roughness flattens the shading normal towards the surface's own, by how far
+    it took the roughness down, full from a drop of 0.5 (`DECAL_FILL_DROP`). The normal map's
+    variance, the decals' slopes under it and a layer's microblend bumps go with it, on every class
+    that takes the decals' roughness.
+  - **First built by coverage alone, and wrong (the review):** any drop counted in full, so a logo a
+    little smoother than its wall lost the wall's relief, and a ground's map to either side of a
+    puddle's value flipped from texel to texel.
+  - **Checks:** the gate; the village's thirteen views score what they scored before against the
+    accepted set. In the private district frame 30's puddle is a flat mirror, and the 14 matched
+    frames don't move (geometric rms 0.44).
 
 *(research: decals.md; D-007, D-013, D-021, D-026, D-028, D-047, D-065; issue #304)*
 

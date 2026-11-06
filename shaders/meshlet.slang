@@ -5101,6 +5101,31 @@ float decal_power(float power, float2 rough)
     return max(2.0 / (alpha * alpha) - 2.0, 0.001);
 }
 
+// What smooths a surface fills its relief (#395): water lies flat, and over a bumpy ground's map
+// its mirror rays each went their own way, a field of sparkles. By how far the decals' roughness
+// (`apply_colour_decals`'s `rough`) took it down, full from DECAL_FILL_DROP: a logo a little
+// smoother than its wall keeps the wall's relief, and a ground's map to either side of a puddle's
+// value doesn't flip from texel to texel. 0, to the bit, where none lies.
+static const float DECAL_FILL_DROP = 0.5;
+
+float decal_fill(float roughness, float2 rough)
+{
+    return saturate((roughness * (1.0 - rough.y) - rough.x) / DECAL_FILL_DROP);
+}
+
+// `decal_fill` of a specular power's roughness (`decal_power`'s).
+float decal_power_fill(float power, float2 rough)
+{
+    return rough.y < 1.0 ? decal_fill(sqrt(sqrt(2.0 / (power + 2.0))), rough) : 0.0;
+}
+
+// A shading normal under that fill, the surface's own at full, then bent by the decals' slopes,
+// which the fill covers with the rest of the relief (`decal_bent`). `n` to the bit at none.
+float3 decal_filled(float3 n, float3 surface, float3 bend, float fill)
+{
+    return decal_bent(fill > 0.0 ? normalize(lerp(n, surface, fill)) : n, bend * (1.0 - fill));
+}
+
 // The albedo and the normal a standard row gives the surface: the row's two colours mixed by
 // the instance, its cavity, and its textures projected along the object's axes.
 void standard_surface(Material mat, Surface s, out float3 albedo, out float3 n)
@@ -5229,6 +5254,7 @@ struct LightInputs
     float metal;        // its metalness (the debug views)
     float variance;     // its normal map's spread under the pixel, Toksvig's (the debug views)
     float bumps;        // the share of a light its normal map's bumps keep, in `albedo` (#373)
+    float fill;         // how far those decals filled its relief (`decal_fill`), `uv_mapped_light`'s alone
     float laid;         // the share of its roughness its colour decals laid where they made it smoother (#395): 0 where none
 };
 
@@ -5328,10 +5354,14 @@ LightInputs uv_mapped_light(Frame* f, Material mat, Surface s)
         float3 bent = (t.x * T - t.y * B) * scale + t.z * N;
         n = normalize(mul(s.normal_frame, bent));
     }
-    n = decal_bent(n, decal_bend);
     // The decals' roughness over the surface's (`apply_decals`): as it was where none lies.
     float undecaled = roughness;
     roughness = roughness * decal_rough.y + decal_rough.x;
+    // Their share where they made it smoother (a puddle), none where they roughened it.
+    float laid = roughness < undecaled ? 1.0 - decal_rough.y : 0.0;
+    float fill = decal_fill(undecaled, decal_rough);
+    n = decal_filled(n, s.n, decal_bend, fill);
+    variance *= 1.0 - fill;
     float alpha = clamp(roughness, 0.02, 1.0);
     alpha *= alpha;
     // RenderLayer::specular_power, kept over 0: at roughness 1 the exponent is 0, and pow(0, 0) is NaN
@@ -5353,8 +5383,8 @@ LightInputs uv_mapped_light(Frame* f, Material mat, Surface s)
     li.metal = metal;
     li.variance = variance;
     li.bumps = bumps;
-    // Their share where they made it smoother (a puddle), none where they roughened it.
-    li.laid = roughness < undecaled ? 1.0 - decal_rough.y : 0.0;
+    li.laid = laid;
+    li.fill = fill;
     return li;
 }
 
@@ -5431,7 +5461,8 @@ LightInputs multilayer_light(Frame* f, Material mat, Surface s)
             float3 T = dp2perp * gx.x + dp1perp * gy.x;
             float3 B = dp2perp * gx.y + dp1perp * gy.y;
             float scale = rsqrt(max(max(dot(T, T), dot(B, B)), 1e-30));
-            float2 d = (microblend.xy * 2.0 - 1.0) * microblend_strength;
+            // Filled over with the rest of its layer's relief (`decal_fill`).
+            float2 d = (microblend.xy * 2.0 - 1.0) * microblend_strength * (1.0 - l.fill);
             // The frame's scale (the instance's, `instance_normal_frame`) taken off: bumps
             // as strong at any placed size.
             float3 frame_n = mul(s.normal_frame, N);
@@ -5689,8 +5720,8 @@ StandardInputs standard_inputs(Frame* f, Material mat, Surface s)
             float2 decal_rough = float2(0.0, 1.0);
             apply_colour_decals(f, s, albedo, decal_bend, decal_rough);
             li.albedo = albedo;
-            li.n = decal_bent(n, decal_bend);
             float undecaled = li.power;
+            li.n = decal_filled(n, s.n, decal_bend, decal_power_fill(undecaled, decal_rough));
             li.power = decal_power(li.power, decal_rough);
             li.laid = li.power > undecaled ? 1.0 - decal_rough.y : 0.0;
             li.emissive = emission(f, mat);
@@ -5996,7 +6027,7 @@ float3 shade_layered(Frame* f, uint row, Material mat, Surface s)
         float3 decal_bend = float3(0.0);
         float2 decal_rough = float2(0.0, 1.0);
         apply_decals(f, s, albedo, n, decal_bend, decal_rough, true);
-        n = decal_bent(n, decal_bend);
+        n = decal_filled(n, s.n, decal_bend, decal_power_fill(specular_power, decal_rough));
         specular_power = decal_power(specular_power, decal_rough);
     }
     float3 shadow = s.shadow;
