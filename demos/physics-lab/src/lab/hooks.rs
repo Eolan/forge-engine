@@ -296,6 +296,7 @@ impl Scenario for LabScenario {
             grading: None,
             aerosols: None,
             sky_light: None,
+            sky_white: None,
         }
     }
 

@@ -977,6 +977,8 @@ struct Gallery {
     sky_light: bool,
     /// The sky's light on surfaces times this (`Look::sky_light`).
     sky_light_share: f32,
+    /// And how far it goes towards white (`Look::sky_white`).
+    sky_light_white: f32,
     /// Ambient occlusion of the sky's light (issue #48), on while `ao_on`.
     gtao: Gtao,
     ao_on: bool,
@@ -1227,6 +1229,7 @@ impl Gallery {
             .sky_light
             .filter(|k| k.is_finite() && *k > 0.0)
             .unwrap_or(1.0);
+        let sky_light_white = look.sky_white.filter(|k| k.is_finite()).unwrap_or(0.0);
         // The sun at `--sun-elevation`, from the default sun's azimuth, through the air: the
         // scene's aerosols (D-101) in it.
         let mut atmosphere_params = AtmosphereParams::earth();
@@ -2399,6 +2402,7 @@ impl Gallery {
             sun_scale,
             sky_light,
             sky_light_share,
+            sky_light_white,
             gtao,
             ao_on,
             ao_ignore_nearer: 0.0,
@@ -3668,6 +3672,7 @@ impl Demo for Gallery {
                 sun_angular_radius: forge_render::starfield::SUN_ANGULAR_RADIUS_1AU,
                 luminance_scale: self.renderer.sun_illuminance * exposure,
                 light_share: self.sky_light_share,
+                light_white: self.sky_light_white,
                 aerial_far_km: 8.0,
                 march_beyond: false,
                 haze: 1.0,

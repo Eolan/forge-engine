@@ -131,6 +131,9 @@ pub struct Look {
     /// The sky's light on surfaces times this, the sky as drawn and in mirrors unchanged
     /// (`SkyParams::light_share`). None: 1.
     pub sky_light: Option<f32>,
+    /// How far the sky's light on surfaces goes towards white, the sky as drawn unchanged
+    /// (`SkyParams::light_white`). None: its colour.
+    pub sky_white: Option<f32>,
 }
 
 /// An environment map as a scene's sky and sun (D-084): the light its authors set, for
@@ -179,6 +182,7 @@ impl Default for Look {
             grading: None,
             aerosols: None,
             sky_light: None,
+            sky_white: None,
         }
     }
 }

@@ -78,10 +78,14 @@ struct GpuSky {
     environment: u32,
     environment_scale: f32,
     light_share: f32,
-    pad: f32,
+    light_white: f32,
 }
 
 const _: () = assert!(std::mem::size_of::<GpuSky>() == 328);
+
+/// The furthest [`SkyParams::light_white`] goes: short of white, so that the clouds and the distance fog
+/// can take the sky's own colour back from its light on surfaces (`sky_light_as_it_is`).
+pub const MOST_WHITE: f32 = 0.95;
 const _: () = assert!(std::mem::offset_of!(GpuSky, transmittance) == 224);
 
 /// The night's part of a frame's sky (D-046, issue #164; [`crate::night`]): the second light,
@@ -141,6 +145,10 @@ pub struct SkyParams {
     /// its irradiance, and what a diffuse ray that meets nothing brings (`sky_light_along`). 1: as
     /// it is. A scene fitted to its own frames may want it apart from the sky it shows.
     pub light_share: f32,
+    /// How far the sky's light on surfaces goes towards white, its own luminance (0: its colour; at most
+    /// [`MOST_WHITE`]), the sky as drawn and as mirrors show it unchanged. A scene's authored sky light
+    /// may be whiter than the sky it shows, and its shade warmer with it.
+    pub light_white: f32,
     /// How far the aerial-perspective volume reaches, km (farther pixels take its last slice).
     pub aerial_far_km: f32,
     /// March each pixel beyond `aerial_far_km` on its own instead of giving it the volume's
@@ -445,7 +453,7 @@ impl GroundSky {
                         environment: params.environment.map_or(u32::MAX, |e| e.0),
                         environment_scale: params.environment.map_or(0.0, |e| e.1),
                         light_share: params.light_share,
-                        pad: 0.0,
+                        light_white: params.light_white.clamp(0.0, MOST_WHITE),
                     }],
                 );
                 commands.bind_pipeline(pipeline);

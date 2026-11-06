@@ -35,6 +35,27 @@ public float sky_light_share(float4* coefficients)
     return coefficients[SH_COEFFICIENTS + 1].w;
 }
 
+// The sky's light `c` gone `white` of the way to white, its own luminance (`SkyParams::light_white`).
+public float3 sky_light_whiter(float3 c, float white)
+{
+    return lerp(c, float3(dot(c, float3(0.2126, 0.7152, 0.0722))), white);
+}
+
+// The sky's own light `c` as a surface takes it: its share and its whiteness, which the coefficients hold
+// (the word after the clouds' at `sky.slang`).
+public float3 sky_light_on_surfaces(float4* coefficients, float3 c)
+{
+    return sky_light_whiter(c, coefficients[SH_COEFFICIENTS + 2].w) * sky_light_share(coefficients);
+}
+
+// The sky's own light from its light on surfaces `e`, for what lies in the air: the clouds, the distance
+// fog. Whitening keeps the luminance, so it can be undone.
+public float3 sky_light_as_it_is(float4* coefficients, float3 e)
+{
+    float white = coefficients[SH_COEFFICIENTS + 2].w;
+    return (e - white * dot(e, float3(0.2126, 0.7152, 0.0722))) / ((1.0 - white) * sky_light_share(coefficients));
+}
+
 // Irradiance at the normal `n` from coefficients already multiplied by their band's cosine
 // factor (rgb in xyz); never negative (ringing below the horizon of a bright sun side).
 public float3 sh_irradiance(float4* coefficients, float3 n)

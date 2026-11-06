@@ -50,7 +50,7 @@ public struct Sky
     public uint environment;         // sampled: an environment map as the sky (D-084), or ~0: the air's
     public float environment_scale;  // its luminance per unit, over the reference illuminance
     public float light_share;        // the sky's light on surfaces times this (`SkyParams::light_share`)
-    public float pad;
+    public float light_white;        // and goes this far towards white (`SkyParams::light_white`)
 };
 
 // The aerial-perspective volume: SLICES depth slices of SLICE × SLICE froxels, laid side by

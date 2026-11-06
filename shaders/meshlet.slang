@@ -7815,7 +7815,7 @@ float3 sky_along(float4* sky, float3 direction)
 // the sky itself (`sky_along`).
 float3 sky_light_along(float4* sky, float3 direction)
 {
-    return sky_along(sky, direction) * sky_light_share(sky);
+    return sky_light_on_surfaces(sky, sky_along(sky, direction));
 }
 
 // What the eye sees through the jelly of row `mat` at `world`, the point of instance `instance` a
@@ -9682,7 +9682,7 @@ void probe_trace_main(uint3 group : SV_GroupID, uint thread : SV_GroupThreadID)
         if (b.distance >= PROBE_MISS_DISTANCE)
         {
             float4 up_table = sky[SH_COEFFICIENTS];
-            lit = sky_view_luminance(uint(up_table.w + 0.5), up_table.xyz, sky[SH_COEFFICIENTS + 1].xyz, direction) * 3.14159265 * sky_light_share(sky);
+            lit = sky_light_on_surfaces(sky, sky_view_luminance(uint(up_table.w + 0.5), up_table.xyz, sky[SH_COEFFICIENTS + 1].xyz, direction) * 3.14159265);
         }
         else if (b.distance > 0.0)
         {
@@ -9782,7 +9782,7 @@ void probe_trace_main(uint3 group : SV_GroupID, uint thread : SV_GroupThreadID)
     else if (!fixed)
     {
         float4 up_table = sky[SH_COEFFICIENTS];
-        radiance = sky_view_luminance(uint(up_table.w + 0.5), up_table.xyz, sky[SH_COEFFICIENTS + 1].xyz, direction) * 3.14159265 * sky_light_share(sky);
+        radiance = sky_light_on_surfaces(sky, sky_view_luminance(uint(up_table.w + 0.5), up_table.xyz, sky[SH_COEFFICIENTS + 1].xyz, direction) * 3.14159265);
     }
     if (any(isnan(radiance)) || any(isinf(radiance)))
         radiance = float3(0.0); // one bad texel would spread through the blends for good

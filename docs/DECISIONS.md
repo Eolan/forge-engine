@@ -11759,7 +11759,7 @@ the distance fog.
     44, so the probes and the bounce are right about the light they are given.
   - **What takes it:** the sky's irradiance holds it from where it is projected (`irradiance_main`),
     with the factor stored beside it (`sky_light_share`), so surfaces, probes, impostors, panes,
-    water, particles and the fog in the air all take it; the diffuse rays that meet nothing multiply
+    water and the fog in the air all take it (particles no longer do, below); the diffuse rays that meet nothing multiply
     theirs (`sky_light_along`, the bounce's, the probes', the caches'). The sky as drawn, as mirrors
     show it (`sky_along`) and in the clouds and the distance fog stays as it is.
   - **The private district, at 2:** the open streets' shaded half reads +0.10, −0.01, +0.02, +0.24
@@ -11770,3 +11770,24 @@ the distance fog.
     isn't sky by 1 / the factor: a heuristic's small error at 2.
   - **Elsewhere:** 1 multiplies and divides exactly; the village's thirteen views score what they
     scored before.
+
+- **The colour of the sky's light on surfaces** (2026-11-06, `SkyParams::light_white`,
+  `Look::sky_white`, 0 where none): the same tables give the source's sky light a white colour
+  (1, 1, 1, times 1.30) where the air's own sky is blue.
+  - **What showed it:** with the sky's aerosols down to the source's table turbidity, the sky itself
+    matched and the shade turned blue. The private district's alleys read R/G about 0.6 and B/G 0.34
+    to 1.22 in shade, where the source shows 1.06 to 1.29 and 0.05 to 0.52.
+  - **What takes it:** the sky's irradiance and the diffuse rays that meet nothing go that far towards
+    their own luminance, which they keep (`sky_light_whiter`). The sky as drawn and as mirrors show it
+    stays blue. The clouds and the distance fog take the sky's own colour back
+    (`sky_light_as_it_is`), which is why it stops short of white ([`MOST_WHITE`], 0.95).
+  - **Particles without the share:** steam took the scene's fit to its walls as a lamp from above, and
+    read bright blue-white in shade. A puff now takes the sky's light without the share, its
+    whiteness kept.
+  - **The private district, at 0.9 with a share of 3:** the 14 frames' median rms 0.62 to 0.49 EV,
+    geometric mean rms 0.47 to 0.42, frame 44's colour R/G 1.03 and B/G 0.97 to 1.09 and 0.91 (the
+    source's 1.10 and 0.90). The alleys' shade reads R/G 0.96 to 1.04, B/G 0.11 to 0.63.
+  - **Open:** the source's shade may be warm for another reason as well, a bounce we under-light, since
+    a white sky is a fit to its tables' colour and not a measure of its light.
+  - **Elsewhere:** 0 and a share of 1 are exact: the sky's light, the clouds, the fog and the steam
+    read as before where a scene sets neither.
