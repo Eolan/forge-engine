@@ -1353,6 +1353,17 @@ public float3 probe_irradiance_hit(ProbeField* field, float3 p, float3 n, float3
 }
 
 // `probe_irradiance`, and the irradiance the probes find for a normal along the mirror
+// How far a point at `p` (`g` its face's normal, `v` towards where it is seen from) stands in a room:
+// 1 in one, 0 outside, between the two across a doorway. What it meets of the sky from a room comes
+// through a window (`Look::sky_light`, a fit to a scene's open streets, is not for that).
+public float room_weight(ProbeField* field, float3 p, float3 g, float3 v)
+{
+    if (field == nullptr || field[0].region_count == 0u)
+        return 0.0;
+    RegionHit at = region_open(field, p + g * 0.02, p + v * 0.3, p + v * 0.3);
+    return at.kind == REGION_SOLID ? 0.0 : 1.0 - room_sky(at);
+}
+
 // direction `r` (`toward_r`, over the sky's unoccluded `open_sky_r` there), from the same
 // probes: what dims the sky's reflection in a street (issue #68). `sky_limit`: the most of the sky
 // its room lets it see (`room_sky`).

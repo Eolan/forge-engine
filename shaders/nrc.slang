@@ -190,6 +190,7 @@ void nrc_update_main(uint3 id : SV_DispatchThreadID)
         d -= 2.0 * dot(d, s.g) * s.g;
     RayDesc ray;
     ray.Origin = to_scene(f, s.relative) + s.n * diffuse_start(f, vis, s);
+    rays_leave(p.sky, p.probes, to_scene(f, s.relative), s.g, normalize(-s.relative));
     ray.Direction = d;
     ray.TMin = 0.0;
     ray.TMax = PATH_RANGE;

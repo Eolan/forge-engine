@@ -589,6 +589,8 @@ static bool g_lamps_unshadowed = false;
 // RAY_PROBE and the mirror rays' RAY_MIRROR, so an instance left out of one is out of all that
 // pass's rays (a probe's hit's shadow rays too).
 static uint g_ray_mask = RAY_SHADOW;
+// Whether this pass's diffuse rays left a surface in a room (`rays_leave`, `sky_light_along`).
+static bool g_rays_from_room = false;
 
 // The world a shadow ray from a point `relative` to the camera meets (D-075 step 3): RAY_SHADOW's
 // near (a tree's leaf cards), RAY_SHADOW_FAR's from `Frame::far_shadows` metres on (its opaque
@@ -7252,6 +7254,7 @@ float3 near_field_reference(Frame* f, float4* sky, ProbeField* probes, float3 wo
     uint3 bits = asuint(world * 64.0);
     uint seed = (bits.x * 0x8DA6B343u) ^ (bits.y * 0xD8163841u) ^ (bits.z * 0xCB1AB31Fu) ^ (f[0].noise_frame * 0x9E3779B9u);
     float3 origin = world + geometric * 0.02;
+    rays_leave(sky, probes, world, geometric, geometric);
     float3 sum = float3(0.0);
     for (uint i = 0u; i < NEAR_FIELD_REFERENCE_RAYS; i++)
     {
@@ -7859,7 +7862,22 @@ float3 sky_along(float4* sky, float3 direction)
 // the sky itself (`sky_along`).
 float3 sky_light_along(float4* sky, float3 direction)
 {
-    return sky_light_on_surfaces(sky, sky_along(sky, direction));
+    return room_or_street_sky(sky, sky_along(sky, direction), g_rays_from_room);
+}
+
+// The sky a diffuse ray or a probe's meets, `seen` as it is. From a room it comes through a window:
+// whiter as the scene asks but without the scene's share (`Look::sky_light`), a fit to its open
+// streets' shade. At 3 a bar's few windows put three times their daylight into its bounce and its fog.
+float3 room_or_street_sky(float4* sky, float3 seen, bool room)
+{
+    return room ? sky_light_whiter(seen, sky[SH_COEFFICIENTS + 2].w) : sky_light_on_surfaces(sky, seen);
+}
+
+// Marks the diffuse rays a surface at `world` sends (`g_rays_from_room`). No lookup where the scene
+// gives no share: a room's sky and a street's are then the same.
+void rays_leave(float4* sky, ProbeField* probes, float3 world, float3 g, float3 view)
+{
+    g_rays_from_room = sky != nullptr && sky_light_share(sky) != 1.0 && room_weight(probes, world, g, view) >= 0.5;
 }
 
 // What the eye sees through the jelly of row `mat` at `world`, the point of instance `instance` a
@@ -9178,6 +9196,7 @@ void diffuse_trace_main(uint3 id : SV_DispatchThreadID)
     if (dot(d, s.g) < 0.0)
         d -= 2.0 * dot(d, s.g) * s.g;
     ray.Origin = to_scene(f, s.relative) + s.n * diffuse_start(f, vis, s);
+    rays_leave(p.sky, p.probes, to_scene(f, s.relative), s.g, normalize(-s.relative));
     ray.Direction = d;
     ray.TMin = 0.0;
     ray.TMax = PATH_RANGE;
@@ -9288,6 +9307,7 @@ void surface_cache_trace_main(uint3 id : SV_DispatchThreadID)
     float3 d = cosine_direction(entry.normal, u.x, u.y);
     RayDesc ray;
     ray.Origin = entry.position + entry.normal * DIFFUSE_START;
+    rays_leave(p.sky, p.probes, entry.position, entry.normal, entry.normal);
     ray.Direction = d;
     ray.TMin = 0.0;
     ray.TMax = PATH_RANGE;
@@ -9726,7 +9746,8 @@ void probe_trace_main(uint3 group : SV_GroupID, uint thread : SV_GroupThreadID)
         if (b.distance >= PROBE_MISS_DISTANCE)
         {
             float4 up_table = sky[SH_COEFFICIENTS];
-            lit = sky_light_on_surfaces(sky, sky_view_luminance(uint(up_table.w + 0.5), up_table.xyz, sky[SH_COEFFICIENTS + 1].xyz, direction) * 3.14159265);
+            uint settled = field[0].region_count > 0u ? field[0].probe_region[probe] : REGION_NONE;
+            lit = room_or_street_sky(sky, sky_view_luminance(uint(up_table.w + 0.5), up_table.xyz, sky[SH_COEFFICIENTS + 1].xyz, direction) * 3.14159265, settled != REGION_NONE && settled != REGION_OUTSIDE);
         }
         else if (b.distance > 0.0)
         {
@@ -9827,7 +9848,7 @@ void probe_trace_main(uint3 group : SV_GroupID, uint thread : SV_GroupThreadID)
     else if (!fixed)
     {
         float4 up_table = sky[SH_COEFFICIENTS];
-        radiance = sky_light_on_surfaces(sky, sky_view_luminance(uint(up_table.w + 0.5), up_table.xyz, sky[SH_COEFFICIENTS + 1].xyz, direction) * 3.14159265);
+        radiance = room_or_street_sky(sky, sky_view_luminance(uint(up_table.w + 0.5), up_table.xyz, sky[SH_COEFFICIENTS + 1].xyz, direction) * 3.14159265, region != REGION_NONE && region != REGION_OUTSIDE);
     }
     if (any(isnan(radiance)) || any(isinf(radiance)))
         radiance = float3(0.0); // one bad texel would spread through the blends for good

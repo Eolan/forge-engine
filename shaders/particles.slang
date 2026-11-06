@@ -442,8 +442,11 @@ void advance_main(uint3 id : SV_DispatchThreadID)
         }
         // Without the share a scene gives its surfaces (`SkyParams::light_share`): a fit to a scene's walls,
         // which lit its steam from above as a lamp. The probes' light can't be told apart, so what lamps
-        // and the sun put in them falls with it: a puff under a street lamp takes it at that share too.
-        q.light = 0.5 * (from_up + from_down) * f[0].sun_radiance.w / (PI * sky_light_share(sky[0].irradiance));
+        // and the sun put in them falls with it: a puff under a street lamp takes it at that share too. A
+        // room's probes don't hold it (`room_weight`), eased across a doorway as their light is.
+        float3 straight_up = float3(0.0, 1.0, 0.0);
+        float share = lerp(sky_light_share(sky[0].irradiance), 1.0, room_weight(f[0].probes, q.position, straight_up, straight_up));
+        q.light = 0.5 * (from_up + from_down) * f[0].sun_radiance.w / (PI * share);
         // The sun's share of the puff, eased over SUN_EASE seconds: its five rays' steps as it
         // crosses a shadow's edge blend.
         float radius = lerp(e.radius.x, e.radius.y, saturate((now - q.birth) / q.life));

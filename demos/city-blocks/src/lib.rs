@@ -1684,10 +1684,12 @@ impl Gallery {
                     .probe_spacing
                     .unwrap_or(look.probes.map_or(ProbeParams::default().spacing, |p| p.1)),
                 movers: look.probes_see_movers,
+                // Of the open sky's light as it is: the lookup's holds the scene's share.
                 far_room_sky: args
                     .probe_far_sky
                     .or(look.probe_far_room_sky)
-                    .unwrap_or(ProbeParams::default().far_room_sky),
+                    .unwrap_or(ProbeParams::default().far_room_sky)
+                    / sky_light_share,
                 far_room_daylight: args
                     .probe_far_daylight
                     .or(look.probe_far_room_daylight)

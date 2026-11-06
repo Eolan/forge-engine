@@ -215,6 +215,7 @@ void sharc_update_main(uint3 id : SV_DispatchThreadID)
         d -= 2.0 * dot(d, s.g) * s.g;
     RayDesc ray;
     ray.Origin = root.positionWorld + s.n * diffuse_start(f, vis, s);
+    rays_leave(p.sky, p.probes, root.positionWorld, s.g, normalize(-s.relative));
     ray.Direction = d;
     ray.TMin = 0.0;
     ray.TMax = PATH_RANGE;

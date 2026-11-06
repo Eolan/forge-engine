@@ -592,18 +592,22 @@ void far_rooms_main(uint3 id : SV_DispatchThreadID)
         return;
     FarRoom room = far_push.rooms[id.x];
     float3 luma = float3(0.2126, 0.7152, 0.0722);
-    float roof = max(dot(sh_irradiance(far_push.sky, float3(0.0, 1.0, 0.0)), luma), 1e-6);
+    // Without the scene's share of the sky, as a room's own probes see it through its windows; over
+    // it at the end, for the lookup's open sky, which holds it. A room's grid then takes over at the
+    // light its far share gave.
+    float scene_share = sky_light_share(far_push.sky);
+    float roof = max(dot(sh_irradiance(far_push.sky, float3(0.0, 1.0, 0.0)), luma) / scene_share, 1e-6);
     float up = far_push.sun.y > 0.0 ? 1.0 : 0.0;
     float light = 0.0;
     for (uint k = 0u; k < room.count; k++)
     {
         FarWindow w = far_push.windows[room.first + k];
         float3 n = float3(w.normal.x, 0.0, w.normal.y);
-        float sky = dot(sh_irradiance(far_push.sky, n), luma);
+        float sky = dot(sh_irradiance(far_push.sky, n), luma) / scene_share;
         float sun = up * far_push.sun_luma * max(dot(n, far_push.sun), 0.0);
         light += w.area * (sky + sun);
     }
-    float share = far_push.daylight * light / (max(room.surface, 1e-3) * roof);
+    float share = far_push.daylight * light / (max(room.surface, 1e-3) * roof) / scene_share;
     // Its lamps' light round its walls (#363): their weighed lumens over its surfaces, lux;
     // halves, the table's last two (the lookup scales them to the resolve's units).
     float3 lamps = far_push.lamps * room.lamps / max(room.surface, 1e-3);
