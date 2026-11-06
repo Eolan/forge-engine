@@ -5058,6 +5058,8 @@ void apply_decals(Frame* f, Surface s, inout float3 albedo, inout float3 n, inou
                 // over the map's z, so a texel's tilt is the map's.
                 float2 slope = sample_image_grad(k.normal, k.sampler, uv, gx, gy).xy * 2.0 - 1.0;
                 slope /= max(sqrt(saturate(1.0 - dot(slope, slope))), DECAL_LEAST_Z);
+                // A mirrored picture's slopes (`DecalKind::uv_rect`) mirror with it.
+                slope *= sign(k.uv_rect.zw);
                 float3 T = quat_turn(d.rotation, float3(1.0, 0.0, 0.0), false);
                 float3 B = quat_turn(d.rotation, float3(0.0, 0.0, 1.0), false);
                 T -= s.n * dot(s.n, T);

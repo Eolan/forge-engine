@@ -56,6 +56,7 @@ pub struct DecalKind {
     /// texture's coordinates (an atlas's cell); `[0, 0, 1, 1]` for all of it. A strip repeats its
     /// cell along `u`, from its phase, within the cell. A stamp's edges and coarser mips read a
     /// little of the cells beside it where the atlas leaves no gutter.
+    /// A negative width or height shows it mirrored, from the far edge of the part, slopes and all.
     pub uv_rect: [f32; 4],
     /// What its colour is multiplied by (rgb), and its strength (a).
     pub tint: [f32; 4],
