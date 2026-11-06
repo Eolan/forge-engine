@@ -4683,9 +4683,10 @@ float3 sun_light(Frame* f, float3 albedo, float3 n, float3 geometric, float spec
             // whole inlined copy for the driver; its irradiance is the plain lookup's.
             float3 open_r = reflects ? sh_irradiance(sky, r) : irradiance;
             float3 toward_r;
-            irradiance = probe_irradiance_mirror(probes, world, n, geometric, view, irradiance, reflects ? r : n, open_r, toward_r);
+            float sky_limit;
+            irradiance = probe_irradiance_mirror(probes, world, n, geometric, view, irradiance, reflects ? r : n, open_r, toward_r, sky_limit);
             if (reflects)
-                sky_share = saturate(toward_r / max(open_r, 1e-4));
+                sky_share = min(saturate(toward_r / max(open_r, 1e-4)), float3(sky_limit));
         }
         // D-088's reference (`shade_pixel` traced it once): its rays see the occlusion GTAO
         // stood for. The bounce's rays do too, but REBLUR blurs its contacts, a stair's steps into

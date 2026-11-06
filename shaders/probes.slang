@@ -1162,6 +1162,8 @@ float3 probe_lookup<let MIRROR : int>(ProbeField* field, float3 p, float3 n, flo
     // street.
     RegionHit mask = region_open(field, p + g * 0.02, p + v * 0.3, p + v * 0.3);
     bool masked = field[0].region_count > 0u && mask.kind != REGION_SOLID;
+    if (MIRROR != 0)
+        g_room_sky = masked ? room_sky(mask) : 1.0;
     RoomShare rooms = room_share<MIRROR>(field, p, n, g, v, d, mask, masked);
     if (rooms.w >= 1.0)
     {
@@ -1196,6 +1198,9 @@ float room_depth(ProbeField* field, float3 p)
     return any ? k : 1.0;
 }
 
+// `probe_irradiance_mirror`'s `sky_limit`, as its lookup found it.
+static float g_room_sky = 1.0;
+
 // A far room's share of the open sky (#356): its windows' daylight this frame where the far
 // rooms' pass gave its region one (`far_rooms_main`, probe_update.slang), else `far_room_sky`
 // (a room without windows, a scene without the pass); and its lamps' light round it (#363):
@@ -1223,6 +1228,21 @@ float far_room_share(ProbeField* field, uint region, out float3 lamps)
         at = (at + 1u) & mask;
     }
     return field[0].far_room_sky;
+}
+
+// How much of the sky's picture a rough surface of region `mask` may reflect: all of it outside,
+// none in a room, between the two across a doorway. The probes' light towards a mirror direction
+// says how much light comes from there, whatever gives it, and a room's floor took a lamp's bounce
+// or a door's daylight for its share of the sky: a red bar's floor read blue-white at a grazing
+// view, in the sky's own colour. A share of a room's windows (`far_room_share`, for its diffuse
+// light) is no use here: the sky is hundreds of times as bright as the room, and 6 % of it still
+// lit that floor. A smooth surface's mirror ray sees a real window for itself.
+float room_sky(RegionHit mask)
+{
+    float near = mask.region == REGION_OUTSIDE ? 1.0 : 0.0;
+    if (mask.kind != REGION_DOORWAY)
+        return near;
+    return lerp(near, mask.other == REGION_OUTSIDE ? 1.0 : 0.0, mask.ramp);
 }
 
 // `probe_lookup`'s light for a region `mask` (`masked` when regions apply), with the room-sized
@@ -1334,10 +1354,13 @@ public float3 probe_irradiance_hit(ProbeField* field, float3 p, float3 n, float3
 
 // `probe_irradiance`, and the irradiance the probes find for a normal along the mirror
 // direction `r` (`toward_r`, over the sky's unoccluded `open_sky_r` there), from the same
-// probes: what dims the sky's reflection in a street (issue #68).
-public float3 probe_irradiance_mirror(ProbeField* field, float3 p, float3 n, float3 g, float3 v, float3 open_sky, float3 r, float3 open_sky_r, out float3 toward_r)
+// probes: what dims the sky's reflection in a street (issue #68). `sky_limit`: the most of the sky
+// its room lets it see (`room_sky`).
+public float3 probe_irradiance_mirror(ProbeField* field, float3 p, float3 n, float3 g, float3 v, float3 open_sky, float3 r, float3 open_sky_r, out float3 toward_r, out float sky_limit)
 {
-    return probe_lookup<1>(field, p, n, g, v, open_sky, r, open_sky_r, toward_r);
+    float3 e = probe_lookup<1>(field, p, n, g, v, open_sky, r, open_sky_r, toward_r);
+    sky_limit = g_room_sky;
+    return e;
 }
 
 // A region's colour in `probe_region_tint`: black outside, else one of its own.
