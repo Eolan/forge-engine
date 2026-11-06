@@ -120,7 +120,7 @@ public struct Material
     public float cavity;            // standard: how much darker the surface gets facing its object's centre
     public float3 emissive;
     public float specular_power;    // Blinn-Phong exponent (from the roughness)
-    public float3 scatter;          // ice: light scattered back where the surface turns from the sun
+    public float3 scatter;          // ice: light scattered back where the surface turns from the sun; standard: the sun through a leaf (`takes_sun_through`)
     public float specular;          // weight of the highlight
     public uint albedo_texture;     // sampled-image indices, TEXTURE_NONE for none
     public uint normal_texture;
@@ -5236,11 +5236,19 @@ static const float UNDERSIDE_LIFT = 1.5;
 static const float LEAF_DISTORTION = 0.3;
 static const float LEAF_POWER = 4.0;
 
-// The normal a surface's sun shadow takes: its own, or a leaf card's turned towards the sun when
-// it faces away (the shadow then the sun's visibility from the leaf, for the light through it).
+// Whether a standard row takes the sun through it (`leaf_transmission`): a leaf card's, or a thin
+// surface's that gives a share (`Material::scatter`, an authored frond's: its normal turns to the
+// viewer as any two-sided surface's, where a card's stays unturned).
+bool takes_sun_through(Material mat)
+{
+    return (mat.flags & MATERIAL_FLAG_FOLIAGE) != 0 || any(mat.scatter > 0.0);
+}
+
+// The normal a surface's sun shadow takes: its own, or a leaf's turned towards the sun when it
+// faces away (the shadow then the sun's visibility from the leaf, for the light through it).
 float3 leaf_shadow_normal(Frame* f, Material mat, float3 n)
 {
-    if ((mat.flags & MATERIAL_FLAG_FOLIAGE) != 0 && dot(n, f[0].sun_dir) < 0.0)
+    if (takes_sun_through(mat) && dot(n, f[0].sun_dir) < 0.0)
         return -n;
     return n;
 }
@@ -5814,7 +5822,7 @@ float3 standard_light(Frame* f, Material mat, Surface s, StandardInputs si)
     float3 n = si.n;
     float ndl;
     float3 lit = sun_light(f, li.albedo, li.n, s.n, li.power, li.specular, s.shadow, s.sky, li.ao, s.view, li.reflectance, s.world, s.probes, s.traced, ndl) + li.emissive;
-    if (si.uv && (mat.flags & MATERIAL_FLAG_FOLIAGE) != 0)
+    if (si.uv && takes_sun_through(mat))
         lit += leaf_transmission(f, li.albedo, mat.scatter, s);
     if (si.interior)
     {

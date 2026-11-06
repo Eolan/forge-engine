@@ -256,8 +256,9 @@ pub struct RenderLayer {
     /// (#254). Without it, `emissive` is in the shading's units, relative to that reference.
     pub emissive_absolute: bool,
     /// Ice: light scattered back where the surface turns away from the sun. Leaf cards
-    /// (`foliage`): the share of the light behind a leaf that comes through it, per channel of
-    /// the leaf's colour (#346); 0 none.
+    /// (`foliage`), or any other standard row (an authored frond, its normal turned to the viewer
+    /// as a two-sided surface's where a card's stays unturned): the share of the sun behind a leaf
+    /// that comes through it, per channel of the leaf's colour (#346); 0 none.
     pub scatter: [f32; 3],
     /// Standard: an albedo texture multiplied into the base colour, projected along the
     /// object's three axes (no texture coordinates are needed).
