@@ -8910,6 +8910,16 @@ with the private data). Two engine changes came of it:
   probes' rays and the shading with it). Its lamps then light the bar in pools as the source's do,
   and the balance against the sun was fitted again (its lamps about 5 EV over a physical balance
   with the sun, near the exposure's own offset). No other scene gives one.
+- **Whether the reference's 32 rays can be trusted (2026-11-06, #397):** yes. One still in the
+  private district read flat at 32 rays and right at every other count. The cause was one wrong
+  binary in NVIDIA's on-disk pipeline cache, under that viewer's exe name, not the ray count: the
+  same SPIR-V compiled cold reads right.
+  - **Void:** only that viewer's 32-ray `r.gi.reference` stills of 2026-11-06, modes 1 to 6.
+  - **The references stand:** the baseline and the pbrt-v4 and Cornell agreements were taken under
+    older drivers and caches, and the 140 stored path logs keep their views' costs (the fault
+    costs 0.2 ×). They were not re-run. At HEAD, the Bistro's two views and the Cornell box at 32
+    rays match 33 rays in modes 2 and 4, to 0.03 of a luma code at most.
+  - **The check:** `docs/PROCESS.md`'s debugging aids.
 
 ## D-084 — An environment map as the sky, its sun taken out of it ✅ (the owner's go, 2026-10-29)
 

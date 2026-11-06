@@ -697,6 +697,16 @@ before 16c06454 and finds none since, in about a minute. The night check runs it
   holds. NVIDIA's driver may also spill registers to shared memory, which shows as shared
   memory the shader never declared; it did not for a shader using groupshared memory or wave
   operations.
+- **A result that moves with a constant but not with a comment: suspect the driver's own cache**
+  (#397). NVIDIA's driver keeps compiled pipelines on disk (`%LOCALAPPDATA%\NVIDIA\GLCache`), one
+  file pair per exe name, and one of them can hold a wrong binary. A comment-only edit gives
+  byte-identical SPIR-V, so it reaches the same entry.
+  - **The sign:** a start whose pipelines take 50 ms instead of about 18 s is a cache hit.
+  - **The cold checks:** run a copy of the exe under a new name, or change a constant in its 6th
+    decimal. A demo's shaders stay its tree's, so a copy needs no other setup.
+  - **The comparison:** `FORGE_SHADER_STATS` for both runs; the flag does not change which entry
+    is used. A wrong binary stands out by its registers, its binary's size and its shared memory.
+  - **Not a check:** `__GL_SHADER_DISK_CACHE=0` does not turn this cache off on Windows.
 
 ## Sessions handed over: a fresh local session or a cloud session
 
