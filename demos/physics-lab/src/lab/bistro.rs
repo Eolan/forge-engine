@@ -1181,6 +1181,7 @@ fn glow_lamp(g: &Glow) -> Option<Lamp> {
         shadows: true,
         fog: 1.0,
         range: None,
+        channels: 0,
     })
 }
 

@@ -44,6 +44,7 @@ struct RestirFrame
     float2* neighbor_offsets;        // the spatial reuse's, in the unit disc
     uint4* surfaces;                 // per pixel of the two frames: the scene's frame (xyz, a float's bits), the normal (w, octahedral, 16 bits each)
     uint* places;                    // per pixel of the two frames: region | other << 16 (`RESTIR_NO_REGION`), or ~0 where nothing was drawn
+    uint* channels;                  // per pixel of the two frames: its surface's lamps' channels (`lamp_takes`)
     uint* to_previous;               // per lamp of this frame, its index the frame before, or ~0
     uint* to_current;                // per lamp of the frame before, its index in this one, or ~0
     uint surface_width;              // pixels a row of `surfaces` holds
@@ -129,6 +130,7 @@ struct RAB_Surface
     float bias;     // where its shadow rays start off it
     uint region;    // its place (`lamp_place`)
     uint other;
+    uint channels;  // its instance's (`lamp_takes`)
     uint valid;
 };
 
@@ -146,6 +148,7 @@ RAB_Surface RAB_EmptySurface()
     s.bias = 0.02;
     s.region = REGION_NONE;
     s.other = REGION_NONE;
+    s.channels = 0u;
     s.valid = 0u;
     return s;
 }
@@ -200,6 +203,7 @@ RAB_Surface RAB_GetGBufferSurface(int2 pixel, bool previous)
     uint other = place >> 16;
     s.region = region == RESTIR_NO_REGION ? REGION_NONE : region;
     s.other = other == RESTIR_NO_REGION ? REGION_NONE : other;
+    s.channels = r->channels[i];
     Frame* f = restir_push.frame;
     float4 clip = restir_clip(f, r, s.world);
     s.depth = previous ? mul(r->previous_from_current, clip).w : clip.w;
@@ -284,11 +288,11 @@ int RAB_TranslateLightIndex(uint index, bool current_to_previous)
     return i == 0xFFFFFFFFu ? -1 : int(i);
 }
 
-// Whether `lamp` lights a surface of place (`region`, `other`) at height `y`: the place's light
-// lists, and a house lamp's storey band (`lamp_weight_in`).
-bool restir_lights(Lamp lamp, float y, uint region, uint other)
+// Whether `lamp` lights a surface of place (`region`, `other`) and channels `channels` at height `y`:
+// the place's light lists, the channels, and a house lamp's storey band (`lamp_weight_in`).
+bool restir_lights(Lamp lamp, float y, uint region, uint other, uint channels)
 {
-    if (!lamp_lights(lamp, region, other))
+    if (!lamp_lights(lamp, region, other) || !lamp_takes(lamp, channels))
         return false;
     if (lamp_storeyed(lamp) && region != REGION_NONE)
     {
@@ -323,7 +327,7 @@ RAB_LightSample restir_flat_sample(Lamp lamp, RAB_Surface surface, float2 uv)
         return s;
     float area = 4.0 * lamp.beam_edge.z * lamp.beam_edge.w;
     s.solid_angle_pdf = to2 / (area * facing);
-    if (!restir_lights(lamp, surface.world.y, surface.region, surface.other))
+    if (!restir_lights(lamp, surface.world.y, surface.region, surface.other, surface.channels))
         return s;
     // Let go between 80 % and all of its reach from its middle, as the light lists let it go.
     float window = saturate(1.0 - pow(sqrt(dist2) / reach, 4.0));
@@ -355,7 +359,7 @@ RAB_LightSample restir_tube_sample(Lamp lamp, RAB_Surface surface, float2 uv)
     float area = 4.0 * radius * max(lamp.beam_edge.x, 1e-4);
     s.solid_angle_pdf = to2 / (area * facing);
     s.short_of = radius;
-    if (!restir_lights(lamp, surface.world.y, surface.region, surface.other))
+    if (!restir_lights(lamp, surface.world.y, surface.region, surface.other, surface.channels))
         return s;
     float window = lamp_tube_window(lamp, d);
     s.radiance = lamp.colour_reach.rgb / area * (window * window * lamp_wedge_at(lamp, surface.world));
@@ -401,7 +405,7 @@ RAB_LightSample RAB_SamplePolymorphicLight(RAB_LightInfo lamp, RAB_Surface surfa
     // glass) and met it, and the Bistro's night stood 8 % under the lists without the reuse.
     s.short_of = into - (dist - radius);
     s.solid_angle_pdf = 1.0 / (6.28318530718 * cap);
-    if (!restir_lights(lamp, surface.world.y, surface.region, surface.other))
+    if (!restir_lights(lamp, surface.world.y, surface.region, surface.other, surface.channels))
         return s;
     // A bulb of intensity I (cd) and radius r has the luminance I / (π r²); let go between 80 %
     // and all of its reach (`lamp_add`).
@@ -590,13 +594,14 @@ void lamp_restir_main(uint3 id : SV_DispatchThreadID)
     }
     PixelSurface ps = pixel_surface(f, vis, pixel, p.width, p.height);
     float3 world = to_scene(f, ps.relative);
-    LampPlace place = lamp_place(f, p.probes, world, ps.n, normalize(-ps.relative));
+    LampPlace place = lamp_place(f, p.probes, world, ps.n, normalize(-ps.relative), ps.inst.channels);
     RAB_Surface surface;
     surface.world = world;
     surface.normal = ps.n;
     surface.bias = is_grass(vis) ? GRASS_SHADOW_BIAS : shadow_bias(f, ps.inst, ps.m);
     surface.region = place.region;
     surface.other = place.other;
+    surface.channels = place.channels;
     surface.valid = 1u;
     float4 clip = restir_clip(f, r, world);
     surface.depth = clip.w;
@@ -606,6 +611,7 @@ void lamp_restir_main(uint3 id : SV_DispatchThreadID)
     uint region = place.region == REGION_NONE ? RESTIR_NO_REGION : min(place.region, RESTIR_NO_REGION - 1u);
     uint other = place.other == REGION_NONE ? RESTIR_NO_REGION : min(place.other, RESTIR_NO_REGION - 1u);
     r->places[at] = region | (other << 16);
+    r->channels[at] = place.channels;
     // The pixel's material as the resolve lights it (#372; `pixel_shading`, `standard_inputs`, the
     // lamps' inputs in `shade_pixel`): the diffuse light by its mapped normal, the highlight by its
     // lobe and reflectance, as the lists' lamps take them (D-086). Only where ReSTIR's light is

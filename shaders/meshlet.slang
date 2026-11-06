@@ -220,7 +220,7 @@ public struct Instance
     public uint flags;      // INSTANCE_STILL (#197), INSTANCE_VACANT (#220), INSTANCE_NO_* (#301)
     public uint texture;    // its own texture's sampled index plus one, 0 for none: a planet tile's normal map (#220)
     public float3 stretch;  // each axis's scale over `scale`, at most 1: (1, 1, 1) for a uniform scale
-    public uint pad;
+    public uint channels;   // the lamps' channels its surfaces take (`lamp_takes`, D-102), 0: every lamp
 };
 
 // Side of a cell, metres (forge_render::cells::CELL_SIZE): a power of two, so the product with
@@ -702,9 +702,9 @@ bool lamp_counted(Frame* f, LampRuns r, uint run, uint i)
 // storey: its ground floor took the bedrooms' lamps and the hall's lights upstairs, their rays
 // all blocked by the floors, and they took the three places from the lamp at hand, which fell to
 // the picked rest in streaks. A street lamp (the outside's region first) lights the whole street.
-float lamp_weight_in(Lamp lamp, float3 world, float3 n, uint region, uint other, float near = 0.0)
+float lamp_weight_in(Lamp lamp, float3 world, float3 n, uint region, uint other, uint channels, float near = 0.0)
 {
-    if (!lamp_in_storey(lamp, world, region))
+    if (!lamp_takes(lamp, channels) || !lamp_in_storey(lamp, world, region))
         return 0.0;
     return lamp_weight(lamp, world, n, near);
 }
@@ -948,12 +948,12 @@ static const float PROBE_LAMP_NEAR = 0.25;
 // its direct light and its shadows are the resolve's.
 float hit_lamp_weight(Lamp lamp, RayHit hit, uint region, bool probe, bool exact)
 {
-    if (probe && lamp_outside(lamp))
+    if ((probe && lamp_outside(lamp)) || !lamp_takes(lamp, hit.channels))
         return 0.0;
     float near = probe ? PROBE_LAMP_NEAR : 0.0;
     if (lamp_flat(lamp) && !exact)
         return lamp_in_storey(lamp, hit.position, region) ? lamp_flat_hit_weight(lamp, hit.position, hit.n, near) : 0.0;
-    return lamp_weight_in(lamp, hit.position, hit.n, region, region, near);
+    return lamp_weight_in(lamp, hit.position, hit.n, region, region, hit.channels, near);
 }
 
 // The least cosine `lamp_flat_hit_weight` takes, from the piece's axis and from the hit's normal.
@@ -1002,7 +1002,7 @@ float hit_lamp_exact_factor(Lamp lamp, RayHit hit, uint region, bool probe, bool
     float cheap = hit_lamp_weight(lamp, hit, region, probe, false);
     if (cheap <= 0.0)
         return 0.0;
-    return lamp_weight_in(lamp, hit.position, hit.n, region, region, probe ? PROBE_LAMP_NEAR : 0.0) / cheap;
+    return lamp_weight_in(lamp, hit.position, hit.n, region, region, hit.channels, probe ? PROBE_LAMP_NEAR : 0.0) / cheap;
 }
 
 // Mirrors `GpuLamp` in crates/forge-render/src/lamps.rs (D-065): a small sphere light, or a flat
@@ -1021,7 +1021,7 @@ public struct Lamp
                                    // tube's (`lamp_tube`): x its half length, z -2; a wedge's
                                    // (`lamp_wedge`): x its half length, y the cut-off's cosine, z
                                    // -3, w its turn
-    public uint4 flags;            // x: LAMP_SHADOWLESS when it casts no shadow; y: the share of its light the fog does not scatter (float bits, D-099); zw 0
+    public uint4 flags;            // x: LAMP_SHADOWLESS when it casts no shadow; y: the share of its light the fog does not scatter (float bits, D-099); z: its channels (`lamp_takes`, D-102); w 0
 };
 
 // `Lamp::flags.x` (lamps.rs, `LAMP_SHADOWLESS`): a lamp whose light casts no shadow (#386), an
@@ -1043,6 +1043,13 @@ bool lamp_lights(Lamp lamp, uint region, uint other)
         return true;
     return any(lamp.regions_a == region) || any(lamp.regions_b == region)
         || any(lamp.regions_a == other) || any(lamp.regions_b == other);
+}
+
+// Whether `lamp` lights a surface of channels `channels` (D-102, `Lamp::channels`,
+// `set_instance_channels`): where the two masks meet; a zero on either side, every one.
+bool lamp_takes(Lamp lamp, uint channels)
+{
+    return lamp.flags.z == 0u || channels == 0u || (lamp.flags.z & channels) != 0u;
 }
 
 // Mirrors `SkinVertex` in crates/forge-geom/src/skin.rs (32 bytes): a skinned cluster vertex
@@ -4034,12 +4041,14 @@ struct LampPlace
 {
     uint region;
     uint other;
+    uint channels; // the surface's own (`lamp_takes`)
     LampRuns runs;
 };
 
-LampPlace lamp_place(Frame* f, ProbeField* probes, float3 world, float3 n, float3 view)
+LampPlace lamp_place(Frame* f, ProbeField* probes, float3 world, float3 n, float3 view, uint channels)
 {
     LampPlace place;
+    place.channels = channels;
     place.region = REGION_NONE;
     place.other = REGION_NONE;
     if (probes != nullptr && probes[0].region_count > 0u)
@@ -4100,7 +4109,7 @@ LampPicks lamp_picks(Frame* f, LampPlace place, float3 world, float3 n, uint2 pi
             uint i = lamp_at(f, place.runs, e);
             if (!lamp_counted(f, place.runs, r, i) || lamp_by_restir(f, i, skip_outside))
                 continue;
-            float w = lamp_weight_in(f[0].lamps[i], world, n, place.region, place.other);
+            float w = lamp_weight_in(f[0].lamps[i], world, n, place.region, place.other, place.channels);
             if (w <= 0.0)
                 continue;
             // Into the three, the weakest of them out to the rest.
@@ -4135,7 +4144,7 @@ LampPicks lamp_picks(Frame* f, LampPlace place, float3 world, float3 n, uint2 pi
             uint i = lamp_at(f, place.runs, e);
             if (i == picks.top[0] || i == picks.top[1] || i == picks.top[2] || !lamp_counted(f, place.runs, r, i) || lamp_by_restir(f, i, skip_outside))
                 continue;
-            float w = lamp_weight_in(f[0].lamps[i], world, n, place.region, place.other);
+            float w = lamp_weight_in(f[0].lamps[i], world, n, place.region, place.other, place.channels);
             if (w <= 0.0)
                 continue;
             picks.chosen = i;
@@ -4171,7 +4180,7 @@ LampPicks lamp_picks(Frame* f, LampPlace place, float3 world, float3 n, uint2 pi
 //   penumbra as it did the sun's single ray (#54).
 // `n` the surface's interpolated normal, which chooses its lamps, its region and its rays, as
 // `lamp_rays_main` and ReSTIR do; `shading_n` its mapped one, which their light takes (D-086).
-void lamps_at<let SHADOWS : int>(Frame* f, ProbeField* probes, float3 world, float3 n, float3 shading_n, float3 view, float specular_power, float specular_weight, float3 f0, float bias, uint2 pixel, uint code)
+void lamps_at<let SHADOWS : int>(Frame* f, ProbeField* probes, float3 world, uint channels, float3 n, float3 shading_n, float3 view, float specular_power, float specular_weight, float3 f0, float bias, uint2 pixel, uint code)
 {
     g_lamp_diffuse = float3(0.0);
     g_lamp_specular = float3(0.0);
@@ -4179,7 +4188,7 @@ void lamps_at<let SHADOWS : int>(Frame* f, ProbeField* probes, float3 world, flo
     if (count == 0u || f[0].lamps == nullptr)
     {
         if (f[0].far_lamps != nullptr)
-            far_lamps_at(f, lamp_place(f, probes, world, n, view), world, n, shading_n, view, specular_power, specular_weight, f0);
+            far_lamps_at(f, lamp_place(f, probes, world, n, view, channels), world, n, shading_n, view, specular_power, specular_weight, f0);
         return;
     }
     uint share = code & 0xFFFFu;
@@ -4191,7 +4200,7 @@ void lamps_at<let SHADOWS : int>(Frame* f, ProbeField* probes, float3 world, flo
     if (!every)
     {
         bool skip_outside = restir != 0xFFFFu;
-        LampPlace place = lamp_place(f, probes, world, n, view);
+        LampPlace place = lamp_place(f, probes, world, n, view, channels);
         if (share != 0xFFFFu)
         {
             for (uint r = 0u; r < 3u; r++)
@@ -4201,7 +4210,7 @@ void lamps_at<let SHADOWS : int>(Frame* f, ProbeField* probes, float3 world, flo
                     uint i = lamp_at(f, place.runs, e);
                     if (lamp_by_restir(f, i, skip_outside))
                         continue;
-                    if (lamp_counted(f, place.runs, r, i) && lamp_weight_in(f[0].lamps[i], world, n, place.region, place.other) > 0.0)
+                    if (lamp_counted(f, place.runs, r, i) && lamp_weight_in(f[0].lamps[i], world, n, place.region, place.other, place.channels) > 0.0)
                         lamp_add<0>(f, f[0].lamps[i], i, 1.0, world, n, shading_n, view, specular_power, specular_weight, f0, bias, float2(0.0));
                 }
             }
@@ -4411,7 +4420,7 @@ void far_lamps_at(Frame* f, LampPlace place, float3 world, float3 n, float3 shad
         if (share <= 0.0)
             continue;
         Lamp lamp = g[0].lamps[k];
-        if (lamp_weight(lamp, world, n) > 0.0)
+        if (lamp_takes(lamp, place.channels) && lamp_weight(lamp, world, n) > 0.0)
             lamp_add<0>(f, lamp, k, share, world, n, shading_n, view, specular_power, specular_weight, f0, 0.0, float2(0.0));
     }
 }
@@ -6901,6 +6910,7 @@ struct RayHit
     bool back;
     float shadow_start; // how far its shadow rays start off it, metres (`hit_shadow_start`)
     float metal;        // its row's metalness, its map's mean in it: a mirror ray's metal reflects (`hit_metal_light`)
+    uint channels;      // its instance's lamps' channels (`lamp_takes`)
     float3 lit_n;       // its normal map's mean normal's direction (`n` without one): the sun's cosine at it (#373)
     float bumps;        // that mean normal's length, the share of the light its bumps keep: in `albedo` already
     float roughness;    // its row's perceptual roughness
@@ -7004,6 +7014,7 @@ RayHit ray_hit_seen(Frame* f, uint instance, uint primitive, float2 b, float3 or
     if (hit.back)
         hit.n = -hit.n; // the side the ray came from
     hit.position = origin + direction * t;
+    hit.channels = inst.channels;
     hit.shadow_start = hit_shadow_start(mesh, inst);
     uint row = inst.material + rs[0].sections[tri];
     Material mat = f[0].materials[row];
@@ -8411,7 +8422,7 @@ uint shade_pixel<let SHADOWS : int>(uint class_index, uint2 pixel, uint vis)
     // The lamps (D-065): every one whose reach the surface is in and that lights its room, times
     // the filtered share of their light that reaches it (`lamp_filter_main`), or with a shadow ray
     // each; the classes take them where they take the sun (`sun_light`).
-    lamps_at<SHADOWS>(f, s.probes, surface_scene, s.n, si.li.n, s.view, si.li.power, si.li.specular, si.li.reflectance, lamp_start, pixel, resolve_push.lamp_share);
+    lamps_at<SHADOWS>(f, s.probes, surface_scene, is_grass(vis) ? 0u : f[0].instances[instance_index].channels, s.n, si.li.n, s.view, si.li.power, si.li.specular, si.li.reflectance, lamp_start, pixel, resolve_push.lamp_share);
     s.transmitted = float3(0.0);
     s.cloud = 1.0;
     if (SHADOWS != 0 && class_index == MATERIAL_CLASS_ICE && f[0].tlas != 0 && (f[0].flags & FLAG_TRANSLUCENCY) != 0)
@@ -9456,7 +9467,7 @@ void lamp_rays_main(uint3 id : SV_DispatchThreadID)
     float3 world = to_scene(f, s.relative);
     // The trees' cards near, their proxies far (D-075 step 3).
     g_ray_mask = shadow_world(f, s.relative, pixel);
-    LampPlace place = lamp_place(f, p.probes, world, s.n, normalize(-s.relative));
+    LampPlace place = lamp_place(f, p.probes, world, s.n, normalize(-s.relative), s.inst.channels);
     surface[pixel] = float4(s.relative, place.region == REGION_NONE ? 0.0 : float(1u + place.region % 2047u));
     normal[pixel] = oct_encode(s.n);
     LampPicks picks = lamp_picks(f, place, world, s.n, pixel, p.skip_outside != 0u);
@@ -9719,6 +9730,7 @@ void probe_trace_main(uint3 group : SV_GroupID, uint thread : SV_GroupThreadID)
         else if (b.distance > 0.0)
         {
             RayHit hit;
+            hit.channels = 0u; // a baked hit's instance isn't kept: every lamp
             hit.position = b.position;
             hit.n = unpack_unit(b.normal);
             hit.albedo = b.albedo;
@@ -10184,7 +10196,7 @@ void place_turned(Placement* p, uint slot, uint mesh, float3 position, float4 q,
     inst.flags = 0u;
     inst.texture = 0u;
     inst.stretch = float3(1.0, 1.0, 1.0);
-    inst.pad = 0u;
+    inst.channels = 0u;
     p[0].instances[p[0].first + slot] = inst;
 }
 

@@ -192,6 +192,7 @@ struct GpuRestirFrame {
     neighbor_offsets: u64,
     surfaces: u64,
     places: u64,
+    channels: u64,
     to_previous: u64,
     to_current: u64,
     surface_width: u32,
@@ -204,7 +205,7 @@ struct GpuRestirFrame {
     column_candidates: u32,
 }
 
-const _: () = assert!(std::mem::size_of::<GpuRestirFrame>() == 288);
+const _: () = assert!(std::mem::size_of::<GpuRestirFrame>() == 296);
 const _: () = assert!(std::mem::size_of::<GpuRestirFrame>() as u64 <= TO_PREVIOUS);
 
 /// Mirrors `RestirPush` in `restir.slang`.
@@ -405,7 +406,7 @@ impl LampRestir {
             2 * u64::from(array_pitch) * RESERVOIR_BYTES,
             "lamp restir reservoirs",
         )?;
-        let surfaces = storage(2 * pixels * (16 + 4), "lamp restir surfaces")?;
+        let surfaces = storage(2 * pixels * (16 + 4 + 4), "lamp restir surfaces")?;
         let offsets = device.create_buffer_with_data(
             &neighbor_offsets(),
             vk::BufferUsageFlags::STORAGE_BUFFER,
@@ -520,6 +521,8 @@ impl LampRestir {
             surfaces: self.surfaces.address(),
             places: self.surfaces.address()
                 + 2 * 16 * u64::from(self.size.width) * u64::from(self.size.height),
+            channels: self.surfaces.address()
+                + 2 * (16 + 4) * u64::from(self.size.width) * u64::from(self.size.height),
             to_previous: buffer.address() + TO_PREVIOUS,
             to_current: buffer.address() + TO_CURRENT,
             surface_width: self.size.width,

@@ -584,7 +584,9 @@ struct GpuInstance {
     /// Each axis's scale over `scale`, at most 1: `[1, 1, 1]` for a uniform scale (an authored
     /// scene's instances are often stretched along one axis, [`MeshletSceneBuilder::add_instance_scaled`]).
     stretch: [f32; 3],
-    pad: u32,
+    /// The lamps' channels its surfaces take ([`MeshletSceneBuilder::set_instance_channels`],
+    /// D-102); 0: every lamp.
+    channels: u32,
 }
 
 const _: () = assert!(std::mem::size_of::<GpuInstance>() == 96);
@@ -2100,7 +2102,7 @@ impl MeshletSceneBuilder {
             flags: 0,
             texture: 0,
             stretch,
-            pad: 0,
+            channels: 0,
         });
     }
 
@@ -2119,6 +2121,13 @@ impl MeshletSceneBuilder {
     pub fn set_instance_visibility(&mut self, instance: usize, visibility: Visibility) {
         let record = &mut self.instances[instance];
         record.flags = (record.flags & !INSTANCE_VISIBILITY) | visibility.flags();
+    }
+
+    /// Gives instance `instance` (in the order added) the channels of the lamps it takes, a mask
+    /// met against each lamp's [`crate::lamps::Lamp::channels`] (D-102): an authored scene's objects by
+    /// the zone they stand in. 0, by default: every lamp.
+    pub fn set_instance_channels(&mut self, instance: usize, channels: u32) {
+        self.instances[instance].channels = channels;
     }
 
     /// Gives instance `instance` (in the order added) the material rows from `material`: a
@@ -2294,7 +2303,7 @@ impl MeshletSceneBuilder {
                     flags: 0,
                     texture: 0,
                     stretch: [1.0; 3],
-                    pad: 0,
+                    channels: 0,
                 },
                 count as usize,
             ));

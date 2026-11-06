@@ -3749,6 +3749,7 @@ fn home_lamps(
                     shadows: true,
                     fog: 1.0,
                     range: None,
+                    channels: 0,
                 },
                 on,
                 kind: l.kind,

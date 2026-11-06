@@ -79,6 +79,7 @@ pub(super) fn lamps(time: f32) -> Vec<forge_render::lamps::Lamp> {
         shadows: true,
         fog: 1.0,
         range: None,
+        channels: 0,
     }]
 }
 

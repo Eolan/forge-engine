@@ -11797,3 +11797,45 @@ the distance fog.
     a white sky is a fit to its tables' colour and not a measure of its light.
   - **Elsewhere:** 0 and a share of 1 are exact: the sky's light, the clouds, the fog and the steam
     read as before where a scene sets neither.
+
+## D-102 — A lamp's channels: an authored scene's lamps light the objects of their zone ✅ (the owner's go 2026-11-06: "go for the per-object lighting zones"; D-065, D-083)
+
+**The need.** A shipped open-world city game groups its interior lamps by zone. A static light carries a
+set of channels, and volumes give those channels to what stands inside them, so a lamp over a bar's lower
+floor lights that floor's objects and not the gallery's. Forge lit every surface in reach.
+
+**What came first.** A lamp's light held in a box round its zones (position, not object) changed nothing
+in the 14 matched frames, nor did each lamp's hide distance. Both were removed and never pushed. Membership
+by position can't tell a wall whose middle lies outside a zone from one inside it.
+
+**Decided.** Two masks, met at the surface:
+
+- `Lamp::channels` (`GpuLamp::flags.z`) and `MeshletSceneBuilder::set_instance_channels` (`Instance::channels`,
+  the record's spare word). A surface takes a lamp where the masks meet. Zero on either side means every one,
+  so a scene that sets neither reads exactly as before.
+- **Where:** `lamp_takes`, in `lamp_weight_in` and `hit_lamp_weight` (the lists, the far lamps and the rays'
+  hits), and in `restir_lights`. ReSTIR keeps each pixel's mask beside its place for its neighbours (8 bytes a
+  pixel over the two frames).
+- **What it leaves alone:** the fog and the particles take every lamp, and the sun and sky are not channelled.
+  A grass blade, a mover, an object a `SceneEditor` streams in (it has no setter yet) and a baked hit take every lamp. A mask of the lamps' is a scene's data: the engine gives
+  the bits no meaning.
+
+**Which objects count as inside** is the scene's call and isn't known for the source. In the private
+viewer an object's pivot reads best. Its bounding-box middle left one frame's floor at 0.004 against the source's
+0.055 (pivot 0.024), since a large floor's middle can fall outside its zone.
+
+**What it did.** A small gain on the private district's 14 frames, not the large one hoped for: mean rms 0.35 to
+0.34, geometric 0.44 to 0.43, median the same. One frame's floor went from -0.24 to -0.03 EV, with its red closer to
+the source's (R/G 18.8 to 21.3, source 22.8); another from +0.16 to +0.07; a third from -0.19 to -0.30. Every lamp
+there casts shadows, so a zone's walls already hold most of its light in. The over-lit wall that prompted this stayed
+over-lit: the object's pivot is in the lamp's zone. The hunt for it found the next item instead.
+
+**Found on the way: a room's rough surfaces no longer reflect the sky.** The sky's reflection scales the sky's picture
+by the probes' light towards the mirror direction over the open sky's (#68). That ratio measures light, not sky, so in
+a room a lamp's bounce or a door's daylight brought back the sky's picture in its own colour: a red room's floor read
+blue-white with every lamp off. `room_sky` allows all of the sky outside, none in a room, and between the two across a
+doorway. A smooth surface's mirror ray still sees a real window.
+
+**Patents.** A light mask per object is old practice: light linking in offline renderers, lighting channels in
+released game engines. Two searches found no live patent on it. The closest, US 6,639,595 (a per-channel light
+mask in fixed-function hardware), was filed in 2000 and has expired. The searches were not exhaustive.

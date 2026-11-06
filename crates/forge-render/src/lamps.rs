@@ -79,6 +79,11 @@ pub struct Lamp {
     /// their attenuation radius, 2 to 8 m for most of its bar's, where the reach to [`LEAST_LUX`]
     /// runs 20 m and more.
     pub range: Option<f32>,
+    /// The channels whose surfaces it lights, a mask (D-102): a surface takes it where the two
+    /// masks meet ([`crate::MeshletSceneBuilder::set_instance_channels`]), without a shadow ray
+    /// otherwise, whatever stands between. An authored scene's lamps grouped by the zone of a
+    /// building they light. 0: every surface. Its fog takes no heed.
+    pub channels: u32,
 }
 
 impl Lamp {
@@ -494,7 +499,8 @@ pub struct GpuLamp {
     /// cosine, z -3, w its turn; else yzw 0.
     pub beam_edge: [f32; 4],
     /// x: [`LAMP_SHADOWLESS`] when it casts no shadow ([`Lamp::shadows`]); y: one less
-    /// [`Lamp::fog`], as float bits (a zeroed record lights the fog whole); zw 0.
+    /// [`Lamp::fog`], as float bits (a zeroed record lights the fog whole); z: [`Lamp::channels`];
+    /// w 0.
     pub flags: [u32; 4],
 }
 
@@ -616,6 +622,7 @@ pub fn street_lights(lamps: &[(Vec3, f32, f32, bool)]) -> Vec<Lamp> {
                 shadows: true,
                 fog: 1.0,
                 range: None,
+                channels: 0,
             });
         }
     }
@@ -766,7 +773,7 @@ pub(crate) fn gpu_lamp(l: &Lamp, share: f32) -> GpuLamp {
         flags: [
             if l.shadows { 0 } else { LAMP_SHADOWLESS },
             (1.0 - l.fog.clamp(0.0, 4.0)).to_bits(),
-            0,
+            l.channels,
             0,
         ],
     }
@@ -785,6 +792,7 @@ pub const DARK: Lamp = Lamp {
     shadows: true,
     fog: 1.0,
     range: None,
+    channels: 0,
 };
 
 /// A set of lamps in a [`LampTable`].
@@ -1224,6 +1232,19 @@ mod tube_tests {
             .reach(),
             reach(100.0)
         );
+        // Its channels as the shaders read them (`lamp_takes`), every surface a zeroed record's.
+        assert_eq!(
+            gpu_lamp(
+                &Lamp {
+                    channels: 0b101,
+                    ..DARK
+                },
+                1.0
+            )
+            .flags[2],
+            0b101
+        );
+        assert_eq!(gpu_lamp(&DARK, 1.0).flags[2], 0);
         // A tube that lights nothing reaches nothing.
         let unlit = Lamp {
             emission: tube,
@@ -1467,6 +1488,7 @@ mod tests {
             shadows: true,
             fog: 1.0,
             range: None,
+            channels: 0,
         };
         // 100 cd reaches about 45 m.
         assert!((reach(100.0) - 44.72).abs() < 0.01);
@@ -1508,6 +1530,7 @@ mod tests {
                 shadows: true,
                 fog: 1.0,
                 range: None,
+                channels: 0,
             }
         };
         // Six hundred house lamps within 10 m (more than MAX_LAMPS), thirty street lamps 60 to
@@ -1558,6 +1581,7 @@ mod tests {
                 shadows: true,
                 fog: 1.0,
                 range: None,
+                channels: 0,
             }
         };
         // A street of a hundred lamps 25 m apart and a house lamp; the camera at its start.
@@ -1613,6 +1637,7 @@ mod tests {
                 shadows: true,
                 fog: 1.0,
                 range: None,
+                channels: 0,
             })
             .collect();
         let light = |camera: Vec3| {

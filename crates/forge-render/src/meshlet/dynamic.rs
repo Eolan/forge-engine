@@ -734,7 +734,7 @@ impl SceneEditor {
             flags: 0,
             texture: 0,
             stretch,
-            pad: 0,
+            channels: 0,
         };
         if self.instances.len() <= slot as usize {
             self.instances.resize(slot as usize + 1, vacant());
