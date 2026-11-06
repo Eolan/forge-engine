@@ -49,6 +49,8 @@ public struct Sky
                                      // times as dense (1: the physical air; `thinned`)
     public uint environment;         // sampled: an environment map as the sky (D-084), or ~0: the air's
     public float environment_scale;  // its luminance per unit, over the reference illuminance
+    public float light_share;        // the sky's light on surfaces times this (`SkyParams::light_share`)
+    public float pad;
 };
 
 // The aerial-perspective volume: SLICES depth slices of SLICE × SLICE froxels, laid side by

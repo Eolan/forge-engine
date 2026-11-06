@@ -201,7 +201,7 @@ void nrc_update_main(uint3 id : SV_DispatchThreadID)
         ClosestHit c = bounce == 0u ? trace_from_pixel(f, vis, s, ray, seed) : trace_past_glass(f, ray, true, seed);
         if (!c.hit)
         {
-            radiance += throughput * sky_along(p.sky, d);
+            radiance += throughput * sky_light_along(p.sky, d);
             NrcUpdateOnMiss(state);
             break;
         }

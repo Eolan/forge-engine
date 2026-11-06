@@ -625,7 +625,7 @@ float3 distance_fog(Fog* g, float3 c, float3 direction, float s1, bool sky)
         ? g[0].sun.w * g[0].sun_color.rgb * fog_phase(dot(direction, sun), g[0].distance_phase.x) * g[0].distance_near.a
         : float3(0.0);
     if (g[0].sky != nullptr && g[0].distance_far.a > 0.0)
-        light += (sh_irradiance(g[0].sky, float3(0.0, 1.0, 0.0)) + sh_irradiance(g[0].sky, float3(0.0, -1.0, 0.0))) * g[0].distance_far.a;
+        light += (sh_irradiance(g[0].sky, float3(0.0, 1.0, 0.0)) + sh_irradiance(g[0].sky, float3(0.0, -1.0, 0.0))) / sky_light_share(g[0].sky) * g[0].distance_far.a;
     float far = g[0].distance_range.y;
     float3 colour = lerp(g[0].distance_near.rgb, g[0].distance_far.rgb, saturate((min(s1, far) - s0) / max(far - s0, 1e-3)));
     return lerp(c, colour * light, cover);

@@ -7129,7 +7129,7 @@ float3 path_from(Frame* f, float4* sky, ProbeField* probes, RayHit hit, float3 d
         ray.TMax = PATH_RANGE;
         ClosestHit c = trace_past_glass(f, ray);
         if (!c.hit)
-            return sum + weight * sky_along(sky, d);
+            return sum + weight * sky_light_along(sky, d);
         hit = ray_hit_lit(f, c, ray.Origin, d);
     }
     return sum;
@@ -7171,7 +7171,7 @@ float3 near_field_reference(Frame* f, float4* sky, ProbeField* probes, float3 wo
         else if (mode == GI_REFERENCE_NEAR)
             sum += probe_irradiance(probes, origin + d * NEAR_FIELD_RANGE, d, d, -d, sh_irradiance(sky, d));
         else
-            sum += sky_along(sky, d);
+            sum += sky_light_along(sky, d);
     }
     return sum / float(NEAR_FIELD_REFERENCE_RAYS);
 }
@@ -7742,6 +7742,14 @@ float3 sky_along(float4* sky, float3 direction)
 {
     float4 up_table = sky[SH_COEFFICIENTS];
     return sky_view_luminance(uint(up_table.w + 0.5), up_table.xyz, sky[SH_COEFFICIENTS + 1].xyz, direction) * 3.14159265;
+}
+
+// `sky_along` for a diffuse ray that meets nothing: the light a surface takes from there, in the
+// share a scene gives the sky's light on its surfaces, which its irradiance holds. A mirror shows
+// the sky itself (`sky_along`).
+float3 sky_light_along(float4* sky, float3 direction)
+{
+    return sky_along(sky, direction) * sky_light_share(sky);
 }
 
 // What the eye sees through the jelly of row `mat` at `world`, the point of instance `instance` a
@@ -9073,7 +9081,7 @@ void diffuse_trace_main(uint3 id : SV_DispatchThreadID)
     bool queried = false;
 #endif
     if (!c.hit)
-        light = sky_along(p.sky, ray.Direction);
+        light = sky_light_along(p.sky, ray.Direction);
     else
     {
         RayHit hit = ray_hit_lit(f, c, ray.Origin, ray.Direction);
@@ -9177,7 +9185,7 @@ void surface_cache_trace_main(uint3 id : SV_DispatchThreadID)
     ClosestHit c = trace_past_glass(f, ray, true, turn);
     float3 light;
     if (!c.hit)
-        light = sky_along(p.sky, d);
+        light = sky_light_along(p.sky, d);
     else
     {
         RayHit hit = ray_hit_lit(f, c, ray.Origin, d);
@@ -9608,7 +9616,7 @@ void probe_trace_main(uint3 group : SV_GroupID, uint thread : SV_GroupThreadID)
         if (b.distance >= PROBE_MISS_DISTANCE)
         {
             float4 up_table = sky[SH_COEFFICIENTS];
-            lit = sky_view_luminance(uint(up_table.w + 0.5), up_table.xyz, sky[SH_COEFFICIENTS + 1].xyz, direction) * 3.14159265;
+            lit = sky_view_luminance(uint(up_table.w + 0.5), up_table.xyz, sky[SH_COEFFICIENTS + 1].xyz, direction) * 3.14159265 * sky_light_share(sky);
         }
         else if (b.distance > 0.0)
         {
@@ -9708,7 +9716,7 @@ void probe_trace_main(uint3 group : SV_GroupID, uint thread : SV_GroupThreadID)
     else if (!fixed)
     {
         float4 up_table = sky[SH_COEFFICIENTS];
-        radiance = sky_view_luminance(uint(up_table.w + 0.5), up_table.xyz, sky[SH_COEFFICIENTS + 1].xyz, direction) * 3.14159265;
+        radiance = sky_view_luminance(uint(up_table.w + 0.5), up_table.xyz, sky[SH_COEFFICIENTS + 1].xyz, direction) * 3.14159265 * sky_light_share(sky);
     }
     if (any(isnan(radiance)) || any(isinf(radiance)))
         radiance = float3(0.0); // one bad texel would spread through the blends for good

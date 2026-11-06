@@ -264,7 +264,8 @@ float4 march(Clouds* c, float3 d, float2 jitter)
         // the air at its middle, the sky's from above.
         float3 middle_km = p.view_position.xyz + up * (0.5 * (c[0].layer.x + c[0].layer.y) - altitude) * 0.001;
         float3 sunlight = sunlight_at(p, s[0].transmittance, middle_km, sun) * (s[0].scale.x * s[0].scale.w);
-        float3 ambient = sh_irradiance(s[0].irradiance, up) * (s[0].scale.x / PI);
+        // The sky's light as it is, without the share a scene gives its surfaces.
+        float3 ambient = sh_irradiance(s[0].irradiance, up) / s[0].light_share * (s[0].scale.x / PI);
         float sigma = c[0].layer.w;
         float fair = saturate((OVERCAST - c[0].layer.z) / (OVERCAST - FAIR_COVER));
         float t = start + jitter.x * step;

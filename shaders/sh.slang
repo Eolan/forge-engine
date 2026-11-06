@@ -27,6 +27,14 @@ public float sh_cosine_band(uint k)
     return k == 0 ? 3.14159265 : k < 4 ? 2.0943951 : 0.785398163;
 }
 
+// The share the sky's light on surfaces was taken at (`SkyParams::light_share`): its coefficients
+// hold it, the sky's own view of itself does not. In the word after the coefficients' two of frame
+// (`sky.slang`).
+public float sky_light_share(float4* coefficients)
+{
+    return coefficients[SH_COEFFICIENTS + 1].w;
+}
+
 // Irradiance at the normal `n` from coefficients already multiplied by their band's cosine
 // factor (rgb in xyz); never negative (ringing below the horizon of a bright sun side).
 public float3 sh_irradiance(float4* coefficients, float3 n)

@@ -128,6 +128,9 @@ pub struct Look {
     /// that luminance, and `sun_illuminance` the light above the air (a scene fitted to its
     /// sun's level is fitted again). None: Earth's clear day (`AtmosphereParams::earth`).
     pub aerosols: Option<f32>,
+    /// The sky's light on surfaces times this, the sky as drawn and in mirrors unchanged
+    /// (`SkyParams::light_share`). None: 1.
+    pub sky_light: Option<f32>,
 }
 
 /// An environment map as a scene's sky and sun (D-084): the light its authors set, for
@@ -175,6 +178,7 @@ impl Default for Look {
             tonemap: None,
             grading: None,
             aerosols: None,
+            sky_light: None,
         }
     }
 }

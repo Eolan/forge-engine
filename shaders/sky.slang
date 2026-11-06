@@ -503,7 +503,7 @@ void irradiance_main(uint3 id : SV_GroupThreadID)
             GroupMemoryBarrierWithGroupSync();
         }
         if (id.x == 0)
-            irradiance[k] = float4(g_irradiance[0] * (4.0 * PI / float(count)) * sh_cosine_band(k), 0.0);
+            irradiance[k] = float4(g_irradiance[0] * (4.0 * PI / float(count)) * sh_cosine_band(k) * s[0].light_share, 0.0);
         GroupMemoryBarrierWithGroupSync();
     }
     // After the coefficients, what the resolve needs to look the table up for reflections
@@ -513,7 +513,8 @@ void irradiance_main(uint3 id : SV_GroupThreadID)
         // The index as a float value (exact below 2^24): its bits would be a denormal, which
         // the GPU may flush to zero.
         irradiance[SH_COEFFICIENTS] = float4(up, float(table));
-        irradiance[SH_COEFFICIENTS + 1] = float4(forward, 0.0);
+        // With the share the coefficients took (`sky_light_share`).
+        irradiance[SH_COEFFICIENTS + 1] = float4(forward, s[0].light_share);
         // With the clouds over the table: the clear table and the cloud layer the compose lays
         // over the sky, with the sky's luminance scale (the layer's light is pre-exposed by it),
         // for the mirror rays that meet nothing (`seen_clouds` in meshlet.slang).

@@ -975,6 +975,8 @@ struct Gallery {
     sun_scale: f32,
     /// The shaded sides lit by the sky's irradiance (issue #47); else the old constant fill.
     sky_light: bool,
+    /// The sky's light on surfaces times this (`Look::sky_light`).
+    sky_light_share: f32,
     /// Ambient occlusion of the sky's light (issue #48), on while `ao_on`.
     gtao: Gtao,
     ao_on: bool,
@@ -1221,6 +1223,10 @@ impl Gallery {
         // it; space's sky (the owner's ask of 2026-10-03) is the stars, the sun's disc and a
         // planet below.
         let look = scenario.as_ref().map(|s| s.look()).unwrap_or_default();
+        let sky_light_share = look
+            .sky_light
+            .filter(|k| k.is_finite() && *k > 0.0)
+            .unwrap_or(1.0);
         // The sun at `--sun-elevation`, from the default sun's azimuth, through the air: the
         // scene's aerosols (D-101) in it.
         let mut atmosphere_params = AtmosphereParams::earth();
@@ -2392,6 +2398,7 @@ impl Gallery {
             reflection_motion: true,
             sun_scale,
             sky_light,
+            sky_light_share,
             gtao,
             ao_on,
             ao_ignore_nearer: 0.0,
@@ -3660,6 +3667,7 @@ impl Demo for Gallery {
                 sun_dir: self.renderer.sun_dir,
                 sun_angular_radius: forge_render::starfield::SUN_ANGULAR_RADIUS_1AU,
                 luminance_scale: self.renderer.sun_illuminance * exposure,
+                light_share: self.sky_light_share,
                 aerial_far_km: 8.0,
                 march_beyond: false,
                 haze: 1.0,

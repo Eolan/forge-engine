@@ -139,7 +139,7 @@ float3 sharc_bounce(Frame* f, float4* sky, ProbeField* probes, SharcField* field
         ray.TMax = PATH_RANGE;
         c = trace_past_glass(f, ray, true, seed);
         if (!c.hit)
-            return sum + weight * sky_along(sky, direction);
+            return sum + weight * sky_light_along(sky, direction);
         hit = ray_hit_lit(f, c, ray.Origin, direction);
         if (hit.back)
             return sum;
@@ -225,7 +225,7 @@ void sharc_update_main(uint3 id : SV_DispatchThreadID)
         ClosestHit c = k == 0u ? trace_from_pixel(f, vis, s, ray, seed) : trace_past_glass(f, ray, true, seed);
         if (!c.hit)
         {
-            SharcUpdateMiss(sharc, state, sky_along(p.sky, d));
+            SharcUpdateMiss(sharc, state, sky_light_along(p.sky, d));
             return;
         }
         RayHit hit = ray_hit_lit(f, c, ray.Origin, d);

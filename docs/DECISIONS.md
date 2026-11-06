@@ -11710,3 +11710,23 @@ the distance fog.
     - **The meter:** its frames moved −0.03 EV on average, inside its flat optimum, so its −0.5 stays.
 - **Elsewhere nothing changes:** the village's thirteen map-check views are 0 px from this
   morning's run. No scene in the repository sets aerosols or a distance fog.
+
+- **The sky's light on surfaces apart from the sky shown** (2026-11-06, `SkyParams::light_share`,
+  `Look::sky_light`, 1 where none): the private district's source gives its sky far more light
+  against its sun than the physical sky has (its tables at the hour: sun 0.66, sky light 1.30).
+  - **Why it is the input's and not the GI's:** a true path trace of the same scene (48 rays, 1 to
+    4 bounces) reads as the real-time GI does, a shaded pillar 17 against 18 where the source shows
+    44, so the probes and the bounce are right about the light they are given.
+  - **What takes it:** the sky's irradiance holds it from where it is projected (`irradiance_main`),
+    with the factor stored beside it (`sky_light_share`), so surfaces, probes, impostors, panes,
+    water, particles and the fog in the air all take it; the diffuse rays that meet nothing multiply
+    theirs (`sky_light_along`, the bounce's, the probes', the caches'). The sky as drawn, as mirrors
+    show it (`sky_along`) and in the clouds and the distance fog stays as it is.
+  - **The private district, at 2:** the open streets' shaded half reads +0.10, −0.01, +0.02, +0.24
+    EV against the source's frames (−0.27, −0.38, −0.41, −0.25 at 1). The 14 frames: geometric mean
+    +0.10, rms 0.46 (0.46 at 1), the mean's rms 0.33 (0.35), the median's 0.59 (0.51): the sky's own
+    pixels sit as they were, and the far towers above them are lit brighter.
+  - **Left:** a reflection's sky share (`toward / open`, `sun_light`, `hit_metal_light`) weighs what
+    isn't sky by 1 / the factor: a heuristic's small error at 2.
+  - **Elsewhere:** 1 multiplies and divides exactly; the village's thirteen views score what they
+    scored before.

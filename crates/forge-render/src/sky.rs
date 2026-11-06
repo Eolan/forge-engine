@@ -77,9 +77,11 @@ struct GpuSky {
     haze: f32,
     environment: u32,
     environment_scale: f32,
+    light_share: f32,
+    pad: f32,
 }
 
-const _: () = assert!(std::mem::size_of::<GpuSky>() == 320);
+const _: () = assert!(std::mem::size_of::<GpuSky>() == 328);
 const _: () = assert!(std::mem::offset_of!(GpuSky, transmittance) == 224);
 
 /// The night's part of a frame's sky (D-046, issue #164; [`crate::night`]): the second light,
@@ -135,6 +137,10 @@ pub struct SkyParams {
     /// Pre-exposed luminance of a unit of sun illuminance: the sun's illuminance (lux, above
     /// the atmosphere) times the frame's exposure.
     pub luminance_scale: f32,
+    /// The sky's light on surfaces times this, the sky as drawn and as mirrors show it unchanged:
+    /// its irradiance, and what a diffuse ray that meets nothing brings (`sky_light_along`). 1: as
+    /// it is. A scene fitted to its own frames may want it apart from the sky it shows.
+    pub light_share: f32,
     /// How far the aerial-perspective volume reaches, km (farther pixels take its last slice).
     pub aerial_far_km: f32,
     /// March each pixel beyond `aerial_far_km` on its own instead of giving it the volume's
@@ -438,6 +444,8 @@ impl GroundSky {
                         haze: params.haze,
                         environment: params.environment.map_or(u32::MAX, |e| e.0),
                         environment_scale: params.environment.map_or(0.0, |e| e.1),
+                        light_share: params.light_share,
+                        pad: 0.0,
                     }],
                 );
                 commands.bind_pipeline(pipeline);
