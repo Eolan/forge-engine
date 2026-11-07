@@ -303,3 +303,45 @@ departs so far, and what it taught:
   uploads are a graphics-queue copy pass before the culls. At 300 m/s the flight needs at
   most 1.6 pages a frame (200 KiB at 60 Hz), far from any of the budgets in §3. IOCP and
   the transfer queue come when a scene asks for more.
+
+## Implementation notes from Forge: the textures' feedback (2026-11-07, issue #385)
+
+The first step #385 asks for: what a world needs resident, measured before choosing how to
+stream its textures. `FORGE_TEXTURE_FEEDBACK=1` turns it on (`crates/forge-render/src/meshlet/feedback.rs`,
+`texture_need_main` in `meshlet.slang`).
+
+- **How:**
+  - After the resolve, every 8th pixel each way rebuilds its surface as the resolve does, a
+    different pixel of each 8 × 8 block each frame.
+  - For each texture its material samples, it records the finest level an anisotropic sample
+    (16 at most) takes, by bindless index, the least over the frame.
+  - A layered material counts each layer at its own tiling, plus its masks and microblends.
+  - The host sums three totals: resident (every level), needed over the run (each texture from
+    the finest level ever wanted), and the working set (from the finest level wanted within the
+    last 2 s, every frame). Each texture's levels of 128 texels and less always count.
+- **The private district on its benchmark path,** 2560 × 1440, 5,000 frames:
+
+  | | DLSS Quality | DLAA |
+  |---|---|---|
+  | Textures | 16,832 | 16,832 |
+  | Resident | 4,805 MiB | 4,805 MiB |
+  | Wanted at least once | 3,356 | 3,375 |
+  | Needed over the run | 1,498 MiB | 1,469 MiB |
+  | Working set over 2 s: mean, largest | 830, 908 MiB | 840, 902 MiB |
+  | Of which the levels of 128 texels and less | 601 MiB | 601 MiB |
+
+- **What it says:**
+  - **A fifth:** streamed by need, the district's textures would hold under 1 GiB where 4.8 GiB
+    is resident. 80 % of them are never wanted along the path.
+  - **DLSS Quality wants what DLAA wants:** the textures' mip bias (D-070) keeps the output's
+    detail, as meant.
+  - **The small levels are two thirds of the working set:** 16,832 textures' levels of 128
+    texels and less. Keeping only 64 texels and less resident would cut that part about four
+    times (to measure).
+  - **Whole levels already get there:** streaming whole levels per texture reaches the fifth.
+    Pages would save the rest of a texture that is only partly seen, at the price of an
+    indirection in every sample.
+- **Its cost:** 0.18 ms a frame, for the clear and the copy of 256 KiB; the pass itself is under
+  the profiler's resolution. It is a developer's switch.
+- **What it doesn't see:** decals, glass, holograms, particles, impostors, the rays' hits and the
+  layered materials' presence maps.

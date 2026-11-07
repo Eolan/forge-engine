@@ -44,8 +44,8 @@ pub use accel::{
 pub use ash;
 pub use ash::vk;
 pub use bindless::{
-    BINDING_SAMPLED_IMAGES, BINDING_SAMPLERS, BINDING_STORAGE_IMAGES, SampledImageId, SamplerKind,
-    StorageImageId,
+    BINDING_SAMPLED_IMAGES, BINDING_SAMPLERS, BINDING_STORAGE_IMAGES, SAMPLED_IMAGE_CAPACITY,
+    SampledImageId, SamplerKind, StorageImageId,
 };
 pub use commands::Commands;
 pub use device::{

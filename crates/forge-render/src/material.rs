@@ -116,6 +116,37 @@ fn box_levels(level: Vec<u8>, width: u32, height: u32) -> Vec<Vec<u8>> {
     levels
 }
 
+/// The bytes of a `width` x `height` level in `format`, block-compressed formats by their 4 x 4
+/// blocks.
+fn level_size(format: vk::Format, width: u32, height: u32) -> u64 {
+    use vk::Format as F;
+    let blocks = u64::from(width.div_ceil(4)) * u64::from(height.div_ceil(4));
+    let texels = u64::from(width) * u64::from(height);
+    match format {
+        F::BC1_RGB_UNORM_BLOCK
+        | F::BC1_RGB_SRGB_BLOCK
+        | F::BC1_RGBA_UNORM_BLOCK
+        | F::BC1_RGBA_SRGB_BLOCK
+        | F::BC4_UNORM_BLOCK
+        | F::BC4_SNORM_BLOCK => blocks * 8,
+        F::BC2_UNORM_BLOCK
+        | F::BC2_SRGB_BLOCK
+        | F::BC3_UNORM_BLOCK
+        | F::BC3_SRGB_BLOCK
+        | F::BC5_UNORM_BLOCK
+        | F::BC5_SNORM_BLOCK
+        | F::BC6H_UFLOAT_BLOCK
+        | F::BC6H_SFLOAT_BLOCK
+        | F::BC7_UNORM_BLOCK
+        | F::BC7_SRGB_BLOCK => blocks * 16,
+        F::R8_UNORM | F::R8_SNORM | F::R8_UINT => texels,
+        F::R8G8_UNORM | F::R8G8_SNORM => texels * 2,
+        F::R16G16B16A16_SFLOAT | F::R16G16B16A16_UNORM => texels * 8,
+        F::R32G32B32A32_SFLOAT => texels * 16,
+        _ => texels * 4,
+    }
+}
+
 /// No texture (`TEXTURE_NONE` in `meshlet.slang`).
 pub const TEXTURE_NONE: u32 = u32::MAX;
 
@@ -424,6 +455,27 @@ impl TextureSet {
             bytes: 0,
             alpha: Vec::new(),
         }
+    }
+
+    /// Per texture, its bindless index, its larger side in texels and its levels' bytes, the
+    /// finest first (#385's measures, `meshlet::feedback`).
+    pub fn level_bytes(&self) -> Vec<(u32, u32, Vec<u64>)> {
+        self.textures
+            .iter()
+            .map(|(image, id)| {
+                let e = image.extent();
+                let levels = (0..image.mip_levels())
+                    .map(|l| {
+                        level_size(
+                            image.format(),
+                            (e.width >> l).max(1),
+                            (e.height >> l).max(1),
+                        )
+                    })
+                    .collect();
+                (id.0, e.width.max(e.height), levels)
+            })
+            .collect()
     }
 
     /// What the CPU knows of the alpha of the texture of bindless index `sampled`.

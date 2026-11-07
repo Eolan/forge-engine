@@ -3002,6 +3002,13 @@ table, and the hologram pass's moving rows, 64 bytes each, into its slot's rows.
 - **VRAM:** +193 MiB, one more copy of the 800,000-row table (the table as built serves frame slot 0). Two copies, as first pushed, cost +386 MiB.
 - **Slideshows** (`set_material_slides`): the private district's 299 advert boards ride in the same tables, so the only cost is their rows written each frame.
 
+## The textures' feedback (#385, 2026-11-07, a developer's switch)
+
+`FORGE_TEXTURE_FEEDBACK=1`, on the private district's path at 2560 × 1440 under DLSS Quality:
+`textures/need clear` 0.083 ms, `textures/need` 0.001 ms and `textures/need copy` 0.097 ms. The
+frame went from 17.10 to 17.43 ms over one run. What it measures is in
+`docs/research/memory-streaming.md`, "the textures' feedback".
+
 ## Not measured yet
 
 - **Streaming**: residency pools, request queue depth, drive and decompression throughput.

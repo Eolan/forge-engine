@@ -9907,6 +9907,105 @@ void probe_trace_main(uint3 group : SV_GroupID, uint thread : SV_GroupThreadID)
     }
 }
 
+// ------------------------------------------- the textures' feedback (#385) ---
+
+// Which level of each texture the frame's surfaces want (`FORGE_TEXTURE_FEEDBACK=1`,
+// crates/forge-render/src/meshlet/feedback.rs): every 8th pixel each way, a different one of each
+// 8 x 8 block each frame, rebuilt as the resolve rebuilds it, records for each texture its material
+// samples the finest level a sample there takes, by the texture's bindless index (the least over
+// the frame; 0xFFFFFFFF none).
+struct TextureNeedPush
+{
+    Frame* frame;
+    uint* need;
+    uint vis_image;
+    uint width;
+    uint height;
+    uint offset; // the pixel of each 8 x 8 block this frame looks at, 0 to 63
+};
+
+[[vk::push_constant]]
+TextureNeedPush need_push;
+
+// The level an anisotropic sample (16 at most, as the rows' samplers) of `image` takes at a
+// footprint of `gx`, `gy` (its coordinates' change a pixel), kept in `need` as the least.
+void need_level(uint* need, uint image, float2 gx, float2 gy)
+{
+    if (image == TEXTURE_NONE)
+        return;
+    uint w, h, levels;
+    g_sampled_images[NonUniformResourceIndex(image)].GetDimensions(0, w, h, levels);
+    float a = length(gx * float2(w, h));
+    float b = length(gy * float2(w, h));
+    float rho = max(min(a, b), max(a, b) / 16.0);
+    uint level = uint(clamp(floor(log2(max(rho, 1.0))), 0.0, float(max(levels, 1u) - 1u)));
+    InterlockedMin(need[image], level);
+}
+
+// A UV-mapped row's maps at its transform (`uv_mapped_light`), the mesh's coordinates changing by
+// `dx`, `dy` a pixel.
+void need_row(uint* need, Material mat, float2 dx, float2 dy)
+{
+    float2 gx = float2(dot(mat.uv_u.xy, dx), dot(mat.uv_v.xy, dx));
+    float2 gy = float2(dot(mat.uv_u.xy, dy), dot(mat.uv_v.xy, dy));
+    need_level(need, mat.albedo_texture, gx, gy);
+    need_level(need, mat.normal_texture, gx, gy);
+    need_level(need, mat.metal_rough_texture, gx, gy);
+    need_level(need, mat.occlusion_texture, gx, gy);
+    need_level(need, mat.emissive_texture, gx, gy);
+}
+
+[shader("compute")]
+[numthreads(8, 8, 1)]
+void texture_need_main(uint3 id : SV_DispatchThreadID)
+{
+    uint2 pixel = id.xy * 8u + uint2(need_push.offset % 8u, need_push.offset / 8u);
+    if (pixel.x >= need_push.width || pixel.y >= need_push.height)
+        return;
+    uint vis = g_sampled_images_u32[NonUniformResourceIndex(need_push.vis_image)].Load(int3(pixel, 0));
+    if (vis == VISIBILITY_EMPTY)
+        return;
+    Frame* f = need_push.frame;
+    uint* need = need_push.need;
+    PixelShading p = pixel_shading(f, MATERIAL_CLASS_ANY, pixel, vis, float2(need_push.width, need_push.height));
+    Material mat = p.mat;
+    Surface s = p.s;
+    if (!s.has_uv || (mat.flags & MATERIAL_FLAG_UV) == 0u)
+    {
+        // Textures from the object's position, `inv_texture_scale` repeats a metre.
+        float span = max(length(s.dpdx), length(s.dpdy)) * mat.inv_texture_scale;
+        need_level(need, mat.albedo_texture, float2(span, 0.0), float2(0.0, span));
+        need_level(need, mat.normal_texture, float2(span, 0.0), float2(0.0, span));
+        return;
+    }
+    if ((mat.flags & MATERIAL_FLAG_ROOM_ATLAS) != 0u)
+    {
+        need_level(need, mat.albedo_texture, s.duvdx, s.duvdy);
+        return;
+    }
+    if ((mat.flags & MATERIAL_FLAG_MULTILAYER) == 0u)
+    {
+        need_row(need, mat, s.duvdx, s.duvdy);
+        return;
+    }
+    // A layered material (D-095, `multilayer_light`): each layer's maps at its own tiling, the
+    // masks at the mesh's coordinates, a microblend at its tiles.
+    for (uint k = 0u; k < min(mat.layer_count, 33u); k++)
+    {
+        Material layer = f[0].materials[mat.first_layer + k];
+        need_row(need, layer, s.duvdx, s.duvdy);
+        if (k == 0u)
+            continue;
+        uint m = k - 1u;
+        need_level(need, m < 16u ? mat.mask_textures_a[m / 4u] : mat.mask_textures_b[m / 4u - 4u], s.duvdx, s.duvdy);
+        if ((layer.flags & MATERIAL_FLAG_MICROBLEND) != 0u)
+        {
+            float tiles = asfloat(layer.mask_textures_a.y);
+            need_level(need, layer.mask_textures_a.x, s.duvdx * tiles, s.duvdy * tiles);
+        }
+    }
+}
+
 // The resolve's entry points: without shadow rays, and with them (`_rt`, devices with ray
 // queries; `MeshletRenderer::new` picks).
 [shader("compute")]

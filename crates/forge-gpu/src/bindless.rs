@@ -20,6 +20,8 @@ pub const BINDING_STORAGE_IMAGES: u32 = 1;
 pub const BINDING_SAMPLERS: u32 = 2;
 
 const MAX_SAMPLED_IMAGES: u32 = 65_536;
+/// The sampled images the bindless set holds: their indices run below it.
+pub const SAMPLED_IMAGE_CAPACITY: u32 = MAX_SAMPLED_IMAGES;
 const MAX_STORAGE_IMAGES: u32 = 16_384;
 
 /// The set's sampled and storage image slots, which device selection checks against the

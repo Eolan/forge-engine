@@ -39,6 +39,7 @@ use forge_gpu::{
 use glam::{DQuat, DVec3, IVec3, Mat4, Quat, Vec2, Vec3, Vec4};
 
 pub(crate) mod dynamic;
+mod feedback;
 mod static_edits;
 pub use dynamic::{DynamicCapacity, MeshRays, SceneEdit, SceneEditor};
 
@@ -4667,6 +4668,9 @@ pub struct MeshletRenderer {
     /// memory, then copied into this frame slot's host-cached readback.
     stats: GraphBuffer,
     stats_readback: Vec<GraphBuffer>,
+    /// The textures' feedback (#385, `FORGE_TEXTURE_FEEDBACK=1`): which level of each texture the
+    /// frame's surfaces want, summed over the run.
+    texture_feedback: Option<feedback::TextureFeedback>,
     /// Slots of the visible-cluster list, its raster lists and, on the fallback path, its draw
     /// commands, transients of the frame's graph (#78; see [`MeshletRenderer::begin_frame`]).
     visible_target: u32,
@@ -5300,6 +5304,7 @@ impl MeshletRenderer {
             frame_buffers,
             stats,
             stats_readback,
+            texture_feedback: feedback::TextureFeedback::from_env(device, shaders, shading)?,
             visible_target,
             rejects_target: REJECTS_INITIAL_CAPACITY,
             visible_max,
@@ -5560,6 +5565,9 @@ impl MeshletRenderer {
         // frame's pages over the residency they changed (#220).
         scene.begin_scene_frame(slot.frame_number);
         scene.begin_dynamic_frame(slot.frame_number);
+        if let Some(feedback) = &self.texture_feedback {
+            feedback.take(slot, scene.textures.as_ref());
+        }
         if let Some(streamer) = scene.streamer.as_mut() {
             streamer.begin_frame(slot.index, slot.frame_number);
         }
@@ -7204,6 +7212,9 @@ impl MeshletRenderer {
         hash(graph);
         if let Some(h) = &self.resolve_hasher {
             h.finish(graph);
+        }
+        if let Some(feedback) = &self.texture_feedback {
+            feedback.record(graph, slot, frame_address, targets.visibility, extent);
         }
     }
 
