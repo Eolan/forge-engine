@@ -12183,3 +12183,25 @@ mask in fixed-function hardware), was filed in 2000 and has expired. The searche
   - **The first simulation streamed the masks too.** It is redone above over the maps alone.
 - **Next:** wiring the planner, `remake` and the remap together in the private district (the maps only), then the
   files (step 4).
+
+**Amended (2026-11-07): the masks in BC4** (the owner: "go with BC4 for the masks"). The layered materials' masks are
+3.4 GiB of uncompressed RGBA8 on the private district. Stored as BC4, a mask takes half the bytes.
+
+- **The measure that preceded the call:** a plain min/max BC4 encoder on a sample of 40 of the district's masks (3
+  million texels).
+  - 70 % of the blocks are flat and come through exactly.
+  - The mean error is 0.22 codes and the largest 18.
+  - 2.8 % of the texels move by more than 2 codes, 0.42 % by more than 8.
+  - The ISPC encoder already in the engine (`intel_tex_2`) does at least as well.
+- **How it is laid out:** two masks a texture, as BC5. BC5 is two BC4 channels, so each mask gets BC4's quality.
+  - A setup has up to 19 masks on the district. One BC4 texture per mask would fit only 8 in a row's eight mask fields.
+  - BC5 pairs fit 16 there, and the row's two spare words take the count to 20. The row stays 240 bytes.
+- **What changes:**
+  - `layer_mask_textures` encodes the pairs.
+  - `multilayer_light` finds mask `m` in field `m / 2`, channel `m % 2`. The microblend's reading of its first mask
+    field is unchanged.
+  - The setups' stored form changes, in the derived cache and the package.
+- **Checked before it lands:**
+  - the district's baseline stills and scores (`tools/baseline.sh compare`);
+  - the load: the encoding is made once and then stored as made;
+  - VRAM.
