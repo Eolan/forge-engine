@@ -11881,6 +11881,11 @@ mask in fixed-function hardware), was filed in 2000 and has expired. The searche
 
 **What it did.** `holograms/draw` 0.009 ms on the benchmark's path at 2560 x 1440. The pictures are small on screen, so the 33 scored frames barely move.
 
+**Amended (2026-11-07): rows that move** (D-104). A row has `HologramRow::uv`, a transform of the corners' places in the picture, and `HologramRow::motion`: a flipbook or a scroll over that transform, and a glow that blinks or flickers.
+- **How:** the moving rows are worked out at `HologramParams::time` and written into the frame slot's own rows. The shader reads the transform and its implicit gradients follow it.
+- **In the private district:** the pictures' flipbooks play at the source's rate, for example 5 by 20 frames at 10 a second.
+- **Still one layer:** no layers parted along the view, so the patent note above stands.
+
 **Also landed with it:** `smoke-cigarette`, a particle effect in `data/particles.toml`, a thin thread of smoke for a held cigarette, lit by the room's lamps. The private viewer emits one at each smoker's hand. Its values are a fit by eye: the source's own effect wasn't read.
 
 ## D-104 — Materials that move with the scene's clock: their rows rewritten per frame slot ✅ (#398; the owner, 2026-11-01: "There are plenty of animated things like screen or other supports, you might need to support that as well"; 2026-11-07: "follow recommendations and the plan")
@@ -11898,6 +11903,7 @@ mask in fixed-function hardware), was filed in 2000 and has expired. The searche
   - On the CPU, once a frame, in f64 at the application's clock.
   - The moving rows are written into the frame slot's own copy of the material table, and the frame block points at that copy. Every pass of the frame reads the same rows, so the ray hits and the probes see the same glow as the screen does.
   - The copies are in mapped device memory (Resizable BAR), as per-frame data is. A device without it reads them over the bus, with a warning.
+  - The table as built serves as frame slot 0's, so the cost is one more copy per other slot (one, with two frames in flight). The structures' builds keep reading the table as built: a moving row is never cut out, and its flags and alpha, the fields they read, never change.
 - **What moves in the row:**
   - Its UV transform (`uv_u`, `uv_v`) and its emissive colour. The shader already reads both, so no shader changed.
   - The texture gradients follow the transform, so a flipbook's cell takes its own mip level.
@@ -11910,7 +11916,7 @@ mask in fixed-function hardware), was filed in 2000 and has expired. The searche
 - **The upscaler:** the geometry doesn't move, so the motion vectors are zero and the upscaler takes a scrolling picture as changed shading. It may smear a fast scroll a little; #360's reactive mask is the hint for later.
 - **Lamps:** a blinking lamp's glowing part blinks, but its light (the lamp lists, RTXDI) is the application's to switch.
 - **The probes and the caches** take in a glow's change at their own pace, as they do any change of light.
-- **Later steps of #398:** the holograms (D-103) keep their own rows, and their flipbooks come later, as does video on surfaces.
+- **Later steps of #398:** video on surfaces. The holograms' motions came the same day (D-103's amendment).
 - **The source's formulas aren't known.** The private viewer maps the source's parameters onto these four motions by their names and values.
 
 **Patents.** Animated textures by frame sequences and by scrolling coordinates are 1990s practice. Nothing here goes past it, so no search was run.
@@ -11925,3 +11931,8 @@ mask in fixed-function hardware), was filed in 2000 and has expired. The searche
   - which rows refuse moving coordinates.
 - **A GPU test of the slots' tables:** the moving row is written at the clock, once a frame, and the other rows stay as built.
 - **Scenes without motions are unchanged:** the guard captures `ast240` and `lab-creatures120` differ from the code before by 0 px.
+
+**What it did** in the private district, on its benchmark path at 2560 x 1440 under DLSS Quality. Within the path's reach, 578 rows move: 355 blinks, 129 flickers and 94 flipbooks.
+
+- **The frame:** no clear cost. With the rows moving, 17.79, 19.07 and 18.08 ms; still, 18.27 and 17.68 ms. The 19.07 ms run was slow in its probes, and its p99 was 28 ms.
+- **VRAM:** the table holds about 800,000 rows, mostly layered materials' layers, so a copy is 193 MiB. Two copies over the table as built cost +386 MiB; since the table as built serves slot 0, the cost is +193 MiB.

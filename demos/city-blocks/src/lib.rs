@@ -4602,6 +4602,7 @@ impl Demo for Gallery {
                     view_proj: taa_frame.jittered_projection * self.camera.view_rotation(),
                     camera: camera_in_scene,
                     exposure,
+                    time: self.sea_time,
                 },
                 taa_frame.color,
                 targets.depth,

@@ -2993,6 +2993,14 @@ Quality: 6,048 of its 6,959 meshes packed, its pages 12,539 → 2,436 (768 share
 1,074 MB, VRAM 3.64 → 2.38 GB; the frame 6.66 → 6.62 ms. A first rule (one page each, half full at
 most) took 1,225 meshes and 151 MB: most props span two or three thin pages.
 
+## Moving materials (D-104, #398, 2026-11-07)
+
+No pass of its own. Each frame the CPU writes the moving rows, 240 bytes each, into the frame slot's
+table, and the hologram pass's moving rows, 64 bytes each, into its slot's rows.
+- **The private district on its benchmark path,** 2560 × 1440 under DLSS Quality: 578 rows and 13 hologram pictures move.
+- **The frame:** no clear cost. Moving, 17.79, 19.07 and 18.08 ms; still, 18.27 and 17.68 ms. The 19.07 ms run was slow in its probes.
+- **VRAM:** +193 MiB, one more copy of the 800,000-row table (the table as built serves frame slot 0). Two copies, as first pushed, cost +386 MiB.
+
 ## Not measured yet
 
 - **Streaming**: residency pools, request queue depth, drive and decompression throughput.

@@ -10,6 +10,10 @@
 //! reprojects the pixel by what is behind, so a picture over something near it may trail a little
 //! when the camera moves fast. The glass writes no depth either, so a picture behind a pane isn't
 //! dimmed by it, and the sky's haze isn't laid over a far one (the froxels' fog is).
+//!
+//! A row can move with the scene's clock (D-104, [`HologramRow::motion`]): its picture scrolls or steps
+//! through a flipbook's frames, and its glow blinks or flickers. The moving rows are worked out on the
+//! CPU at [`HologramParams::time`] and written into the frame slot's own rows.
 
 use std::sync::Arc;
 
@@ -21,6 +25,7 @@ use forge_gpu::{
 };
 use glam::{Mat4, Vec3};
 
+use crate::material::motion::MaterialMotion;
 use crate::taa::HDR_FORMAT;
 
 /// A picture and what is done to it.
@@ -37,6 +42,17 @@ pub struct HologramRow {
     pub saturation: f32,
     /// The picture's value, 1 unchanged.
     pub value: f32,
+    /// Where a corner's place falls in the picture: `u' = dot(uv[0], (u, v, 1))` and
+    /// `v' = dot(uv[1], (u, v, 1))` ([`HologramRow::PLAIN`]: the places as they are).
+    pub uv: [[f32; 3]; 2],
+    /// How it moves with the scene's clock (D-104): a scroll or a flipbook over `uv`, a glow that
+    /// blinks or flickers. Still by default.
+    pub motion: MaterialMotion,
+}
+
+impl HologramRow {
+    /// The corners' places as they are.
+    pub const PLAIN: [[f32; 3]; 2] = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]];
 }
 
 /// The holograms, as triangles: every three corners one.
@@ -73,6 +89,8 @@ pub struct HologramParams {
     pub camera: Vec3,
     /// What a cd/m² becomes in the frame.
     pub exposure: f32,
+    /// The scene's clock, seconds: the moving rows' place in their motion (D-104).
+    pub time: f64,
 }
 
 /// Must match `HologramVertex` in `holograms.slang`.
@@ -95,6 +113,24 @@ struct GpuRow {
     saturation: f32,
     value: f32,
     pad: f32,
+    uv_u: [f32; 3],
+    pad_u: f32,
+    uv_v: [f32; 3],
+    pad_v: f32,
+}
+
+impl GpuRow {
+    /// This row as `motion` makes it at `seconds`: its transform moved and its glow scaled.
+    fn moved(&self, motion: &MaterialMotion, seconds: f64) -> GpuRow {
+        let (uv_u, uv_v) = motion.transform((self.uv_u, self.uv_v), seconds);
+        let glow = motion.glow_at(seconds);
+        GpuRow {
+            uv_u,
+            uv_v,
+            glow: self.glow.map(|c| c * glow),
+            ..*self
+        }
+    }
 }
 
 /// Must match `HologramFrame` in `holograms.slang`.
@@ -114,7 +150,10 @@ struct GpuFrame {
 pub struct Holograms {
     draw: Pipeline,
     vertices: Buffer,
-    rows: Buffer,
+    /// The rows, a copy per frame slot: the moving ones are written there each frame.
+    rows: Vec<Buffer>,
+    /// The moving rows (D-104): their index, the row as given, its motion.
+    moving: Vec<(u64, GpuRow, MaterialMotion)>,
     frames: Vec<Buffer>,
     vertex_count: u32,
 }
@@ -162,7 +201,19 @@ impl Holograms {
                 saturation: r.saturation,
                 value: r.value,
                 pad: 0.0,
+                uv_u: r.uv[0],
+                pad_u: 0.0,
+                uv_v: r.uv[1],
+                pad_v: 0.0,
             })
+            .collect();
+        let moving: Vec<(u64, GpuRow, MaterialMotion)> = panes
+            .rows
+            .iter()
+            .zip(&row_data)
+            .enumerate()
+            .filter(|(_, (r, _))| r.motion != MaterialMotion::default())
+            .map(|(k, (r, g))| (k as u64, *g, r.motion))
             .collect();
         let shared = |name, bytes: u64| {
             device.create_buffer(BufferDesc {
@@ -178,11 +229,16 @@ impl Holograms {
             std::mem::size_of_val(vertex_data.as_slice()) as u64,
         )?;
         vertices.write(0, &vertex_data);
-        let rows = shared(
-            "hologram rows",
-            std::mem::size_of_val(row_data.as_slice()) as u64,
-        )?;
-        rows.write(0, &row_data);
+        let rows = (0..FRAMES_IN_FLIGHT)
+            .map(|_| {
+                let rows = shared(
+                    "hologram rows",
+                    std::mem::size_of_val(row_data.as_slice()) as u64,
+                )?;
+                rows.write(0, &row_data);
+                Ok(rows)
+            })
+            .collect::<Result<Vec<_>>>()?;
         let frames = (0..FRAMES_IN_FLIGHT)
             .map(|_| {
                 device.create_buffer(BufferDesc {
@@ -223,6 +279,7 @@ impl Holograms {
             draw,
             vertices,
             rows,
+            moving,
             frames,
             vertex_count: vertex_data.len() as u32,
         })
@@ -235,7 +292,7 @@ impl Holograms {
 
     /// The bytes it keeps on the GPU.
     pub fn bytes(&self) -> u64 {
-        self.vertices.size() + self.rows.size()
+        self.vertices.size() + self.rows.iter().map(Buffer::size).sum::<u64>()
     }
 
     /// Adds their light over `color` (the HDR scene, pre-exposed), behind the frame's `depth`.
@@ -248,6 +305,12 @@ impl Holograms {
         depth: ImageHandle,
         extent: vk::Extent2D,
     ) {
+        // The moving rows at the clock, in the slot's own rows, which no frame in flight reads.
+        let rows = &self.rows[slot.index];
+        let size = std::mem::size_of::<GpuRow>() as u64;
+        for (k, row, motion) in &self.moving {
+            rows.write(k * size, &[row.moved(motion, params.time)]);
+        }
         let frame_buffer = &self.frames[slot.index];
         frame_buffer.write(
             0,
@@ -256,7 +319,7 @@ impl Holograms {
                 camera: params.camera.to_array(),
                 exposure: params.exposure,
                 vertices: self.vertices.address(),
-                rows: self.rows.address(),
+                rows: rows.address(),
                 depth: 0,
                 pad: [0; 3],
             }],
@@ -294,5 +357,57 @@ impl Holograms {
                 commands.end_rendering();
                 Ok(())
             });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::material::motion::{Flipbook, Glow};
+
+    /// A moving row's flipbook takes its frame's cell over the row's own transform (a picture's
+    /// scale and offset), its glow follows its blink, and the rest of the row stays.
+    #[test]
+    fn a_moving_row_takes_its_frame_over_its_transform() {
+        let row = GpuRow {
+            glow: [2.0; 3],
+            hue: 0.1,
+            picture: 7,
+            saturation: 1.0,
+            value: 1.0,
+            pad: 0.0,
+            uv_u: [0.5, 0.0, 0.25],
+            pad_u: 0.0,
+            uv_v: [0.0, 1.0, 0.0],
+            pad_v: 0.0,
+        };
+        let motion = MaterialMotion {
+            flipbook: Some(Flipbook {
+                columns: 5,
+                rows: 20,
+                frames: 0,
+                rate: 10.0,
+            }),
+            glow: Some(Glow::Blink {
+                period: 1.0,
+                duty: 0.5,
+                phase: 0.0,
+                low: 0.5,
+                smooth: 0.0,
+            }),
+            ..MaterialMotion::default()
+        };
+        let close = |a: [f32; 3], b: [f32; 3]| a.iter().zip(&b).all(|(x, y)| (x - y).abs() < 1e-6);
+        // 1.25 s in: frame 12, the third row's third cell; the blink on.
+        let on = row.moved(&motion, 1.25);
+        assert!(close(on.uv_u, [0.1, 0.0, 0.45]), "{:?}", on.uv_u);
+        assert!(close(on.uv_v, [0.0, 0.05, 0.1]), "{:?}", on.uv_v);
+        assert_eq!(on.glow, [2.0; 3]);
+        assert_eq!((on.picture, on.hue, on.saturation), (7, 0.1, 1.0));
+        // 1.75 s in: frame 17, the same column a row down; the blink at its low level.
+        let off = row.moved(&motion, 1.75);
+        assert!(close(off.uv_u, [0.1, 0.0, 0.45]), "{:?}", off.uv_u);
+        assert!(close(off.uv_v, [0.0, 0.05, 0.15]), "{:?}", off.uv_v);
+        assert_eq!(off.glow, [1.0; 3]);
     }
 }

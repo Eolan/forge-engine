@@ -23,6 +23,10 @@ struct HologramRow
     float saturation;
     float value;
     float pad;
+    float3 uv_u; // where a corner's place falls in the picture: u' = dot(uv_u, (u, v, 1))
+    float pad_u;
+    float3 uv_v; // v' = dot(uv_v, (u, v, 1))
+    float pad_v;
 };
 
 struct HologramFrame
@@ -76,7 +80,9 @@ float4 frag_main(Varyings input) : SV_Target0
     if (scene > input.position.z)
         discard;
     const HologramRow row = f[0].rows[input.row];
-    const float4 picture = g_sampled_images[NonUniformResourceIndex(row.picture)].Sample(g_samplers[SAMPLER_ANISOTROPIC_REPEAT], input.uv);
+    // The row's transform (a flipbook's frame, a scroll, D-104): the implicit gradients follow it.
+    const float2 at = float2(dot(row.uv_u, float3(input.uv, 1.0)), dot(row.uv_v, float3(input.uv, 1.0)));
+    const float4 picture = g_sampled_images[NonUniformResourceIndex(row.picture)].Sample(g_samplers[SAMPLER_ANISOTROPIC_REPEAT], at);
     float3 c = turn_hue(picture.rgb, row.hue);
     const float grey = dot(c, float3(0.2126, 0.7152, 0.0722));
     c = max(lerp_exact(float3(grey), c, row.saturation), 0.0) * row.value;
