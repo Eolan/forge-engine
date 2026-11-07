@@ -65,6 +65,7 @@ pub mod streaming;
 pub mod sun_shadow;
 pub mod surface_cache;
 pub mod taa;
+pub mod texture_stream;
 pub mod textures;
 pub mod tonecheck;
 pub mod upscale;

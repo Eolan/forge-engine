@@ -12125,3 +12125,12 @@ mask in fixed-function hardware), was filed in 2000 and has expired. The searche
     the recorded one plus its top.
   - **Masks and presence maps stay resident.** The shading counts the presence map's blocks on the masks' full size
     (`multilayer_light`), so the streamed textures are the maps: colour, normal, roughness, metal and microblend.
+- **Step 3's policy is built (the same day):** `texture_stream::LevelPlanner`, pure CPU, unit-tested.
+  - **What it holds:** each streamed texture's levels from a top down. Its tail (128 texels and less) is always resident.
+  - **Its target:** the finest level wanted within the window; once that want is older than the window, the level
+    wanted last; else its tail.
+  - **A plan:** down to the targets first, then up by the largest gap, each as far as the pool allows. It uploads at
+    most the bytes it is given, but always makes at least one change.
+  - **Eviction:** textures wanted strictly longer ago drop to their tails, the oldest first. Textures wanted in the same
+    frame never evict each other.
+  - **Not yet:** the rows' remap (step 2), and the planner wired to the feedback and to `remake`.
