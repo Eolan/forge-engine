@@ -11936,3 +11936,11 @@ mask in fixed-function hardware), was filed in 2000 and has expired. The searche
 
 - **The frame:** no clear cost. With the rows moving, 17.79, 19.07 and 18.08 ms; still, 18.27 and 17.68 ms. The 19.07 ms run was slow in its probes, and its p99 was 28 ms.
 - **VRAM:** the table holds about 800,000 rows, mostly layered materials' layers, so a copy is 193 MiB. Two copies over the table as built cost +386 MiB; since the table as built serves slot 0, the cost is +193 MiB.
+
+**Amended (2026-11-07): slideshows** (the owner's go: "go with the ads slideshow"). `MeshletSceneBuilder::set_material_slides(row, Slideshow)` makes a row show pictures in turn.
+
+- **A slide:** a sampled image and the transform of the row's coordinates onto it. Each shows for `seconds`, starting from `offset` into the show.
+- **What a slide changes:** the row's colour and glow maps, where the row has them, and its transform. A motion of the same row applies over the picture.
+- **Cost:** they ride in the same per-slot tables as the motions, so nothing more than the rows written.
+- **Refused:** a show without pictures, one of no length, or a row that can't move its coordinates.
+- **In the private district,** 299 advert boards cycle through every district's fallback picture of their format, 8 s each. That interval is a guess at the source's rotation. Each board starts from its own picture, and boards change apart from their neighbours. The source's boards play videos; their stills are what the slideshow cycles.

@@ -3000,6 +3000,7 @@ table, and the hologram pass's moving rows, 64 bytes each, into its slot's rows.
 - **The private district on its benchmark path,** 2560 × 1440 under DLSS Quality: 578 rows and 13 hologram pictures move.
 - **The frame:** no clear cost. Moving, 17.79, 19.07 and 18.08 ms; still, 18.27 and 17.68 ms. The 19.07 ms run was slow in its probes.
 - **VRAM:** +193 MiB, one more copy of the 800,000-row table (the table as built serves frame slot 0). Two copies, as first pushed, cost +386 MiB.
+- **Slideshows** (`set_material_slides`): the private district's 299 advert boards ride in the same tables, so the only cost is their rows written each frame.
 
 ## Not measured yet
 

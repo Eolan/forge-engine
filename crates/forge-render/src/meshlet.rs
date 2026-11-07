@@ -18,7 +18,7 @@ use bytemuck::{Pod, Zeroable};
 use forge_geom::{GpuMeshlet, MeshletMesh, PAGE_NONE, PAGE_SIZE, SkinnedMesh};
 
 use crate::cells::CellPos;
-use crate::material::motion::MaterialMotion;
+use crate::material::motion::{MaterialMotion, Slideshow};
 use crate::material::{GpuMaterial, TextureSet, gpu_rows};
 use crate::opacity;
 use crate::probes::ProbeLight;
@@ -1495,6 +1495,8 @@ pub struct MeshletSceneBuilder {
     materials: Vec<GpuMaterial>,
     /// The rows that change with the scene's clock (D-104), by row.
     motions: Vec<(u32, MaterialMotion)>,
+    /// The rows that show pictures in turn (D-104), by row.
+    slides: Vec<(u32, Slideshow)>,
     /// The textures its rows sample.
     textures: Option<TextureSet>,
     /// Build acceleration structures for shadow rays (issue #45), when the device has ray queries.
@@ -1967,6 +1969,19 @@ impl MeshletSceneBuilder {
         match self.motions.iter_mut().find(|(r, _)| *r == row) {
             Some(slot) => slot.1 = motion,
             None => self.motions.push((row, motion)),
+        }
+    }
+
+    /// Makes material row `row` show pictures in turn with the scene's clock (D-104,
+    /// [`MeshletScene::set_material_clock`]): an advert board's slideshow. Each picture takes the
+    /// row's colour and glow maps and its transform; a motion of the same row
+    /// ([`Self::set_material_motion`]) applies over the picture. A second call for the same row
+    /// replaces the first. [`MeshletSceneBuilder::build`] refuses a show without pictures, one of
+    /// no length, and a row that doesn't read the mesh's UVs or is cut out.
+    pub fn set_material_slides(&mut self, row: u32, show: Slideshow) {
+        match self.slides.iter_mut().find(|(r, _)| *r == row) {
+            Some(slot) => slot.1 = show,
+            None => self.slides.push((row, show)),
         }
     }
 
@@ -2816,7 +2831,7 @@ impl MeshletSceneBuilder {
         let cutouts = cutouts || self.ladders;
         // With rows that move (D-104), the table as built is frame slot 0's, mapped, and each other
         // slot has a copy: the frame reads its slot's.
-        let (materials, motions) = if self.motions.is_empty() {
+        let (materials, motions) = if self.motions.is_empty() && self.slides.is_empty() {
             let materials = device.create_buffer_with_data(
                 &self.materials,
                 usage,
@@ -2826,7 +2841,7 @@ impl MeshletSceneBuilder {
             (materials, None)
         } else {
             let (materials, motions) =
-                SceneMotions::new(device, &self.materials, &self.motions, usage)?;
+                SceneMotions::new(device, &self.materials, &self.motions, &self.slides, usage)?;
             (materials, Some(motions))
         };
         // The structure's builds read the rows: an instance whose rows are all opaque tells it so
@@ -3278,8 +3293,8 @@ const MOVER_SLOTS: usize = FRAMES_IN_FLIGHT + 1;
 /// A scene's moving material rows (D-104) and its table's copies for the frame slots after the
 /// first: frame slot 0 reads the table as built (mapped), slot `k` the `k`-th copy.
 struct SceneMotions {
-    /// Per moving row: its index, the row as built, its motion.
-    rows: Vec<(u32, GpuMaterial, MaterialMotion)>,
+    /// Per moving row: its index, the row as built, its motion, its slideshow.
+    rows: Vec<(u32, GpuMaterial, MaterialMotion, Option<Slideshow>)>,
     /// The table for slots 1 and after, mapped. A slot's table is written only once the frame
     /// that used it before is done.
     extra: Vec<Buffer>,
@@ -3296,10 +3311,20 @@ impl SceneMotions {
         device: &Arc<Device>,
         table: &[GpuMaterial],
         motions: &[(u32, MaterialMotion)],
+        slides: &[(u32, Slideshow)],
         usage: vk::BufferUsageFlags,
     ) -> Result<(Buffer, Self)> {
-        let mut rows = Vec::with_capacity(motions.len());
+        // By row: its motion (still without one) and its slideshow.
+        let mut by_row: std::collections::BTreeMap<u32, (MaterialMotion, Option<Slideshow>)> =
+            std::collections::BTreeMap::new();
         for &(row, motion) in motions {
+            by_row.entry(row).or_default().0 = motion;
+        }
+        for (row, show) in slides {
+            by_row.entry(*row).or_default().1 = Some(show.clone());
+        }
+        let mut rows = Vec::with_capacity(by_row.len());
+        for (row, (motion, show)) in by_row {
             let Some(built) = table.get(row as usize) else {
                 return Err(GpuError::Unsupported(format!(
                     "a material motion for row {row}, in a table of {} rows",
@@ -3311,7 +3336,19 @@ impl SceneMotions {
                     "material row {row} can't move its texture coordinates: {why}"
                 )));
             }
-            rows.push((row, *built, motion));
+            if let Some(show) = &show {
+                if show.pictures.is_empty() || show.seconds <= 0.0 {
+                    return Err(GpuError::Unsupported(format!(
+                        "material row {row}'s slideshow has no pictures or no length"
+                    )));
+                }
+                if let Some(why) = built.refuses_coordinates() {
+                    return Err(GpuError::Unsupported(format!(
+                        "material row {row} can't show pictures in turn: {why}"
+                    )));
+                }
+            }
+            rows.push((row, *built, motion, show));
         }
         let size = std::mem::size_of_val(table) as u64;
         let mut slots = (0..FRAMES_IN_FLIGHT)
@@ -3363,8 +3400,12 @@ impl SceneMotions {
         if self.written[slot.index].get() != Some(slot.frame_number) {
             let seconds = self.clock.get();
             let size = std::mem::size_of::<GpuMaterial>() as u64;
-            for (row, built, motion) in &self.rows {
-                buffer.write(u64::from(*row) * size, &[built.moved(motion, seconds)]);
+            for (row, built, motion, show) in &self.rows {
+                let shown = match show.as_ref().and_then(|s| s.at(seconds)) {
+                    Some(slide) => built.showing(slide),
+                    None => *built,
+                };
+                buffer.write(u64::from(*row) * size, &[shown.moved(motion, seconds)]);
             }
             self.written[slot.index].set(Some(slot.frame_number));
         }
@@ -7953,8 +7994,26 @@ mod tests {
                 flipbook: None,
             },
         );
+        builder.set_material_slides(
+            0,
+            crate::material::motion::Slideshow {
+                pictures: [5, 9]
+                    .map(|picture| crate::material::motion::Slide {
+                        picture,
+                        uv: [[0.5, 0.0, 0.5], [0.0, 1.0, 0.0]],
+                    })
+                    .to_vec(),
+                seconds: 1.0,
+                offset: 0.0,
+            },
+        );
         let scene = builder.build(&gpu.device).unwrap();
         let motions = scene.motions.as_ref().unwrap();
+        let pictures = |row: u64| {
+            let mut out = [GpuMaterial::zeroed()];
+            motions.extra[0].read(row * std::mem::size_of::<GpuMaterial>() as u64, &mut out);
+            out[0].pictures()
+        };
         let read = |row: u64| {
             let mut out = [GpuMaterial::zeroed()];
             motions.extra[0].read(row * std::mem::size_of::<GpuMaterial>() as u64, &mut out);
@@ -7969,13 +8028,20 @@ mod tests {
         scene.set_material_clock(0.75);
         assert_eq!(scene.material_table(slot(9)), motions.extra[0].address());
         assert_eq!(read(1), ([1.0, 0.0, 0.1875], [0.0, 1.0, 0.0], [1.0; 3]));
-        assert_eq!(read(0), still.motion_fields());
+        // Row 0 shows its slideshow's first picture, in the picture's transform.
+        assert_eq!(pictures(0), (5, 5));
+        assert_eq!(read(0).0, [0.5, 0.0, 0.5]);
         // The same frame keeps what it wrote; the next takes the clock.
         scene.set_material_clock(0.25);
         scene.material_table(slot(9));
         assert_eq!(read(1).0, [1.0, 0.0, 0.1875]);
         scene.material_table(slot(10));
         assert_eq!(read(1), ([1.0, 0.0, 0.0625], [0.0, 1.0, 0.0], [2.0; 3]));
+        assert_eq!(pictures(0), (5, 5));
+        scene.set_material_clock(1.5);
+        scene.material_table(slot(12));
+        assert_eq!(pictures(0), (9, 9));
+        scene.set_material_clock(0.25);
         // Slot 0 reads the scene's own table, its moving row written there.
         let first = FrameSlot {
             index: 0,

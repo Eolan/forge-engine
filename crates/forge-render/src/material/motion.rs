@@ -15,6 +15,10 @@
 //!   their own pace. A lamp's light is the application's to switch, apart from its glowing part.
 //! - **Cut-out rows can't move their coordinates:** their opacity micromaps and the rays' alpha
 //!   are the row's as built.
+//!
+//! A row can also show pictures in turn ([`Slideshow`],
+//! [`crate::MeshletSceneBuilder::set_material_slides`]): an advert board's. Each picture swaps
+//! the row's colour and glow maps and its transform; a motion then applies over the picture.
 
 use super::{GpuMaterial, MATERIAL_MULTILAYER, MATERIAL_ROOM_ATLAS, MATERIAL_UV};
 
@@ -73,6 +77,41 @@ pub enum Glow {
         /// Its own draw: lamps with different seeds falter apart.
         seed: u32,
     },
+}
+
+/// Pictures a material row shows in turn: an advert board's slideshow. The row's colour map and its
+/// glow map (where it has them) take each picture, and its transform the picture's.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Slideshow {
+    /// The pictures, in order.
+    pub pictures: Vec<Slide>,
+    /// Seconds each shows.
+    pub seconds: f32,
+    /// Seconds into the show at the clock's 0: boards side by side change apart.
+    pub offset: f32,
+}
+
+/// A picture of a [`Slideshow`].
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Slide {
+    /// The picture, a sampled image's index in the bindless set
+    /// ([`crate::material::TextureSet::sampled`]).
+    pub picture: u32,
+    /// Where the row's coordinates fall in it: `u' = dot(uv[0], (u, v, 1))` and
+    /// `v' = dot(uv[1], (u, v, 1))`.
+    pub uv: [[f32; 3]; 2],
+}
+
+impl Slideshow {
+    /// The picture it shows at `seconds` (none without pictures).
+    pub fn at(&self, seconds: f64) -> Option<&Slide> {
+        if self.pictures.is_empty() || self.seconds <= 0.0 {
+            return self.pictures.first();
+        }
+        let step = ((seconds + f64::from(self.offset)) / f64::from(self.seconds)).floor();
+        let k = step.rem_euclid(self.pictures.len() as f64) as usize;
+        self.pictures.get(k)
+    }
 }
 
 impl MaterialMotion {
@@ -186,6 +225,11 @@ impl GpuMaterial {
         if !motion.moves_coordinates() {
             return None;
         }
+        self.refuses_coordinates()
+    }
+
+    /// Why this row can't move its coordinates or change its pictures, if it can't.
+    pub(crate) fn refuses_coordinates(&self) -> Option<&'static str> {
         if self.flags & MATERIAL_UV == 0 {
             Some("it doesn't read the mesh's UVs")
         } else if self.flags & (MATERIAL_ROOM_ATLAS | MATERIAL_MULTILAYER) != 0 {
@@ -195,6 +239,21 @@ impl GpuMaterial {
         } else {
             None
         }
+    }
+
+    /// This row showing `slide`: its colour and glow maps (where it has them) the picture, its
+    /// transform the picture's.
+    pub(crate) fn showing(&self, slide: &Slide) -> GpuMaterial {
+        let mut row = *self;
+        if row.albedo_texture != super::TEXTURE_NONE {
+            row.albedo_texture = slide.picture;
+        }
+        if row.emissive_texture != super::TEXTURE_NONE {
+            row.emissive_texture = slide.picture;
+        }
+        row.uv_u = slide.uv[0];
+        row.uv_v = slide.uv[1];
+        row
     }
 
     /// This row as `motion` makes it at `seconds`: its transform moved and its glow scaled.
@@ -224,6 +283,12 @@ impl GpuMaterial {
     #[cfg(test)]
     pub(crate) fn motion_fields(&self) -> ([f32; 3], [f32; 3], [f32; 3]) {
         (self.uv_u, self.uv_v, self.emissive)
+    }
+
+    /// The colour and glow maps, for the tests.
+    #[cfg(test)]
+    pub(crate) fn pictures(&self) -> (u32, u32) {
+        (self.albedo_texture, self.emissive_texture)
     }
 }
 
@@ -351,6 +416,45 @@ mod tests {
         // The same steps give the same levels; within a step the level holds.
         assert_eq!(levels, levels_at(glow, 0.7, 4000));
         assert_ne!(levels[..100], levels_at(flicker(7), 0.3, 100)[..]);
+    }
+
+    /// A slideshow shows each picture for its seconds, in order and round again, from its offset;
+    /// a row showing one takes its maps and its transform, and keeps a missing map missing.
+    #[test]
+    fn a_slideshow_shows_its_pictures_in_turn() {
+        let slide = |picture: u32| Slide {
+            picture,
+            uv: [[0.5, 0.0, 0.25 * picture as f32], [0.0, 0.5, 0.0]],
+        };
+        let show = Slideshow {
+            pictures: vec![slide(1), slide(2), slide(3)],
+            seconds: 8.0,
+            offset: 4.0,
+        };
+        let at = |t: f64| show.at(t).map(|s| s.picture);
+        assert_eq!(
+            [at(0.0), at(3.9), at(4.0), at(12.0), at(20.0), at(28.0)],
+            [1, 1, 2, 3, 1, 2].map(Some)
+        );
+        assert_eq!(at(-4.5), Some(3));
+        let row = GpuMaterial::uv_test_row([1.0; 3]);
+        let shown = row.showing(&slide(2));
+        assert_eq!(shown.pictures(), (2, 2));
+        assert_eq!(shown.motion_fields().0, [0.5, 0.0, 0.5]);
+        let plain = GpuMaterial {
+            emissive_texture: super::super::TEXTURE_NONE,
+            ..row
+        };
+        assert_eq!(
+            plain.showing(&slide(3)).pictures(),
+            (3, super::super::TEXTURE_NONE)
+        );
+        let empty = Slideshow {
+            pictures: Vec::new(),
+            seconds: 8.0,
+            offset: 0.0,
+        };
+        assert_eq!(empty.at(1.0), None);
     }
 
     /// A row takes a moving transform only where it reads the mesh's UVs and isn't cut out; a glow
