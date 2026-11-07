@@ -12134,18 +12134,25 @@ mask in fixed-function hardware), was filed in 2000 and has expired. The searche
   - **Eviction:** textures wanted strictly longer ago drop to their tails, the oldest first. Textures wanted in the same
     frame never evict each other.
   - **Not yet:** the rows' remap (step 2), and the planner wired to `remake`.
-- **Simulated on the private district** (`FORGE_TEXTURE_FEEDBACK=1`: the frames' wants fed to a planner over every
-  texture, nothing streamed):
+- **Simulated on the private district** (`FORGE_TEXTURE_FEEDBACK=1`: the frames' wants fed to a planner over the
+  block-compressed maps, nothing streamed). The benchmark path at 2560 x 1440 under DLSS Quality, 5,000 frames, at most
+  32 MiB remade a frame:
 
-The benchmark path at 2560 x 1440 under DLSS Quality, 5,000 frames, at most 32 MiB remade a frame:
+  | | Today | With the planner |
+  |---|---|---|
+  | The 7,724 maps (colour, normal, roughness, metal, microblend) | 1,370 MiB resident | 167 to 246 MiB held |
+  | What it uploads | | 1.2 GiB over the run, 13 to 16 MiB/s |
+  | Wants whose levels were resident | | 99.7 to 99.8 % |
+  | What stays resident beside it (masks, presence maps, other RGBA textures) | 3,842 MiB | 3,842 MiB |
 
-  | Pool | It holds | It uploads | Changes | Wants its levels met |
-  |---|---|---|---|---|
-  | 1,024 MiB | 789 to 862 MiB | 2.5 GiB over the run, 28 to 40 MiB/s | 10,429 | 99.6 to 99.8 % |
-  | 768 MiB | 768 MiB, pinned | 5.4 GiB, 62 to 78 MiB/s | 39,596 | 84 to 89 %: it thrashes |
-
-  The 1 GiB pool D-105 measured holds: a fifth of the 4.8 GiB resident today, with nearly every want met. The 128-texel
-  tails are 601 MiB of it. A smaller pool needs the tail at 64 texels, which is still to be measured.
+  Pools of 1,024 and 512 MiB behave alike: the maps never fill them.
+- **What this changes:** the maps save about 1.15 GiB. The layered masks are the larger part, 3.4 GiB of uncompressed
+  RGBA8. They have two ways down, both the owner's call since each touches the look:
+  - **Streamed like the maps:** the shading would count the presence map's blocks from the presence map's own size,
+    not the masks' (`multilayer_light`).
+  - **Compressed:** BC4 a mask halves them.
+- **A first simulation over every texture, masks included, said a 1 GiB pool was enough. It was wrong:** D-105 keeps the
+  masks resident.
 
 - **What step 2 must hold (found while planning it):**
   - **Which fields are slots:** the colour, normal, metal-roughness, occlusion, emissive and presence maps are slots on
@@ -12167,4 +12174,12 @@ The benchmark path at 2560 x 1440 under DLSS Quality, 5,000 frames, at most 32 M
   - **Retiring:** `texture_remap_done(generation)` says when every slot holds the remap. From that frame on, the old
     image retires through `Frames::destroy_later`.
   - **Tested:** a GPU test. Scenes that don't opt in are unchanged.
+- **A second review's catches, fixed the same day:**
+  - **The feedback couldn't ask for more.** It measured the level against the bound image and clamped it at that
+    image's level 0, so a texture remade at its tail could never grow. It now records the level from the bound image,
+    negative when finer (`NEED_BIAS`), and `wanted_in_image` adds the top.
+  - **An evicted texture could grow back in the same plan.** It no longer can.
+  - **A slideshow's picture was remapped.** Its texture is written into its row every frame, so `remap_texture`
+    refuses it and the texture stays resident.
+  - **The first simulation streamed the masks too.** It is redone above over the maps alone.
   - **Next:** wiring the planner, `remake` and the remap together in the private district, then the files (step 4).

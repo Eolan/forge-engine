@@ -9928,7 +9928,11 @@ struct TextureNeedPush
 TextureNeedPush need_push;
 
 // The level an anisotropic sample (16 at most, as the rows' samplers) of `image` takes at a
-// footprint of `gx`, `gy` (its coordinates' change a pixel), kept in `need` as the least.
+// footprint of `gx`, `gy` (its coordinates' change a pixel), kept in `need` as the least. Counted
+// from the bound image's level 0 and plus NEED_BIAS: a level under the bias asks for levels finer
+// than the image holds, which a streamed texture (D-105) remade from its tail must be able to say.
+static const int NEED_BIAS = 16;
+
 void need_level(uint* need, uint image, float2 gx, float2 gy)
 {
     if (image == TEXTURE_NONE)
@@ -9938,8 +9942,8 @@ void need_level(uint* need, uint image, float2 gx, float2 gy)
     float a = length(gx * float2(w, h));
     float b = length(gy * float2(w, h));
     float rho = max(min(a, b), max(a, b) / 16.0);
-    uint level = uint(clamp(floor(log2(max(rho, 1.0))), 0.0, float(max(levels, 1u) - 1u)));
-    InterlockedMin(need[image], level);
+    int level = int(clamp(floor(log2(max(rho, 1e-6))), float(-NEED_BIAS), float(max(levels, 1u) - 1u)));
+    InterlockedMin(need[image], uint(level + NEED_BIAS));
 }
 
 // A UV-mapped row's maps at its transform (`uv_mapped_light`), the mesh's coordinates changing by

@@ -578,6 +578,36 @@ impl TextureSet {
             .collect()
     }
 
+    /// Per texture, in [`Self::level_bytes`]'s order, whether it is block-compressed (a map D-105
+    /// streams; the masks, presence and layer maps stay resident).
+    pub fn compressed(&self) -> Vec<bool> {
+        self.textures
+            .iter()
+            .map(|(image, _)| {
+                use vk::Format as F;
+                matches!(
+                    image.format(),
+                    F::BC1_RGB_UNORM_BLOCK
+                        | F::BC1_RGB_SRGB_BLOCK
+                        | F::BC1_RGBA_UNORM_BLOCK
+                        | F::BC1_RGBA_SRGB_BLOCK
+                        | F::BC2_UNORM_BLOCK
+                        | F::BC2_SRGB_BLOCK
+                        | F::BC3_UNORM_BLOCK
+                        | F::BC3_SRGB_BLOCK
+                        | F::BC4_UNORM_BLOCK
+                        | F::BC4_SNORM_BLOCK
+                        | F::BC5_UNORM_BLOCK
+                        | F::BC5_SNORM_BLOCK
+                        | F::BC6H_UFLOAT_BLOCK
+                        | F::BC6H_SFLOAT_BLOCK
+                        | F::BC7_UNORM_BLOCK
+                        | F::BC7_SRGB_BLOCK
+                )
+            })
+            .collect()
+    }
+
     /// What the CPU knows of the alpha of the texture of bindless index `sampled`.
     pub(crate) fn alpha(&self, sampled: u32) -> TextureAlpha {
         self.textures

@@ -21,10 +21,12 @@
 //! which sample their own levels, and a layered material's presence maps (small, always wanted).
 //!
 //! **D-105's planner, simulated** ([`crate::texture_stream::LevelPlanner`]): each frame's wants
-//! go into a planner over every texture, with a pool of `FORGE_TEXTURE_POOL_MIB` (1024) and at
-//! most `FORGE_TEXTURE_UPLOAD_MIB` (32) remade a frame. The log adds what it would hold, what it
-//! would upload, and the share of wants the levels it held met. Nothing is streamed: the images
-//! stay whole, so the wants count in their full chains.
+//! go into a planner over the block-compressed maps, with a pool of `FORGE_TEXTURE_POOL_MIB`
+//! (1024) and at most `FORGE_TEXTURE_UPLOAD_MIB` (32) remade a frame. The masks, presence maps
+//! and other uncompressed textures stay resident, as D-105 keeps them: the log gives their bytes
+//! beside what the planner would hold, upload and miss. Nothing is streamed: the images stay
+//! whole, so the wants count in their full chains. The planner is made again when the scene's
+//! textures change in number, its counts with it.
 
 use std::cell::RefCell;
 use std::sync::Arc;
@@ -54,6 +56,9 @@ struct TextureNeedPush {
 
 /// No level wanted.
 const NONE: u32 = u32::MAX;
+/// What the shader adds to a level (`NEED_BIAS` in `meshlet.slang`): a recorded level under it asks
+/// for levels finer than the bound image holds.
+const NEED_BIAS: u32 = 16;
 /// Levels a texture holds at most.
 const LEVELS: usize = 16;
 /// Seconds a level wanted counts in the working set.
@@ -100,6 +105,8 @@ struct Simulated {
     by_slot: Vec<Option<usize>>,
     /// The bytes a frame may remake.
     upload: u64,
+    /// The textures it doesn't stream, resident whole: their bytes.
+    fixed: u64,
     uploaded: u64,
     changes: u64,
     wants: u64,
@@ -120,7 +127,14 @@ impl Simulated {
             crate::texture_stream::WINDOW_SECONDS,
         );
         let mut by_slot = vec![None; SAMPLED_IMAGE_CAPACITY as usize];
-        for (sampled, side, levels) in set.level_bytes() {
+        let mut fixed = 0;
+        for ((sampled, side, levels), compressed) in
+            set.level_bytes().into_iter().zip(set.compressed())
+        {
+            if !compressed {
+                fixed += levels.iter().sum::<u64>();
+                continue;
+            }
             let sides = (0..levels.len()).map(|l| (side >> l).max(1)).collect();
             if let Some(slot) = by_slot.get_mut(sampled as usize) {
                 *slot = Some(planner.add(StreamedTexture { levels, sides }));
@@ -130,6 +144,7 @@ impl Simulated {
             planner,
             by_slot,
             upload: mib("FORGE_TEXTURE_UPLOAD_MIB", 32),
+            fixed,
             uploaded: 0,
             changes: 0,
             wants: 0,
@@ -279,6 +294,8 @@ impl TextureFeedback {
             if level == NONE || i >= t.last.len() {
                 continue;
             }
+            // The images here hold every level: a want finer than the first is the first.
+            let level = level.saturating_sub(NEED_BIAS);
             t.last[i][(level as usize).min(LEVELS - 1)] = now;
             t.finest[i] = t.finest[i].min(level);
             if let Some(sim) = t.simulated.as_mut()
@@ -396,7 +413,9 @@ impl Totals {
                 .map_or(0.0, |s| s.elapsed().as_secs_f64())
                 .max(1e-3);
             tracing::info!(
+                streamed = sim.planner.len(),
                 resident_mib = format!("{:.0}", mib(sim.planner.resident())),
+                fixed_mib = format!("{:.0}", mib(sim.fixed)),
                 uploaded_mib = format!("{:.0}", mib(sim.uploaded)),
                 upload_mib_per_s = format!("{:.1}", mib(sim.uploaded) / seconds),
                 changes = sim.changes,

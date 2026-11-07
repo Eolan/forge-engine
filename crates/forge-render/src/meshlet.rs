@@ -3695,11 +3695,19 @@ impl MeshletScene {
     /// Moves every material row's texture slot `from` to `to` (D-105: a streamed texture remade
     /// in a new slot, [`crate::material::TextureSet::remake`]). Each frame slot's table takes the
     /// rows when its slot next comes up, slot 0's too, which the rays read for every frame. Its
-    /// generation for [`Self::texture_remap_done`]; `None` when no row uses `from`, or the scene
-    /// was built without [`MeshletSceneBuilder::set_streamed_textures`]. A slideshow's pictures
-    /// are not moved: their textures stay resident.
+    /// generation for [`Self::texture_remap_done`]; `None` when no row uses `from`, the scene was
+    /// built without [`MeshletSceneBuilder::set_streamed_textures`], or a slideshow shows `from`:
+    /// its pictures are written into their rows every frame, so their textures stay resident
+    /// (the caller keeps the old image).
     pub fn remap_texture(&mut self, from: u32, to: u32) -> Option<u64> {
         let motions = self.motions.as_mut()?;
+        let shown = motions.rows.iter().any(|(_, _, _, show)| {
+            show.as_ref()
+                .is_some_and(|s| s.pictures.iter().any(|p| p.picture == from))
+        });
+        if shown {
+            return None;
+        }
         let all = motions.all.as_mut()?.get_mut();
         let mut hit = false;
         for (k, row) in all.rows.iter_mut().enumerate() {
@@ -8093,6 +8101,25 @@ mod tests {
         };
         let mut plain = build(false);
         assert_eq!(plain.remap_texture(5, 9), None);
+        // A slideshow's picture stays: it is written into its row every frame.
+        let mut builder = MeshletSceneBuilder::new();
+        let mesh = builder.add_mesh(&MeshletMesh::build(&rock));
+        builder.add_instance(mesh, Mat4::IDENTITY);
+        builder.set_material_rows(vec![picture(5)]);
+        builder.set_material_slides(
+            0,
+            crate::material::motion::Slideshow {
+                pictures: vec![crate::material::motion::Slide {
+                    picture: 5,
+                    uv: [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+                }],
+                seconds: 1.0,
+                offset: 0.0,
+            },
+        );
+        builder.set_streamed_textures(true);
+        let mut shown = builder.build(&gpu.device).unwrap();
+        assert_eq!(shown.remap_texture(5, 9), None);
         let mut scene = build(true);
         assert_eq!(scene.remap_texture(7, 9), None);
         let generation = scene.remap_texture(5, 9).unwrap();

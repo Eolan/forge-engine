@@ -15,8 +15,8 @@
 //!   wanted in the same frame never evict each other (no thrashing).
 //!
 //! The levels here count in the texture's full chain: level 0 is its finest. The feedback counts
-//! from the image's current top, so a remade texture's wanted level is the one recorded plus its
-//! top ([`LevelPlanner::wanted_in_image`]).
+//! from the image's current top, finer than it as negative levels, so a remade texture's wanted
+//! level is the one recorded plus its top ([`LevelPlanner::wanted_in_image`]).
 
 /// The texels on a side under which a texture's levels stay resident (D-105's second point; 64
 /// to be measured).
@@ -141,10 +141,10 @@ impl LevelPlanner {
     }
 
     /// [`Self::wanted`] with `level` counted from the texture's resident top, as the feedback
-    /// counts it in the image it samples.
-    pub fn wanted_in_image(&mut self, texture: usize, level: usize, now: f64) {
+    /// counts it in the image it samples: negative for levels finer than the image holds.
+    pub fn wanted_in_image(&mut self, texture: usize, level: i64, now: f64) {
         if let Some(top) = self.textures.get(texture).map(|t| t.top) {
-            self.wanted(texture, level + top, now);
+            self.wanted(texture, (top as i64 + level).max(0) as usize, now);
         }
     }
 
@@ -249,6 +249,10 @@ impl LevelPlanner {
         let mut next_victim = 0;
         let bytes = |t: &Tracked, level: usize| t.texture.bytes_from(level);
         for (i, target) in ups {
+            // Sent back to its tail by an earlier growth of this plan: not grown again in it.
+            if changed[i] {
+                continue;
+            }
             let top = self.textures[i].top;
             // The finest level from the target up that fits the pool as it is.
             let mut to = top;
@@ -390,13 +394,17 @@ mod tests {
         // The image holds levels 3 and down: its own level 0 is the chain's level 3.
         p.wanted_in_image(t, 0, 0.0);
         assert!(p.plan(0.0, u64::MAX).is_empty());
-        p.plan(0.0, u64::MAX);
-        p.wanted(t, 0, 0.1);
+        // Two levels finer than the image holds: the chain's level 1.
+        p.wanted_in_image(t, -2, 0.1);
         p.plan(0.1, u64::MAX);
+        assert_eq!(p.top(t), 1);
+        // Finer than the chain has: its finest.
+        p.wanted_in_image(t, -5, 0.2);
+        p.plan(0.2, u64::MAX);
         assert_eq!(p.top(t), 0);
-        p.wanted_in_image(t, 2, 0.2);
+        p.wanted_in_image(t, 2, 0.3);
         // Still within the window of the want of level 0.
-        assert!(p.plan(0.2, u64::MAX).is_empty());
+        assert!(p.plan(0.3, u64::MAX).is_empty());
     }
 
     #[test]
