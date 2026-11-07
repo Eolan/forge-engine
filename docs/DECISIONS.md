@@ -12257,3 +12257,27 @@ mask in fixed-function hardware), was filed in 2000 and has expired. The searche
   - the district's baseline stills and scores (`tools/baseline.sh compare`);
   - the load: the encoding is made once and then stored as made;
   - VRAM.
+
+**Built (2026-11-07, night):**
+- **The code:**
+  - `Multilayer::pairs`, with ten mask textures (the last two in the row's two spare words).
+  - `MATERIAL_MASK_PAIRS`.
+  - `layer_mask_textures_bc5` (`dds::masks_to_bc5` per pair).
+  - `layer_mask_image` and `layer_mask_channel`, read by the shading and the feedback alike.
+  - With `pairs`, the streamer's texture fields take the two extra slots too.
+  - RGBA8 masks stay as they were, four to a texture, for a caller that keeps them.
+- **The private district** (its viewer makes its setups' masks in pairs, stored so in the cache and the package,
+  format 2):
+  - **Memory:** the textures 5,099 → 3,267 MiB at the bar's crowd view (2560 × 1440, DLSS Quality); VRAM 85 → 75 %
+    of the budget.
+  - **The load:** the setups encoded once in 6.6 s (2,107 of them), then 1.3 s from the cache.
+  - **GPU:** 18.8 → 19.4 ms. The ray passes that never read a mask moved as much (ReSTIR +0.27 ms, the traces
+    +0.06 to 0.07 ms), so most of it is run drift. `shading/standard` +0.12 ms.
+  - **Images against RGBA8:**
+    - the crowd close-up: 0.027 % of the pixels by more than 4 codes (small marks on a door frame);
+    - the bar's shelf view: 0.12 %.
+  - **An older package's setups** (format 1) are made again from the mask files, with a warning: write it again.
+- **Not done: the crowd's masks above 256 texels.** At 1024 as RGBA8 the textures took 2.09 GB more, VRAM 98.7 %,
+  and the frame 18.8 → 79 ms by paging, for no face drawn sharper (the one seen closest wears a mask).
+  - In BC5 it would still be about 1 GB.
+  - That asks for levels by distance (this decision's streaming), not a global cap.

@@ -163,7 +163,8 @@ pub struct Microblend {
 /// them), UV-mapped standard rows (each its template's tiled maps, tint and levels,
 /// [`UvMapping::levels`]), laid front to back, each over those under it by its mask times its
 /// opacity ([`UvMapping::alpha`]). Layer 0 covers all; layer `k`'s mask is channel
-/// `(k - 1) % 4` of `masks[(k - 1) / 4]` (RGBA8, filtered, at the mesh's UVs). `presence`
+/// `(k - 1) % 4` of `masks[(k - 1) / 4]` (RGBA8, filtered, at the mesh's UVs), or with
+/// [`Multilayer::pairs`] channel `(k - 1) % 2` of `masks[(k - 1) / 2]` (BC5). `presence`
 /// (`R32_UINT`, its levels the union of those under them) has a bit per layer present in each
 /// 8 × 8 block of mask texels or round it: the resolve weighs those alone. Rays and far views take
 /// the row's own colours.
@@ -173,8 +174,12 @@ pub struct Multilayer {
     pub layers: u32,
     /// Its first layer's row, this many rows after its own (1: the next row).
     pub offset: u32,
-    /// Its masks' textures, four layers' a texture (layers 1 to 4 the first): at most 32 layers.
-    pub masks: [Option<TextureId>; 8],
+    /// Its masks' textures, four layers' a texture (layers 1 to 4 the first): at most 32 layers,
+    /// the last two unused. With [`Self::pairs`], two layers' a texture: at most 21 layers.
+    pub masks: [Option<TextureId>; 10],
+    /// Its masks two a texture, BC5 (D-105's masks in BC4: a mask in each of its two channels,
+    /// half the bytes of four in RGBA8), else four, RGBA8.
+    pub pairs: bool,
     /// Its presence map.
     pub presence: TextureId,
 }

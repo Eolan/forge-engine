@@ -146,14 +146,14 @@ public struct Material
     public float occlusion_strength;
     public float alpha_cutoff; // MATERIAL_FLAG_MASKED: cut out under this base colour alpha (#171)
     public float alpha;        // the base colour factor's alpha; a layered material's layer: its opacity
-    public uint pad;
+    public uint mask_texture_8; // MATERIAL_FLAG_MASK_PAIRS: its ninth masks' texture (layers 17 and 18)
     public float4 levels;      // MATERIAL_FLAG_LEVELS: roughness from x to y, metalness from z to w (D-095)
     public uint first_layer;   // MATERIAL_FLAG_MULTILAYER: its first layer's row,
     public uint layer_count;   // its layers,
     public uint presence_texture; // its presence map (R32_UINT, a bit per layer per 8 x 8 mask texels)
-    public uint pad_layers;
+    public uint mask_texture_9; // MATERIAL_FLAG_MASK_PAIRS: its tenth masks' texture (layers 19 and 20)
     public uint4 mask_textures_a; // its masks' textures, four layers' masks each (layers 1 to 16),
-    public uint4 mask_textures_b; // then layers 17 to 32
+    public uint4 mask_textures_b; // then layers 17 to 32; MATERIAL_FLAG_MASK_PAIRS: two each
 };
 
 static const uint MATERIAL_FLAG_HEX_TILING = 1; // Material::flags, forge_render::material
@@ -174,6 +174,7 @@ static const uint MATERIAL_FLAG_MULTILAYER = 32768; // a layered material (D-095
 static const uint MATERIAL_FLAG_ROOM_ATLAS = 131072; // with INTERIOR: the rooms as pictures of rooms (`RoomAtlas`)
 static const uint MATERIAL_FLAG_MICROBLEND = 65536; // a layered material's layer with a microblend in its mask slots: texture, tiles, contrast, normal strength, offset u, v (float bits)
 static const uint MATERIAL_FLAG_DRAWN_AFTER = 8192; // left out of the visibility pass, drawn after the resolve; the rays meet it (D-065's glass)
+static const uint MATERIAL_FLAG_MASK_PAIRS = 262144; // with MULTILAYER: its masks two a texture (BC5), the ninth and tenth in mask_texture_8 and _9
 static const uint CUTOUT_GROUND_WINDOW = 1u << 31; // `cluster_cutouts`: windowed ground reaching into the ground window (#197)
 static const uint CUTOUT_LADDER = 1u << 30;        // `describe_cluster`: a cluster of an instance crossing its ladder (D-075), dithered (`cutout_kept`)
 static const uint MESH_WINDOWED_GROUND = 1;     // Mesh::flags: its fragments in the frame's ground window go (#197)
@@ -5457,6 +5458,27 @@ LightInputs uv_mapped_light(Frame* f, Material mat, Surface s)
 // those under it by its mask times its opacity. The presence map's bits, at the masks' level of
 // detail and joined over the wave so the loop runs alike in every lane, name the layers that can
 // show here: the others cost nothing.
+// The texture holding a layered material's mask `m` (layer m + 1's): four masks a texture (RGBA8),
+// or with MATERIAL_FLAG_MASK_PAIRS two (BC5, D-105's masks in BC4), the ninth and tenth in the
+// row's own words; TEXTURE_NONE past its last.
+uint layer_mask_image(Material mat, uint m)
+{
+    uint slot = (mat.flags & MATERIAL_FLAG_MASK_PAIRS) != 0u ? m / 2u : m / 4u;
+    if (slot < 4u)
+        return mat.mask_textures_a[slot];
+    if (slot < 8u)
+        return mat.mask_textures_b[slot - 4u];
+    if ((mat.flags & MATERIAL_FLAG_MASK_PAIRS) == 0u)
+        return TEXTURE_NONE;
+    return slot == 8u ? mat.mask_texture_8 : (slot == 9u ? mat.mask_texture_9 : TEXTURE_NONE);
+}
+
+// Its channel in that texture.
+uint layer_mask_channel(Material mat, uint m)
+{
+    return (mat.flags & MATERIAL_FLAG_MASK_PAIRS) != 0u ? m % 2u : m % 4u;
+}
+
 LightInputs multilayer_light(Frame* f, Material mat, Surface s)
 {
     LightInputs li = uv_mapped_light(f, f[0].materials[mat.first_layer], s);
@@ -5487,11 +5509,11 @@ LightInputs multilayer_light(Frame* f, Material mat, Surface s)
             continue;
         Material layer = f[0].materials[mat.first_layer + k];
         uint m = k - 1u;
-        uint mask_image = m < 16u ? mat.mask_textures_a[m / 4u] : mat.mask_textures_b[m / 4u - 4u];
+        uint mask_image = layer_mask_image(mat, m);
         if (mask_image == TEXTURE_NONE)
             continue;
         float4 masks = sample_image_grad(mask_image, SAMPLER_ANISOTROPIC_WRAP, s.uv, gx, gy);
-        float mask = masks[m % 4u];
+        float mask = masks[layer_mask_channel(mat, m)];
         float4 microblend = float4(0.0);
         float microblend_strength = 0.0;
         // Its microblend (D-095, `forge_core::material::Microblend`): the mask's edge broken up by
@@ -10088,8 +10110,7 @@ void texture_need_main(uint3 id : SV_DispatchThreadID)
         need_row(need, layer, s.duvdx, s.duvdy);
         if (k == 0u)
             continue;
-        uint m = k - 1u;
-        need_level(need, m < 16u ? mat.mask_textures_a[m / 4u] : mat.mask_textures_b[m / 4u - 4u], s.duvdx, s.duvdy);
+        need_level(need, layer_mask_image(mat, k - 1u), s.duvdx, s.duvdy);
         if ((layer.flags & MATERIAL_FLAG_MICROBLEND) != 0u)
         {
             float tiles = asfloat(layer.mask_textures_a.y);

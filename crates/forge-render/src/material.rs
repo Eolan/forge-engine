@@ -158,6 +158,11 @@ pub fn layer_mask_textures(
     height: u32,
     masks: &[&[u8]],
 ) -> Vec<TextureData> {
+    assert!(
+        masks.len() <= 32,
+        "{} masks: at most 32 layers",
+        masks.len()
+    );
     let texels = (width * height) as usize;
     assert!(
         masks.iter().all(|m| m.len() == texels),
@@ -180,6 +185,33 @@ pub fn layer_mask_textures(
                 srgb: false,
                 levels: box_levels(level, width, height),
             }
+        })
+        .collect()
+}
+
+/// A layered material's masks (`width × height` bytes each, rows top to bottom, layer 1's first)
+/// two a texture as BC5, with every level ([`crate::dds::masks_to_bc5`]; D-105's masks in BC4):
+/// half the bytes of [`layer_mask_textures`]' RGBA8. Layer `k`'s mask is channel `(k - 1) % 2` of
+/// texture `(k - 1) / 2`; an odd count's last texture has an empty second channel. For a
+/// [`forge_core::material::Multilayer`] with `pairs`: at most 20 masks.
+pub fn layer_mask_textures_bc5(
+    name: &str,
+    width: u32,
+    height: u32,
+    masks: &[&[u8]],
+) -> Vec<crate::dds::CompressedTexture> {
+    assert!(
+        masks.len() <= 20,
+        "{} masks: at most 20 in pairs",
+        masks.len()
+    );
+    let empty = vec![0u8; (width * height) as usize];
+    masks
+        .chunks(2)
+        .enumerate()
+        .map(|(k, pair)| {
+            let second = pair.get(1).copied().unwrap_or(&empty);
+            crate::dds::masks_to_bc5(&format!("{name} masks {k}"), width, height, pair[0], second)
         })
         .collect()
 }
@@ -234,15 +266,18 @@ pub struct GpuMaterial {
     /// Cut out under this base colour alpha ([`MATERIAL_MASKED`]), and the factor's alpha.
     alpha_cutoff: f32,
     alpha: f32,
-    pad: u32,
+    /// A layered material with [`MATERIAL_MASK_PAIRS`]: its ninth masks' texture (layers 17 and
+    /// 18).
+    mask_texture_8: u32,
     /// A layered material's layer: roughness from `[0]` to `[1]`, metalness from `[2]` to `[3]`.
     levels: [f32; 4],
     /// A layered material: its first layer's row, its layers, its presence map's bindless index,
-    /// then its masks' (a texture per four layers).
+    /// with [`MATERIAL_MASK_PAIRS`] its tenth masks' texture (layers 19 and 20), then its masks'
+    /// (a texture per four layers, or per two).
     first_layer: u32,
     layer_count: u32,
     presence_texture: u32,
-    pad_layers: u32,
+    mask_texture_9: u32,
     mask_textures: [u32; 8],
 }
 
@@ -279,10 +314,12 @@ impl GpuMaterial {
     }
 
     /// Its texture fields (D-105's second step): the colour, normal, metal-roughness (or
-    /// metalness), occlusion, emissive and presence maps, then its masks, or a microblend row's
-    /// microblend alone: the mask fields after the first hold its floats (tiling, contrast,
-    /// strength, offset; [`MATERIAL_MICROBLEND`]).
+    /// metalness), occlusion, emissive and presence maps, then its masks (with
+    /// [`MATERIAL_MASK_PAIRS`], ten), or a microblend row's microblend alone: the mask fields
+    /// after the first hold its floats (tiling, contrast, strength, offset;
+    /// [`MATERIAL_MICROBLEND`]).
     fn texture_fields(&mut self) -> Vec<&mut u32> {
+        let pairs = self.flags & MATERIAL_MASK_PAIRS != 0;
         let masks = if self.flags & MATERIAL_MICROBLEND != 0 {
             &mut self.mask_textures[..1]
         } else {
@@ -297,6 +334,10 @@ impl GpuMaterial {
             &mut self.presence_texture,
         ];
         fields.extend(masks.iter_mut());
+        if pairs {
+            fields.push(&mut self.mask_texture_8);
+            fields.push(&mut self.mask_texture_9);
+        }
         fields
     }
 
@@ -535,6 +576,11 @@ pub const MATERIAL_MICROBLEND: u32 = 65536;
 /// ([`forge_core::material::RoomAtlas`]): the atlas in the colour map's slot, a room's size in
 /// `uv_u` and the atlas's rooms across and down in `uv_v`.
 pub const MATERIAL_ROOM_ATLAS: u32 = 131072;
+
+/// [`GpuMaterial`]'s flags: with [`MATERIAL_MULTILAYER`], its masks two a texture (BC5,
+/// [`forge_core::material::Multilayer::pairs`]): layer `k`'s mask is channel `(k - 1) % 2` of
+/// its masks' texture `(k - 1) / 2`, the ninth and tenth in the row's own two words.
+pub const MATERIAL_MASK_PAIRS: u32 = 262144;
 
 /// The textures a world's materials sample, uploaded with their mips and visible to every
 /// shader through the bindless set. Released when dropped.
@@ -1423,6 +1469,11 @@ pub fn gpu_rows(table: &MaterialTable, textures: Option<&TextureSet>) -> Vec<Gpu
                     } else {
                         0
                     }
+                    | if multilayer.is_some_and(|m| m.pairs) {
+                        MATERIAL_MASK_PAIRS
+                    } else {
+                        0
+                    }
                     | if multilayer.is_none() && uv.microblend.is_some() {
                         MATERIAL_MICROBLEND
                     } else {
@@ -1460,12 +1511,12 @@ pub fn gpu_rows(table: &MaterialTable, textures: Option<&TextureSet>) -> Vec<Gpu
                 occlusion_strength: uv.occlusion_strength,
                 alpha_cutoff: uv.alpha_cutoff.unwrap_or(0.0),
                 alpha: r.grating.unwrap_or(uv.alpha),
-                pad: 0,
+                mask_texture_8: texture(multilayer.and_then(|m| m.masks[8])),
                 levels: uv.levels.unwrap_or([0.0, 1.0, 0.0, 1.0]),
                 first_layer: multilayer.map_or(0, |m| row as u32 + m.offset.max(1)),
                 layer_count: multilayer.map_or(0, |m| m.layers),
                 presence_texture: texture(multilayer.map(|m| m.presence)),
-                pad_layers: 0,
+                mask_texture_9: texture(multilayer.and_then(|m| m.masks[9])),
                 mask_textures: match (multilayer, uv.microblend) {
                     (None, Some(mb)) => [
                         texture(Some(mb.texture)),
@@ -1565,6 +1616,25 @@ mod tests {
 
     /// A GPU test (`FORGE_GPU_TESTS=1`): textures added together know their alpha as textures
     /// added one at a time do: opaque, a plane, or unknown.
+    /// Three masks in pairs: two BC5 textures named in order, the second's green channel empty.
+    #[test]
+    fn three_masks_go_into_two_bc5_textures() {
+        let (w, h) = (8_u32, 8_u32);
+        let masks = [vec![255_u8; 64], vec![0_u8; 64], vec![128_u8; 64]];
+        let refs: Vec<&[u8]> = masks.iter().map(Vec::as_slice).collect();
+        let t = layer_mask_textures_bc5("setup", w, h, &refs);
+        assert_eq!(t.len(), 2);
+        assert_eq!(t[0].name, "setup masks 0");
+        assert_eq!(t[1].name, "setup masks 1");
+        assert!(t.iter().all(|t| t.format == crate::dds::BlockFormat::Bc5));
+        // 8 x 8 down to 1 x 1: four levels; level 0 four blocks of 16 bytes.
+        assert_eq!(t[1].levels.len(), 4);
+        assert_eq!(t[1].levels[0].len(), 4 * 16);
+        // A block's channel (BC4): its two endpoints first; a flat 0 has both at 0.
+        let green = &t[1].levels[0][8..16];
+        assert_eq!((green[0], green[1]), (0, 0));
+    }
+
     #[test]
     fn textures_added_together_know_their_alpha() {
         let Some(gpu) = forge_gpu::Headless::for_test(forge_gpu::headless::shaders_of(env!(
@@ -1646,6 +1716,19 @@ mod tests {
         layered.mask_textures[1] = 11;
         assert!(layered.remap_texture(11, 20));
         assert_eq!(layered.texture_slots(), vec![12, 10, 20]);
+        // Without pairs the row's two words are not slots: 0 in them is no texture 0.
+        layered.mask_texture_8 = 0;
+        assert_eq!(layered.texture_slots(), vec![12, 10, 20]);
+
+        // In pairs (BC5), the ninth and tenth masks' textures are the row's own two words.
+        let mut paired = none(MATERIAL_UV | MATERIAL_MULTILAYER | MATERIAL_MASK_PAIRS);
+        paired.presence_texture = 12;
+        paired.mask_textures[0] = 10;
+        paired.mask_texture_8 = 18;
+        paired.mask_texture_9 = TEXTURE_NONE;
+        assert_eq!(paired.texture_slots(), vec![12, 10, 18]);
+        assert!(paired.remap_texture(18, 28));
+        assert_eq!(paired.texture_slots(), vec![12, 10, 28]);
 
         let tiles = 4.0f32;
         let mut microblend = none(MATERIAL_UV | MATERIAL_MICROBLEND);
