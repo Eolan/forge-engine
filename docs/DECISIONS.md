@@ -12133,7 +12133,7 @@ mask in fixed-function hardware), was filed in 2000 and has expired. The searche
     most the bytes it is given, but always makes at least one change.
   - **Eviction:** textures wanted strictly longer ago drop to their tails, the oldest first. Textures wanted in the same
     frame never evict each other.
-  - **Not yet:** the rows' remap (step 2), and the planner wired to `remake`.
+  - **Not wired yet** to `remake` and the rows' remap (below).
 - **Simulated on the private district** (`FORGE_TEXTURE_FEEDBACK=1`: the frames' wants fed to a planner over the
   block-compressed maps, nothing streamed). The benchmark path at 2560 x 1440 under DLSS Quality, 5,000 frames, at most
   32 MiB remade a frame:
@@ -12153,7 +12153,6 @@ mask in fixed-function hardware), was filed in 2000 and has expired. The searche
   - **Compressed:** BC4 a mask halves them.
 - **A first simulation over every texture, masks included, said a 1 GiB pool was enough. It was wrong:** D-105 keeps the
   masks resident.
-
 - **What step 2 must hold (found while planning it):**
   - **Which fields are slots:** the colour, normal, metal-roughness, occlusion, emissive and presence maps are slots on
     every row. A microblend row (`MATERIAL_MICROBLEND`) keeps its microblend's slot in its first mask field, and
@@ -12182,4 +12181,5 @@ mask in fixed-function hardware), was filed in 2000 and has expired. The searche
   - **A slideshow's picture was remapped.** Its texture is written into its row every frame, so `remap_texture`
     refuses it and the texture stays resident.
   - **The first simulation streamed the masks too.** It is redone above over the maps alone.
-  - **Next:** wiring the planner, `remake` and the remap together in the private district, then the files (step 4).
+- **Next:** wiring the planner, `remake` and the remap together in the private district (the maps only), then the
+  files (step 4).
