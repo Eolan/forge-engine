@@ -147,6 +147,43 @@ fn level_size(format: vk::Format, width: u32, height: u32) -> u64 {
     }
 }
 
+/// A layered material's masks as [`TextureSet::add_layer_masks`] uploads them, made on the CPU
+/// alone: `masks` of `width × height` texels each (one byte, rows top to bottom), four to an
+/// RGBA8 texture (mask `k` in channel `k % 4` of texture `k / 4`), each with its box-filtered
+/// levels. A loader makes them on its workers and uploads them together ([`upload_textures`],
+/// [`TextureSet::add_uploaded`]).
+pub fn layer_mask_textures(
+    name: &str,
+    width: u32,
+    height: u32,
+    masks: &[&[u8]],
+) -> Vec<TextureData> {
+    let texels = (width * height) as usize;
+    assert!(
+        masks.iter().all(|m| m.len() == texels),
+        "masks of {width} × {height}"
+    );
+    masks
+        .chunks(4)
+        .enumerate()
+        .map(|(k, group)| {
+            let mut level = vec![0u8; texels * 4];
+            for (c, mask) in group.iter().enumerate() {
+                for (t, &v) in mask.iter().enumerate() {
+                    level[t * 4 + c] = v;
+                }
+            }
+            TextureData {
+                name: format!("{name} masks {k}").into(),
+                size: width,
+                height,
+                srgb: false,
+                levels: box_levels(level, width, height),
+            }
+        })
+        .collect()
+}
+
 /// No texture (`TEXTURE_NONE` in `meshlet.slang`).
 pub const TEXTURE_NONE: u32 = u32::MAX;
 
@@ -525,28 +562,10 @@ impl TextureSet {
         height: u32,
         masks: &[&[u8]],
     ) -> Result<Vec<TextureId>> {
-        let texels = (width * height) as usize;
-        assert!(
-            masks.iter().all(|m| m.len() == texels),
-            "masks of {width} × {height}"
-        );
-        let mut ids = Vec::new();
-        for (k, group) in masks.chunks(4).enumerate() {
-            let mut level = vec![0u8; texels * 4];
-            for (c, mask) in group.iter().enumerate() {
-                for (t, &v) in mask.iter().enumerate() {
-                    level[t * 4 + c] = v;
-                }
-            }
-            ids.push(self.add(&TextureData {
-                name: format!("{name} masks {k}").into(),
-                size: width,
-                height,
-                srgb: false,
-                levels: box_levels(level, width, height),
-            })?);
-        }
-        Ok(ids)
+        layer_mask_textures(name, width, height, masks)
+            .iter()
+            .map(|data| self.add(data))
+            .collect()
     }
 
     /// Uploads a layered material's presence map ([`layer_presence`]'s levels, `width × height`
@@ -615,6 +634,22 @@ impl TextureSet {
             };
         }
         Ok(id)
+    }
+
+    /// Uploads every texture of `data` as [`Self::add`] would, as many to a submission as the
+    /// staging holds ([`upload_textures`]); their ids, in order. A loader that made its textures on
+    /// its workers uploads them so, not one wait a texture.
+    pub fn add_all(&mut self, data: &[TextureData]) -> Result<Vec<TextureId>> {
+        let uploaded = upload_textures(&self.device, data)?;
+        Ok(uploaded
+            .into_iter()
+            .zip(data)
+            .map(|((image, bytes), d)| {
+                let id = self.add_uploaded(image, bytes);
+                self.alpha[id.0 as usize] = texture_alpha(d);
+                id
+            })
+            .collect())
     }
 
     /// Adds a texture [`upload_textures`] uploaded, of `bytes` over its levels, and returns

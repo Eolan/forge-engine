@@ -3002,6 +3002,17 @@ table, and the hologram pass's moving rows, 64 bytes each, into its slot's rows.
 - **VRAM:** +193 MiB, one more copy of the 800,000-row table (the table as built serves frame slot 0). Two copies, as first pushed, cost +386 MiB.
 - **Slideshows** (`set_material_slides`): the private district's 299 advert boards ride in the same tables, so the only cost is their rows written each frame.
 
+## A district's layered masks made on workers (#214, 2026-11-07)
+
+The private district loads 2,424 layered materials' setups. Each setup's masks were read in parallel, then
+packed four to a texture, given their levels and uploaded one texture at a time on the main thread. Now
+`forge_render::material::layer_mask_textures` makes the textures on the loader's workers, and
+`TextureSet::add_all` uploads them together (16 MiB a submission, `upload_textures`):
+
+- **The setups:** 7.39 s → 3.64 s (the parallel read 2.45 → 2.28 s, now with the textures made in it; the upload 4.57 → 1.34 s).
+- **The district's loading screen:** 17.6 s → 13.2 and 14.7 s over two runs.
+- **The picture:** two of its stills differ from its baseline's by 109 and 299 pixels (FLIP mean 0.0007, 0.0004). The same build differs from itself by 97 and 350, so the change is within run-to-run noise.
+
 ## The textures' feedback (#385, 2026-11-07, a developer's switch)
 
 `FORGE_TEXTURE_FEEDBACK=1`, on the private district's path at 2560 × 1440 under DLSS Quality:
