@@ -12156,3 +12156,7 @@ The benchmark path at 2560 x 1440 under DLSS Quality, 5,000 frames, at most 32 M
     included, holds the new index, and the frames that read it are done. Retiring at the frame of the remake would
     free an image that a later frame's rays still sample.
   - **Slideshows' pictures, decals and holograms hold slots too.** Their textures stay resident until they follow.
+- **Step 2's first part is built (the same day):** `GpuMaterial::texture_slots` and `remap_texture` know a row's slot
+  fields by kind. A microblend row's floats are never taken for slots, even when their bits equal the slot moved; a unit
+  test checks that case. Next are the scene's frame-slot tables for a streamed scene, and the old image retired once
+  every slot's table holds the new index.

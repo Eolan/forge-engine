@@ -278,6 +278,52 @@ impl GpuMaterial {
         self.color_b = mean;
     }
 
+    /// Its texture fields (D-105's second step): the colour, normal, metal-roughness (or
+    /// metalness), occlusion, emissive and presence maps, then its masks, or a microblend row's
+    /// microblend alone: the mask fields after the first hold its floats (tiling, contrast,
+    /// strength, offset; [`MATERIAL_MICROBLEND`]).
+    fn texture_fields(&mut self) -> Vec<&mut u32> {
+        let masks = if self.flags & MATERIAL_MICROBLEND != 0 {
+            &mut self.mask_textures[..1]
+        } else {
+            &mut self.mask_textures[..]
+        };
+        let mut fields = vec![
+            &mut self.albedo_texture,
+            &mut self.normal_texture,
+            &mut self.metal_rough_texture,
+            &mut self.occlusion_texture,
+            &mut self.emissive_texture,
+            &mut self.presence_texture,
+        ];
+        fields.extend(masks.iter_mut());
+        fields
+    }
+
+    /// The bindless slots of the textures it samples, unset ones ([`TEXTURE_NONE`]) left out: a
+    /// streamer tells which textures a table refers to.
+    pub fn texture_slots(&self) -> Vec<u32> {
+        let mut row = *self;
+        row.texture_fields()
+            .into_iter()
+            .map(|f| *f)
+            .filter(|&s| s != TEXTURE_NONE)
+            .collect()
+    }
+
+    /// Its texture slots that are `from` moved to `to` (a streamed texture remade in a new slot,
+    /// D-105): whether it had any. A microblend row's floats are never taken for slots.
+    pub fn remap_texture(&mut self, from: u32, to: u32) -> bool {
+        let mut hit = false;
+        for field in self.texture_fields() {
+            if *field == from {
+                *field = to;
+                hit = true;
+            }
+        }
+        hit
+    }
+
     /// Whether its clusters take the cut-outs' raster (#171): cut out or double-sided, or drawn
     /// after the resolve (its fragments all go there).
     pub fn cut_out(&self) -> bool {
@@ -1537,6 +1583,58 @@ mod tests {
                 .any(|a| matches!(a, TextureAlpha::Plane(_)))
         );
         assert!(all.alpha.iter().any(|a| matches!(a, TextureAlpha::Opaque)));
+    }
+
+    /// A row's texture slots, field by field: a plain row's maps, a layered row's presence map
+    /// and masks, a microblend row's microblend but never its floats, even one whose bits are the
+    /// slot moved.
+    #[test]
+    fn a_rows_texture_slots_are_moved_field_by_field() {
+        let none = |flags: u32| GpuMaterial {
+            flags,
+            albedo_texture: TEXTURE_NONE,
+            normal_texture: TEXTURE_NONE,
+            metal_rough_texture: TEXTURE_NONE,
+            occlusion_texture: TEXTURE_NONE,
+            emissive_texture: TEXTURE_NONE,
+            presence_texture: TEXTURE_NONE,
+            mask_textures: [TEXTURE_NONE; 8],
+            ..bytemuck::Zeroable::zeroed()
+        };
+        let mut plain = none(MATERIAL_UV);
+        plain.albedo_texture = 5;
+        plain.normal_texture = 7;
+        plain.emissive_texture = 5;
+        assert_eq!(plain.texture_slots(), vec![5, 7, 5]);
+        assert!(plain.remap_texture(5, 9));
+        assert_eq!(plain.texture_slots(), vec![9, 7, 9]);
+        assert!(!plain.remap_texture(5, 9));
+
+        let mut layered = none(MATERIAL_UV);
+        layered.presence_texture = 12;
+        layered.mask_textures[0] = 10;
+        layered.mask_textures[1] = 11;
+        assert!(layered.remap_texture(11, 20));
+        assert_eq!(layered.texture_slots(), vec![12, 10, 20]);
+
+        let tiles = 4.0f32;
+        let mut microblend = none(MATERIAL_UV | MATERIAL_MICROBLEND);
+        microblend.mask_textures = [
+            30,
+            tiles.to_bits(),
+            0.5f32.to_bits(),
+            1.0f32.to_bits(),
+            0,
+            0,
+            0,
+            0,
+        ];
+        assert_eq!(microblend.texture_slots(), vec![30]);
+        // A slot equal to the tiling's bits: the tiling stays.
+        assert!(!microblend.remap_texture(tiles.to_bits(), 99));
+        assert_eq!(f32::from_bits(microblend.mask_textures[1]), tiles);
+        assert!(microblend.remap_texture(30, 40));
+        assert_eq!(microblend.mask_textures[0], 40);
     }
 
     /// A GPU test (`FORGE_GPU_TESTS=1`, D-105's first step): a texture remade with fewer levels
