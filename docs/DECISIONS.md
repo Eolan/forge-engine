@@ -10785,6 +10785,30 @@ pass group, the CPU ms of each thread's work) at 2560 × 1440, under DLSS Qualit
 fixed path flown or driven at speed; the numbers in `docs/PROFILE.md`. The private district (D-083,
 step 4) is the first scene held to it, then the demos.
 
+**Amended 🟡 (2026-11-07, proposed): the budget by group, from the private district's baseline.** The owner moved the
+effort to it ("the frame budget against your D-094 target"). The baseline is the district on its benchmark path at
+2560 x 1440, two runs, frozen with its scores and stills for later work to be checked against. GPU ms a frame by the
+profiler's groups (zones on the async queue overlap the graphics queue):
+
+| Group | DLSS Quality now | DLAA now | Proposed budget (DLSS Quality) |
+|---|---|---|---|
+| Lamps: ReSTIR DI and its denoiser | 4.6 | 9.7 | 1.5 |
+| GI: the traced bounce and its denoiser | 3.4 | 7.9 | 1.5 |
+| GI's probes (async, overlapped) | 3.0 | 3.6 | 1.5 |
+| Shading: the resolve, layered materials | 3.1 | 6.3 | 1.8 |
+| Geometry: culls and raster | 1.2 | 1.4 | 1.0 |
+| DLSS | 0.8 | 0.9 | 0.8 |
+| Fog, sun shadow, the movers' structure, sky, particles, AO, post | 2.2 | | 1.5 |
+| **The frame** | **17.1** | **31.7** | **8.1, under 8.33** |
+
+The levers, in the order they pay:
+- **The lamps, −3 ms:** fewer ReSTIR candidates, half-resolution reservoirs, and the lists for near lamps.
+- **The GI, −2 ms:** the trace at a quarter of the pixels, and the probes' rays capped per frame.
+- **Shading, −1.3 ms:** a material level of detail (far pixels read a layered material's flat colour), and the layers cut more tightly by their presence maps.
+- **The movers' structure, −0.3 ms:** refitted, not rebuilt each frame.
+
+The CPU's frame thread does about 1.4 ms of work, well within budget. Each cut is checked against the baseline's scores and stills before it lands.
+
 **Amended: the shipped game's benchmark is the floor, with every system running** (the owner,
 2026-11-01 morning: "keep in mind that we need, in general, other game systems to run (like
 entities managements, network, physics and so on) so the real goal is above 120 fps"; "we will
@@ -11967,3 +11991,50 @@ mask in fixed-function hardware), was filed in 2000 and has expired. The searche
 - **Cost:** they ride in the same per-slot tables as the motions, so nothing more than the rows written.
 - **Refused:** a show without pictures, one of no length, or a row that can't move its coordinates.
 - **In the private district,** 299 advert boards cycle through every district's fallback picture of their format, 8 s each. That interval is a guess at the source's rotation. Each board starts from its own picture, and boards change apart from their neighbours. The source's boards play videos; their stills are what the slideshow cycles.
+
+## D-105 — Textures streamed by whole levels, by need, into a pool 🟡 (proposed 2026-11-07, #385; the owner: "move the effort to ... texture streaming (#385)")
+
+**What was measured** (#385's first step). The measuring tool is kept on a local branch for now; see "Patents". The private district on its benchmark path at 2560 x 1440:
+
+- **Resident:** 16,832 textures, 4,805 MiB.
+- **Needed over the path:** 1,498 MiB (DLAA 1,469).
+- **Within any 2 seconds:** mean 830 MiB, largest 908 (DLAA 840, 902). Of that, 601 MiB are the levels of 128 texels and less.
+- **Never wanted along the path:** 80 % of the textures.
+- **DLSS Quality wants what DLAA wants,** through D-070's mip bias.
+- **The load:** it uploads 8.6 GiB on one thread in 24 s, the textures most of it.
+
+**Proposed:**
+
+1. **Whole levels per texture,** not pages. Levels already reach a fifth of the memory. Pages would also save the unseen part of a texture that is partly seen, but they cost a page table and an indirection in every sample, and the page tables' art is live (below).
+2. **A pool sized from the measure** (1 GiB here), each texture resident from its wanted level down. The levels of 128 texels and less stay resident; 64 is to be measured.
+3. **A change of levels makes the image again:** its new top level is loaded, the coarser levels are copied over, and its bindless slot is swapped between frames. Sampling uses whatever levels the image holds. No clamp table.
+4. **One predictor:** what the frames sampled. No camera or distance predictor is merged into it.
+5. **The files:** each level readable alone (KTX2 with per-level supercompression), held in the package (#214).
+6. **What decides a texture's level is the open question,** because of the patent below:
+   - (a) per-texture, per-level sample counts on the GPU, with the level chosen on the CPU from the decayed counts. Coverage scoring needs those counts anyway; whether this avoids the claim is arguable.
+   - (b) wait for 2031.
+   - (c) prior art before 2008, such as Lefebvre, Darbon and Neyret's "Texture Load Map" (INRIA RR-5210, 2004), as a question for counsel.
+
+**Patents.** A check on 2026-11-07 from Google Patents pages. It is not a legal opinion.
+
+- **AMD US 8,233,006 B2, live, adjusted expiry 2031-06-01:** "Texture level tracking, feedback, and clamping system for graphics processors".
+  - **Claim 1** names no hardware. It claims textures with unique identifiers, and a tracking table that links an image region to a "minimum rendered LOD", indexed by the identifiers and updated when a finer level is seen.
+  - **What it reads on:** a buffer of each texture's minimum level, which is what the first measure keeps (an atomic minimum by bindless index). It also reads on a CPU table of each texture's finest level.
+  - **Claim 12:** a clamping table of per-region levels loaded over time, which step 3 avoids.
+  - **The measuring tool** is therefore on a local branch, not pushed, until the owner decides.
+- **Live, but this proposal stays clear of them:**
+  - Microsoft US 10,388,058 B2: a residency map returning a fractional level. No fade by residency here.
+  - Microsoft US 8,587,602 B2: per-tile thresholds in the texture unit, which is hardware and page-granular.
+  - AMD US 12,524,950 B2: filtering biased by a loading level's status. No fade-in here.
+  - Intel US 12,461,751 B2: lock-free streaming. Its claim 17 holds a resource for a number of frames before eviction; here the hold is by time, and threads may wait.
+  - Unity US 10,748,241 B2, US 11,195,250 B2 and US 11,893,656 B2: several predictors combined. Here there is one.
+  - Intel US 12,412,332 B2: hardware sampler feedback.
+  - AMD US 12,608,753 B2: prefetch circuitry.
+- **The page tables' art, for the alternative:** ARM US 9,349,210 B2, and NVIDIA US 7,746,352 B2 and US 8,681,169 B2, are live.
+- **Expired:** SGI's clipmap, US 5,760,783; 3Dlabs' doubly virtualized texture memory, US 6,683,615.
+- **Not searched:** KTX2, Zstandard and Basis.
+
+**The owner's call:**
+
+- The design-around for step 6: (a), (b) or (c).
+- Whether the measuring tool may come into the engine as it is: a developer's switch, off by default and not compiled.
