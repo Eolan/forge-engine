@@ -563,6 +563,26 @@ The physics layer's "hits simulated rather than played":
 - **Next:** the shot rewound to the moment its shooter saw (#268's lag compensation in a scene),
   a mannequin's fall from its stand.
 
+**Amended (2026-11-07): a skinned mesh whose rays keep it as cooked** (the owner's go: "go with the skinned rays option").
+`MeshletSceneBuilder::set_skin_rays(mesh, false)`: the skin pass moves what is drawn, but the ray-traced copy keeps the mesh's
+vertices as cooked. Its structure is a static one, never refitted, and the pass writes none of its ray positions. The rays still
+follow by default, so every scene so far renders exactly as before.
+
+- **Why:** refitting every skinned mesh's structure every frame costs as many structures as there are meshes. A crowd of 1,017
+  skinned meshes (6 million triangles) took about 1.7 ms a frame in refits on top of 0.9 ms of skinning, at 2560 x 1440.
+- **The trade:** shadows, reflections and bounce light keep the cooked pose. A body that barely moves, cooked in the pose it holds
+  most (a crowd's idle loops), loses little. A body cooked in a pose it leaves, such as a rig's bind pose, casts that pose's
+  shadow, so the option is for the first kind.
+- **Where the copy stands:** where the mover alone places it. Whatever the joints' matrices carry (a heading, a root's offset)
+  is lost, so it suits a mesh whose joints move it about its mover's frame only. The lab's creatures and gulls are the other kind:
+  their placement is in their joints, so under the lab's flag their copies stand unturned and too high, and their shadows are
+  wrong. The lab's run measures the cost, not the look. A still copy's cut also takes a static mesh's steps: its cut-out and jelly
+  rows split out and opacity micromaps, which moves a jelly slime's shadow-ray start a little under the flag.
+- **Measured, cost only,** on `physics-lab --lab creatures --skin-rays-still` (its mannequins, dogs and slimes, 9 skinned meshes), 1920 x
+  1080, 900 frames, two alternated runs each: the frame 5.17 and 5.16 ms with the rays following, 4.94 and 4.95 ms with them still.
+  `skin/blas` (0.28 to 0.29 ms) is gone; `movers/tlas` reads 0.27 ms instead of 0.13, because the refits had hidden part of its
+  zone: the profiler's zones run from mark to mark, and a pass beside another reads shorter. The frame is the measure.
+
 ## D-013 — Vegetation, impostor ladder, trim sheets ✅ (2026-09-24)
 
 Trees are grown, not modelled: Weber–Penn parameter files per species, space colonisation

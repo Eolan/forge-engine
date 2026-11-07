@@ -224,6 +224,10 @@ pub(crate) struct SkinSource {
     /// Per cluster vertex as `vertices`, its second four joints, when they follow up to eight
     /// (#169).
     pub more: Option<Vec<SkinMore>>,
+    /// Whether the rays follow it: its ray-traced copy rewritten and its structure refitted on
+    /// every frame it is skinned. When not, the rays keep its vertices as cooked
+    /// ([`crate::MeshletSceneBuilder::set_skin_rays`]).
+    pub rays: bool,
 }
 
 /// Ring slots of the joints' matrices: this frame's, the frame before's and one more, as the
@@ -419,6 +423,7 @@ impl SceneSkins {
             morph_targets = morph_count,
             morph_deltas = morph_deltas.len(),
             eight_joint_vertices = eight,
+            rays = has_rays,
             "skinned meshes ready"
         );
         let storage = vk::BufferUsageFlags::STORAGE_BUFFER;

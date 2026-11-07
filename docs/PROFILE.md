@@ -1432,6 +1432,10 @@ The skinned creatures on the GPU (#165), the same run, 1080p:
 | `skin/blas`: five bottom-level structures of 10 000 triangles refitted in place | 0.109 |
 | `movers/tlas`: the movers' top-level structure over them | 0.050 |
 
+*2026-11-07, a skinned mesh's rays kept as cooked (`set_skin_rays`, D-012's amendment):*
+`physics-lab --lab creatures` at 1920 x 1080 (9 skinned meshes), two alternated runs each: 5.17 and 5.16 ms with the rays
+following, 4.94 and 4.95 ms with `--skin-rays-still`, a measure of cost only (the lab places its bodies through their joints, so their still copies stand wrong). `skin/blas` (0.28 to 0.29 ms) is gone.
+
 The frame is 1.41 ms on the GPU (1.44 ms with the slime, a sixth skinned mesh of 4 098 vertices
 and 258 joints: `skin/vertices` 0.006 ms, `skin/blas` 0.105 ms). Recording the five refits as
 one build command or as five costs the same: the refit's cost is in the triangles.

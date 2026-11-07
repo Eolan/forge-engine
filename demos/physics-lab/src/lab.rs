@@ -3002,6 +3002,7 @@ pub(crate) fn build(
                 let id = builder.add_skinned_mesh(&kinds_cooked[k], kind.body().joints as u32);
                 builder.set_mesh_material(id, row);
                 builder.set_skin_blend(id, skin_blend);
+                builder.set_skin_rays(id, !flags.skin_rays_still);
                 per_mesh.push((id, 1));
             }
             // The slimes after them, one mesh each in its flavour: their points are its joints.
@@ -3026,6 +3027,7 @@ pub(crate) fn build(
                 };
                 for k in 0..slimes {
                     let id = builder.add_skinned_mesh(&cooked, slime::POINTS as u32);
+                    builder.set_skin_rays(id, !flags.skin_rays_still);
                     builder.set_mesh_material(id, slime_rows[k % slime_rows.len()]);
                     per_mesh.push((id, 1));
                 }
@@ -3048,6 +3050,7 @@ pub(crate) fn build(
                     let id = builder.add_skinned_mesh(&cooked, rig.skeleton.len() as u32);
                     builder.set_mesh_material(id, bird_row);
                     builder.set_skin_blend(id, skin_blend);
+                    builder.set_skin_rays(id, !flags.skin_rays_still);
                     per_mesh.push((id, 1));
                 }
             }

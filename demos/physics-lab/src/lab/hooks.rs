@@ -130,6 +130,13 @@ pub(crate) struct LabArgs {
     /// joint keeps its thickness, a bending one swells a little (#169, D-052; on request only).
     #[arg(long)]
     pub(crate) dual_quaternion: bool,
+    /// Let the rays keep the lab's creatures', slimes' and gulls' skinned meshes as cooked instead
+    /// of refitting them every frame (`MeshletSceneBuilder::set_skin_rays`): a measure of what it
+    /// saves, nothing more. The lab places its bodies through their joints, which the still copy
+    /// loses, so under it the rays meet the bodies at their movers' places, unturned and too high:
+    /// shadows, reflections and bounce are wrong.
+    #[arg(long)]
+    pub(crate) skin_rays_still: bool,
     /// `--lab creatures`: draw the mannequins' left forearm twisted or bent 90° on top of their
     /// pose, to compare the skinning's blends (#169).
     #[arg(long, value_enum)]

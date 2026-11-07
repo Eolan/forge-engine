@@ -318,7 +318,8 @@ pub(super) struct DynamicSeed<'a> {
     /// instances: the CPU writes them every frame, the editor never.
     pub movers: std::ops::Range<u32>,
     /// Per mesh, whether it is skinned ([`MeshletSceneBuilder::add_skinned_mesh`]): its pages
-    /// pinned where the skin pass writes them and its structure refitted in the frame.
+    /// pinned where the skin pass writes them and, unless its rays keep it as cooked
+    /// (`MeshletSceneBuilder::set_skin_rays`), its structure refitted in the frame.
     pub skinned: Vec<bool>,
 }
 

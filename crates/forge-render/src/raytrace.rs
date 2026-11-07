@@ -78,8 +78,9 @@ pub(crate) struct Cut {
     /// #326), or its `SHADOW_BIAS` where the mesh has cut-out sections; negative for the start
     /// by the cut even then.
     pub shadow_start: f32,
-    /// A skinned mesh's (#165): its structure is refitted every frame from the positions the
-    /// skin pass writes ([`forge_gpu::DynamicBlas`]).
+    /// A skinned mesh's the rays follow (#165): its structure is refitted every frame from the
+    /// positions the skin pass writes ([`forge_gpu::DynamicBlas`]). A skinned mesh whose rays
+    /// keep it as cooked (`MeshletSceneBuilder::set_skin_rays`) has a static cut.
     pub dynamic: bool,
     /// The sections some instance draws cut out (or as jelly), a bit each ([`Cut::split`],
     /// #307): their triangles come last, in the structure's second geometry, not opaque.
@@ -486,8 +487,8 @@ impl SceneRays {
         self.materials = address;
     }
 
-    /// Builds one bottom-level structure per cut: a static one, or for a skinned mesh's cut
-    /// ([`Cut::dynamic`]) one refitted every frame over the hit positions. With `capacity` (a
+    /// Builds one bottom-level structure per cut: a static one, or for a skinned mesh's cut the
+    /// rays follow ([`Cut::dynamic`]) one refitted every frame over the hit positions. With `capacity` (a
     /// dynamic scene, #220) the tables have room for the meshes it will take, each mesh's UVs at
     /// its first vertex, and each static mesh's structure is kept by its slot, to leave with it
     /// (a skinned one stays, #338). `opacity`: the cut-out triangles' opacity micromaps

@@ -1863,8 +1863,8 @@ impl MeshletSceneBuilder {
     /// Appends a skinned mesh of `joints` joints (#165, `crate::skin`): its clusters' vertices
     /// follow the matrices [`MeshletScene::set_skins`] gives every frame. Show it with a mover
     /// ([`MeshletSceneBuilder::reserve_movers`]), one instance per skinned mesh: the movers'
-    /// structure is the one rebuilt over its refitted structure every frame, and its vertices
-    /// are its own.
+    /// structure is the one rebuilt over its refitted structure every frame (or its static one,
+    /// [`Self::set_skin_rays`]), and its vertices are its own.
     pub fn add_skinned_mesh(&mut self, skinned: &SkinnedMesh, joints: u32) -> MeshId {
         let meshlet_offset = self.meshlets.len() as u32;
         let id = self.add_mesh(&skinned.mesh);
@@ -1878,8 +1878,24 @@ impl MeshletSceneBuilder {
             blend: crate::SkinBlend::Linear,
             morphs: skinned.morphs.clone(),
             more: skinned.more.clone(),
+            rays: true,
         });
         id
+    }
+
+    /// Whether the rays follow the skinned mesh `mesh` ([`Self::add_skinned_mesh`]); they do by
+    /// default. When not, its ray-traced copy keeps its vertices as cooked: a static structure,
+    /// never refitted, while the skin pass moves what is drawn. For a body that barely moves (a
+    /// crowd's idle loops) cooked in the pose it holds most: its shadows, reflections and bounce
+    /// keep that pose, and the frame saves the refits (`skin/blas`). A body cooked in a pose it
+    /// leaves (a rig's bind pose) casts that pose's shadow. The copy stands where the mover
+    /// alone places it: what the joints' matrices carry (a heading, a root's offset) is lost, so
+    /// the option suits a mesh whose joints move it about its mover's frame and no further. Its
+    /// cut then takes a static mesh's steps (its cut-out rows split out, opacity micromaps).
+    pub fn set_skin_rays(&mut self, mesh: MeshId, follow: bool) {
+        if let Some(skin) = self.skins.iter_mut().find(|s| s.mesh == mesh.0) {
+            skin.rays = follow;
+        }
     }
 
     /// Sets how the skinned mesh `mesh` ([`Self::add_skinned_mesh`]) blends its vertices'
@@ -2425,7 +2441,13 @@ impl MeshletSceneBuilder {
                 let error = raytrace::cut_error(&meshes, *budget);
                 grouped.extend(members.iter().map(|&m| (m as usize, (error, *budget))));
             }
-            let skinned: Vec<usize> = self.skins.iter().map(|s| s.mesh as usize).collect();
+            // The skinned meshes the rays follow: their structures are refitted (a dynamic cut).
+            let skinned: Vec<usize> = self
+                .skins
+                .iter()
+                .filter(|s| s.rays)
+                .map(|s| s.mesh as usize)
+                .collect();
             // Each mesh's cut on its own (its pages read and unpacked, #215), side by side.
             let cutting = forge_core::activity::begin(
                 "scene",
@@ -2527,8 +2549,8 @@ impl MeshletSceneBuilder {
             }
             // The sections each mesh's instances draw cut out or as jelly, whose triangles the
             // rays' query loop must see (#307); the others go in an opaque geometry. A dynamic
-            // scene's meshes and the skinned ones keep one opaque geometry: their instances with
-            // such rows stay non-opaque as a whole (`tlas_instances_main`).
+            // scene's meshes and the skinned ones the rays follow keep one opaque geometry: their
+            // instances with such rows stay non-opaque as a whole (`tlas_instances_main`).
             if self.dynamic.is_none() {
                 let mut masked = vec![0_u32; cuts.len()];
                 for inst in &self.instances {
@@ -2690,7 +2712,12 @@ impl MeshletSceneBuilder {
                 &self.skins,
                 &self.meshlets,
                 |page| page_slot[page as usize],
-                |mesh| rays.as_ref().map(|r| r.first_vertex(mesh)),
+                |mesh| {
+                    let follows = self.skins.iter().any(|s| s.mesh == mesh && s.rays);
+                    rays.as_ref()
+                        .filter(|_| follows)
+                        .map(|r| r.first_vertex(mesh))
+                },
             )?;
             for &(mesh, first) in &skins.meshes {
                 self.meshes[mesh as usize].skin = first;
