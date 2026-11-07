@@ -81,7 +81,7 @@ struct Effect
     float curl_size; // metres
     uint draw;       // DRAW_SMOKE or DRAW_GLOW
     float sun;       // the share of the sun's light it scatters (an artist's control, 1 by default)
-    float pad0;
+    float lamps;     // the share of the lamps' light it scatters (particles_lamps.slang; 0 by default)
     float pad1;
     float pad2;
 };

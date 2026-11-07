@@ -183,6 +183,7 @@ const PRECISE_ENTRIES: &[(&str, &str)] = &[
     ("fsr_rcas.slang", "rcas_main"),
     // D-064's particles: drawn into what DLSS's or FSR's history keeps.
     ("particles.slang", "advance_main"),
+    ("particles_lamps.slang", "lamps_main"),
     ("particles.slang", "vert_main"),
     ("particles.slang", "frag_main"),
     ("particles.slang", "frag_layer_main"),

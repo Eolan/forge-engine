@@ -191,3 +191,86 @@ curl = [1.0, 4.0]
 colour = [[0.86, 0.86, 0.88, 0.07], [0.90, 0.90, 0.92, 0.0]]
 sun = 0.2
 draw = "smoke"
+
+# Haze hanging in a room: big, slow puffs that barely move, lit by the room's lamps (`lamps`), where an
+# authored scene places them. From a shipped city's ambient smoke: five to eight puffs over 7 to 24 s,
+# about 2 m wide. Its opacities (`maxAlpha`) times a fit of 0.35, the puff's picture not being its.
+[haze-room]
+rate = 0.25
+life = [16.0, 24.0]
+radius = [0.9, 1.25]
+speed = [0.01, 0.04]
+cone = 90.0
+spread = 1.5
+gravity = 0.0
+drag = 0.3
+wind = 0.0
+curl = [0.03, 3.0]
+colour = [[0.6, 0.6, 0.6, 0.070], [0.6, 0.6, 0.6, 0.0]]
+sun = 0.2
+lamps = 0.4
+draw = "smoke"
+
+[haze-room-dense]
+rate = 0.25
+life = [16.0, 24.0]
+radius = [0.9, 1.25]
+speed = [0.01, 0.04]
+cone = 90.0
+spread = 1.5
+gravity = 0.0
+drag = 0.3
+wind = 0.0
+curl = [0.03, 3.0]
+colour = [[0.6, 0.6, 0.6, 0.245], [0.6, 0.6, 0.6, 0.0]]
+sun = 0.2
+lamps = 0.4
+draw = "smoke"
+
+[haze-room-quick]
+rate = 0.84
+life = [7.0, 12.0]
+radius = [1.0, 1.25]
+speed = [0.01, 0.04]
+cone = 90.0
+spread = 2.0
+gravity = 0.0
+drag = 0.3
+wind = 0.0
+curl = [0.03, 3.0]
+colour = [[0.6, 0.6, 0.6, 0.087], [0.6, 0.6, 0.6, 0.0]]
+sun = 0.2
+lamps = 0.4
+draw = "smoke"
+
+[haze-room-wide]
+rate = 0.7
+life = [16.0, 20.0]
+radius = [0.8, 1.25]
+speed = [0.01, 0.04]
+cone = 90.0
+spread = 7.0
+gravity = 0.0
+drag = 0.3
+wind = 0.0
+curl = [0.03, 3.0]
+colour = [[0.6, 0.6, 0.6, 0.140], [0.6, 0.6, 0.6, 0.0]]
+sun = 0.2
+lamps = 0.4
+draw = "smoke"
+
+[haze-room-thin]
+rate = 0.4
+life = [8.0, 14.0]
+radius = [0.6, 0.9]
+speed = [0.01, 0.04]
+cone = 90.0
+spread = 1.0
+gravity = 0.0
+drag = 0.3
+wind = 0.0
+curl = [0.03, 3.0]
+colour = [[0.6, 0.6, 0.6, 0.020], [0.6, 0.6, 0.6, 0.0]]
+sun = 0.2
+lamps = 0.4
+draw = "smoke"

@@ -118,6 +118,9 @@ pub struct Look {
     /// What the diffuse rays meet of a glow, times this (`MeshletRenderer::ray_glow`); none, as it is. A fit,
     /// for an authored scene lit by its neons.
     pub ray_glow: Option<f32>,
+    /// The particle effects that take a share of the lamps are lit by them
+    /// (`Particles::light_by_lamps`).
+    pub particle_lamps: bool,
     /// An environment map as the sky (D-084), for a scene authored under one: no air, no
     /// clouds, no night; the sun's direction from `sun`.
     pub environment: Option<Environment>,
@@ -185,6 +188,7 @@ impl Default for Look {
             shade_adapt: None,
             exposure_speeds: None,
             ray_glow: None,
+            particle_lamps: false,
             environment: None,
             tonemap: None,
             grading: None,

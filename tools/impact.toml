@@ -118,6 +118,7 @@
 "shaders/wakes.slang" = ["island"]
 "shaders/splashes.slang" = ["island", "lab"]
 "shaders/particles.slang" = ["lab"]
+"shaders/particles_lamps.slang" = ["lab"]
 "crates/forge-render/src/particles.rs" = ["lab"]
 "crates/forge-render/data/particles.toml" = ["lab"]
 "crates/forge-render/src/lamps.rs" = ["lab"]

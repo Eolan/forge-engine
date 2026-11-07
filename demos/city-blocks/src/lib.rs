@@ -2012,7 +2012,7 @@ impl Gallery {
             );
         }
         // The scene's particles (D-064), with its look.
-        let particles = (look.particles && !args.no_particles)
+        let mut particles = (look.particles && !args.no_particles)
             .then(|| {
                 forge_render::Particles::new(
                     &ctx.device,
@@ -2021,6 +2021,9 @@ impl Gallery {
                 )
             })
             .transpose()?;
+        if let Some(particles) = particles.as_mut().filter(|_| look.particle_lamps) {
+            particles.light_by_lamps(&ctx.device, &ctx.shaders)?;
+        }
         // A check of #338's lamp table: `FORGE_LAMP_TABLE` gives the frames their lamps by stable
         // ids, in sets in a table with dark places, the far lamps made again at run time;
         // `=toggle=K` removes set K at frame 100 and adds it again at frame 150.
@@ -4638,6 +4641,7 @@ impl Demo for Gallery {
                     tlas: self.scene.rays().map_or(0, |r| r.tlas_address()),
                     probes,
                     after_upscale: particles_after,
+                    frame: self.renderer.frame_address(frame.slot),
                 },
                 taa_frame.color,
                 targets.depth,

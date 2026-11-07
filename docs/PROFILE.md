@@ -1584,6 +1584,7 @@ walker's dust):
 | `particles/draw` (the smoke from the baked flipbook) | 0.085 |
 | `particles/advance [compute]` (a sun ray a particle) | 0.005 |
 | `particles/emit [compute]` | 0.001 |
+| `particles/lamps [compute]` (only a scene that asks: `Look::particle_lamps`) | 0.001 to 0.03 |
 
 The frame was 1.65 ms (best of three). The puffs are fill-bound: the plumes' overlapping sprites
 cost the draw, and the flipbook's are larger with four reads each (the procedural puffs drew in

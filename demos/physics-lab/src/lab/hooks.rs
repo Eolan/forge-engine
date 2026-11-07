@@ -288,6 +288,7 @@ impl Scenario for LabScenario {
             shade_adapt: None,
             exposure_speeds: None,
             ray_glow: None,
+            particle_lamps: false,
             // An authored scene under its authors' sky and sun (D-084), the chart under its own, for
             // comparisons with Falcor's renders.
             environment: kind.authored().and_then(super::bistro::environment),

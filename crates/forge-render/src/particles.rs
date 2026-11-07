@@ -13,7 +13,9 @@
 //! - `particles/emit` and `particles/advance` on the async compute queue: the new particles,
 //!   then every live one moved to the frame's time and lit once (D-064's point 4: one ray
 //!   towards the sun against the scene's structure, the probes' light from above and below, the
-//!   open sky's beyond them);
+//!   open sky's beyond them), then, where an effect takes a share of the lamps ([`Effect::lamps`])
+//!   and the scene asks ([`Particles::light_by_lamps`]), `particles/lamps`: the frame's lamps at
+//!   each puff's middle (`shaders/particles_lamps.slang`);
 //! - `particles/draw` after the sky's compose: soft puffs facing the camera, smoke
 //!   alpha-blended and embers added in one premultiplied blend, writing the reactive mask TAA
 //!   reads ([`crate::Taa::resolve`]), over the splashes' when they drew this frame. Under DLSS
@@ -116,6 +118,10 @@ pub struct Effect {
     /// source's plume, which reads grey in the shade and only a little brighter in the sun.
     #[serde(default = "full_sun")]
     pub sun: f32,
+    /// The share of the frame's lamps' light a lit puff scatters, each puff taking them at its middle
+    /// (0, the default: none, the probes' alone). Needs [`Particles::light_by_lamps`].
+    #[serde(default)]
+    pub lamps: f32,
 }
 
 /// [`Effect::sun`]'s default: the sun's whole light.
@@ -230,6 +236,9 @@ pub struct ParticleParams {
     /// [`Particles::composite_after_upscale`] lays over the upscaler's frame (DLSS's): not into
     /// `color`. [`Particles::update`] then returns the reactive mask it was given.
     pub after_upscale: bool,
+    /// The resolve's frame record ([`crate::MeshletRenderer::frame_address`]): its lamps, for the
+    /// effects that take them ([`Particles::light_by_lamps`]). 0: none.
+    pub frame: u64,
 }
 
 /// The particles' counters, for the log and the overlay.
@@ -273,10 +282,25 @@ struct GpuEffect {
     curl_size: f32,
     draw: u32,
     sun: f32,
-    pad: [f32; 3],
+    lamps: f32,
+    pad: [f32; 2],
 }
 
 const _: () = assert!(std::mem::size_of::<GpuEffect>() == 80);
+
+/// Mirrors `ParticleLampPush` in `particles_lamps.slang`.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, Pod, Zeroable)]
+struct LampPush {
+    camera: [f32; 4],
+    ring: u64,
+    effects: u64,
+    frame: u64,
+    base: u32,
+    live: u32,
+    capacity: u32,
+    now: f32,
+}
 
 /// An effect's flipbook as `particles.slang` numbers it: 0 none (a procedural puff), 1 the baked
 /// smoke, 2 the baked fire.
@@ -311,7 +335,8 @@ impl GpuEffect {
                 })
                 | (u32::from(e.streak) << 25),
             sun: e.sun.max(0.0),
-            pad: [0.0; 3],
+            lamps: e.lamps.max(0.0),
+            pad: [0.0; 2],
         }
     }
 }
@@ -417,6 +442,8 @@ pub struct Particles {
     effects: Vec<Effect>,
     emit: Pipeline,
     advance: Pipeline,
+    /// `particles/lamps`, once a scene asks ([`Particles::light_by_lamps`]).
+    lamps: Option<Pipeline>,
     draw: Pipeline,
     /// The draw into the layer: the light and the coverage, no reactive mask.
     draw_layer: Pipeline,
@@ -554,6 +581,7 @@ impl Particles {
             effects,
             emit: compute("emit_main", "particles emit")?,
             advance: compute("advance_main", "particles advance")?,
+            lamps: None,
             draw: draw?,
             draw_layer: draw_layer?,
             composite: compute("composite_main", "particles composite")?,
@@ -569,6 +597,29 @@ impl Particles {
             stats: Cell::new(ParticleStats::default()),
             flipbook,
         })
+    }
+
+    /// Lights the effects that take a share of the lamps ([`Effect::lamps`]): each frame, the frame's
+    /// lamps at each such puff's middle, unshadowed, as a froxel of the fog takes them. A scene asks
+    /// for it: its pipeline compiles the lamps' code (`particles_lamps.slang`), and no other
+    /// scene pays for that.
+    pub fn light_by_lamps(&mut self, device: &Arc<Device>, shaders: &ShaderCompiler) -> Result<()> {
+        if self.lamps.is_some() {
+            return Ok(());
+        }
+        let name = "particles lamps";
+        let module = device.create_shader_module(
+            &shaders.compile("particles_lamps.slang", "lamps_main", ShaderStage::Compute)?,
+            name,
+        )?;
+        let pipeline = device.create_compute_pipeline(&ComputePipelineDesc {
+            shader: (module, "lamps_main"),
+            push_constant_bytes: std::mem::size_of::<LampPush>() as u32,
+            name,
+        });
+        device.destroy_shader_module(module);
+        self.lamps = Some(pipeline?);
+        Ok(())
     }
 
     /// The effects, in the order emitters name them.
@@ -814,6 +865,28 @@ impl Particles {
             commands.dispatch(live.div_ceil(64), 1, 1);
             Ok(())
         });
+        if let Some(lamps) = self.lamps.as_ref().filter(|_| params.frame != 0) {
+            let push = LampPush {
+                camera: params.camera.extend(params.exposure).to_array(),
+                ring: self.ring.address(),
+                effects: self.table.address(),
+                frame: params.frame,
+                base,
+                live,
+                capacity: PARTICLE_CAPACITY,
+                now,
+            };
+            graph
+                .pass("particles/lamps")
+                .queue(QueueKind::Compute)
+                .buffer(ring_handle, BufferAccess::ShaderReadWrite(compute))
+                .run(move |_, commands| {
+                    commands.bind_pipeline(lamps);
+                    commands.push_constants(lamps, &push);
+                    commands.dispatch(live.div_ceil(64), 1, 1);
+                    Ok(())
+                });
+        }
         // Under DLSS, a layer and its coverage in place of the frame and the reactive mask.
         let layer = params.after_upscale.then(|| {
             let target = |name: &'static str, format: vk::Format| TransientDesc {
@@ -1016,7 +1089,12 @@ mod tests {
                 "steam-column",
                 "steam-vent",
                 "steam-column-small",
-                "steam-plume"
+                "steam-plume",
+                "haze-room",
+                "haze-room-dense",
+                "haze-room-quick",
+                "haze-room-wide",
+                "haze-room-thin"
             ]
         );
         assert!(effects[1].burst);

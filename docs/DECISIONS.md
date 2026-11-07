@@ -4883,6 +4883,8 @@ particle); a shadow ray per pixel (one a particle suits sprites); per-pixel link
 moment-based OIT (memory and bandwidth the village's few emitters do not need); smoke simulated
 at run time (a hero effect later).
 
+**Amended (2026-11-07): puffs lit by the lamps.** An effect may take a share of the lamps' light (`Effect::lamps`, 0 by default), where a scene asks (`Look::particle_lamps`, `Particles::light_by_lamps`): the pass `particles/lamps` (`shaders/particles_lamps.slang`) weighs the frame's lamps at each puff's middle, unshadowed, as a froxel of the fog (D-099) does, once a puff a frame. It is its own file because it needs `meshlet.slang`, so other scenes neither compile nor run it. The `haze-room*` effects are a room's hanging smoke. On the private district's bar, fog alone had stood in for that haze, and one lamp's column of it read 9 times the source's wall. With about 400 puffs: `particles/draw` +0.04 ms, the path +0.1 ms.
+
 **Decided** (the owner, 2026-10-17): "For D-064 go with recommended". The scope as proposed (the
 seven points above) and the textures baked by our own stable-fluids solver; EmberGen or
 downloaded sets stay out unless the owner says otherwise.
