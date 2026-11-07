@@ -3026,7 +3026,9 @@ alternated runs each:
 | Geometry | 5,397 MiB | 4,395 MiB |
 | VRAM | 12.8 GB | 11.8 GB |
 
-Both were measured before the cut-out fix of the same day, so neither run drew the cut-outs' raster.
+Both were measured before the cut-out fix of the same day, so neither run drew the cut-outs' raster. With it, the
+meshes with their cells gave 15.81 and 15.94 ms a frame, p99 18.67 and 18.75 ms (the second read from a package, D-053
+step 5), geometry the same.
 
 ## The textures' feedback (#385, 2026-11-07, a developer's switch)
 

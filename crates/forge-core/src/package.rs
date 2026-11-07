@@ -234,9 +234,8 @@ impl Package {
         self.entries.values().filter(move |e| e.kind == kind)
     }
 
-    /// Entry `id`'s file read whole, refused unless it is of `kind` in layout `format` and its
-    /// size and digest are the manifest's.
-    pub fn read_bytes(&self, id: &str, kind: &str, format: u32) -> io::Result<Vec<u8>> {
+    /// Entry `id` as listed, refused unless it is of `kind` in layout `format`.
+    fn listed(&self, id: &str, kind: &str, format: u32) -> io::Result<&Entry> {
         let entry = self
             .entries
             .get(id)
@@ -247,6 +246,32 @@ impl Package {
                 self.name, entry.kind, entry.format
             )));
         }
+        Ok(entry)
+    }
+
+    /// Entry `id`'s file, for a reader that takes it in parts (a mesh whose pages stream from it,
+    /// `forge_geom::cache::read_packaged`): refused unless it is of `kind` in layout `format` and
+    /// its size is the manifest's. Its digest is checked only by a whole read
+    /// ([`Self::read_bytes`]).
+    pub fn file(&self, id: &str, kind: &str, format: u32) -> io::Result<PathBuf> {
+        let entry = self.listed(id, kind, format)?;
+        let path = self.dir.join(&entry.file);
+        let bytes = fs::metadata(&path)
+            .map_err(|e| io::Error::new(e.kind(), format!("{}: {e}", path.display())))?
+            .len();
+        if bytes != entry.bytes {
+            return Err(invalid(format!(
+                "package {} entry {id}: its file ({bytes} bytes) isn't the manifest's ({} bytes)",
+                self.name, entry.bytes
+            )));
+        }
+        Ok(path)
+    }
+
+    /// Entry `id`'s file read whole, refused unless it is of `kind` in layout `format` and its
+    /// size and digest are the manifest's.
+    pub fn read_bytes(&self, id: &str, kind: &str, format: u32) -> io::Result<Vec<u8>> {
+        let entry = self.listed(id, kind, format)?;
         let bytes = fs::read(self.dir.join(&entry.file))?;
         let digest = format!("{:016x}", xxh3_64(&bytes));
         if bytes.len() as u64 != entry.bytes || digest != entry.digest {
@@ -341,6 +366,15 @@ mod tests {
         bytes[last] ^= 1;
         fs::write(&file, bytes).unwrap();
         wrong(p.read("b", "cell", 1), "isn't the manifest's");
+        // Taken in parts, a file of the listed size passes (its digest waits for a whole read); one
+        // of another size, or of another kind, is refused.
+        assert!(p.file("b", "cell", 1).is_ok());
+        assert!(p.file("b", "mesh", 1).is_err());
+        let mut longer = fs::read(&file).unwrap();
+        longer.push(0);
+        fs::write(&file, longer).unwrap();
+        let e = p.file("b", "cell", 1).unwrap_err().to_string();
+        assert!(e.contains("isn't the manifest's"), "{e}");
         // A manifest of another format.
         let text = fs::read_to_string(dir.join(MANIFEST)).unwrap();
         // The package's own format comes first in the manifest.

@@ -14,6 +14,10 @@
 //!
 //! A file that does not match (another key, version or size) is ignored and cooked again. A new
 //! file is written beside the old name and renamed into place.
+//!
+//! A cached file is also what a package carries for a mesh (D-053's step 5, #214): [`package_mesh`]
+//! copies it in as it is, [`read_packaged`] reads it back without the parameters its key was made
+//! from, so a game loads the mesh without the source it was cooked from.
 
 use std::collections::HashMap;
 use std::fs;
@@ -25,6 +29,7 @@ use std::time::Instant;
 
 use bytemuck::Pod;
 use forge_core::pack::{Codec, pack, par_chunks_mut, unpack};
+use forge_core::package::{Package, PackageWriter};
 
 use crate::meshlet::{CookOptions, GpuMeshlet, MeshletMesh, PackedPage, PageFile};
 use crate::page::PAGE_SIZE;
@@ -354,6 +359,71 @@ fn mesh_of(file: &str) -> Option<&str> {
     (key.len() == 16 && key.chars().all(|c| c.is_ascii_hexdigit())).then_some(mesh)
 }
 
+/// A package entry's kind for a cooked mesh (`forge_core::package`).
+pub const PACKAGE_KIND: &str = "mesh";
+
+/// A packaged mesh's layout: this file's format and the cook's version, so that a package cooked
+/// by other code is refused rather than read wrong.
+pub const PACKAGE_FORMAT: u32 = (FORMAT_VERSION << 16) | COOK_VERSION;
+
+/// The key a cached mesh's bytes were stored under; `None` when they hold no mesh of this format.
+fn stored_key(bytes: &[u8]) -> Option<u64> {
+    let mut r = Reader { bytes };
+    if r.take(4)? != MAGIC || r.u32()? != FORMAT_VERSION {
+        return None;
+    }
+    r.u64()
+}
+
+/// Copies the cached mesh in `file` (a [`save`]d one) into `package` as entry `id`; its size.
+pub fn package_mesh(package: &mut PackageWriter, id: &str, file: &Path) -> io::Result<u64> {
+    let mut head = [0u8; 16];
+    {
+        use std::io::Read;
+        fs::File::open(file)?.read_exact(&mut head)?;
+    }
+    if stored_key(&head).is_none() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("{}: not a cooked mesh of this engine", file.display()),
+        ));
+    }
+    package.put_file(id, PACKAGE_KIND, PACKAGE_FORMAT, file)
+}
+
+/// Mesh entry `id` of `package` ([`package_mesh`]'s copy): read whole, its pages with it and its
+/// digest checked; or, with `pages_in_memory` false, its hierarchy alone, its pages left in the
+/// package's file for the streamer to read one at a time ([`MeshletMesh::page_file`]), its size
+/// checked (its digest only by a whole read).
+pub fn read_packaged(
+    package: &Package,
+    id: &str,
+    pages_in_memory: bool,
+) -> io::Result<MeshletMesh> {
+    let bad = || {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "package {} entry {id}: not a cooked mesh of this engine",
+                package.name()
+            ),
+        )
+    };
+    if pages_in_memory {
+        let bytes = package.read_bytes(id, PACKAGE_KIND, PACKAGE_FORMAT)?;
+        let key = stored_key(&bytes).ok_or_else(bad)?;
+        return decode(&bytes, key).ok_or_else(bad);
+    }
+    let file = package.file(id, PACKAGE_KIND, PACKAGE_FORMAT)?;
+    let mut head = [0u8; 16];
+    {
+        use std::io::Read;
+        fs::File::open(&file)?.read_exact(&mut head)?;
+    }
+    let key = stored_key(&head).ok_or_else(bad)?;
+    load_hierarchy(&file, key).ok_or_else(bad)
+}
+
 /// A mesh and how it was obtained.
 pub struct Cooked {
     /// The cooked mesh.
@@ -472,6 +542,52 @@ mod tests {
         let back = decode(&encode(&mesh, 7), 7).expect("decodes");
         assert!(back.uvs);
         assert_eq!(back.pages, mesh.pages);
+    }
+
+    /// A cached mesh copied into a package reads back whole and as its hierarchy, without its key's
+    /// text; a changed byte fails the whole read, another length the hierarchy's.
+    #[test]
+    fn a_packaged_mesh_reads_back_without_its_key() {
+        let dir = std::env::temp_dir().join(format!("forge-cache-package-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let mesh = small();
+        let file = path(&dir.join("cache"), "rock", 11);
+        save(&file, &mesh, 11).expect("saved");
+        let mut w = PackageWriter::create(dir.join("package"), "rocks").expect("a package");
+        package_mesh(&mut w, "mesh/rock", &file).expect("packaged");
+        let raw = dir.join("raw.bin");
+        fs::write(&raw, [0u8; 64]).expect("written");
+        assert!(
+            package_mesh(&mut w, "mesh/raw", &raw).is_err(),
+            "not a cooked mesh"
+        );
+        w.finish().expect("finished");
+        let p = Package::open(dir.join("package")).expect("opens");
+        let whole = read_packaged(&p, "mesh/rock", true).expect("read whole");
+        assert_eq!(whole.pages, mesh.pages);
+        assert_eq!(whole.triangle_count, mesh.triangle_count);
+        let streamed = read_packaged(&p, "mesh/rock", false).expect("its hierarchy");
+        assert!(streamed.pages.is_empty());
+        assert_eq!(streamed.page_count, mesh.page_count);
+        assert_eq!(
+            bytemuck::cast_slice::<_, u8>(&streamed.meshlets),
+            bytemuck::cast_slice::<_, u8>(&mesh.meshlets)
+        );
+        let pages = streamed.page_file.expect("a page file");
+        assert!(pages.path.starts_with(p.dir()), "{}", pages.path.display());
+        assert!(read_packaged(&p, "mesh/none", true).is_err());
+        // One byte of a page changed: the whole read refuses it; the hierarchy, its size the same, is read.
+        let entry = p.dir().join(&p.entry("mesh/rock").expect("listed").file);
+        let mut bytes = fs::read(&entry).expect("read");
+        let last = bytes.len() - 1;
+        bytes[last] ^= 1;
+        fs::write(&entry, &bytes).expect("written");
+        assert!(read_packaged(&p, "mesh/rock", true).is_err());
+        assert!(read_packaged(&p, "mesh/rock", false).is_ok());
+        bytes.push(0);
+        fs::write(&entry, &bytes).expect("written");
+        assert!(read_packaged(&p, "mesh/rock", false).is_err());
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

@@ -3501,6 +3501,32 @@ Next is the cook and the runtime's use of it, on the private district.
   - its cells' records;
   - its textures, in the format D-105 settles.
 
+**Step 5's second part (2026-11-07): cooked meshes in a package.** The meshes came first: they are what a game can't
+make without the source's models, and a picture checks them exactly.
+
+- **The engine:**
+  - `forge_geom::cache::package_mesh` copies a cached mesh's file in as it is: kind `mesh`, its format the cache file's
+    and the cook's versions together, so a package cooked by other code is refused.
+  - `read_packaged` reads it back without the parameters its key was made from, in one of two ways:
+    - whole, its digest checked;
+    - as its hierarchy alone, its pages left in the package's file for the page streamer. `Package::file` checks the
+      size; the digest waits for a whole read.
+- **On the private district:** its viewer writes its 14,930 drawn meshes into a package (953 MiB, 6.8 s) and draws from
+  it with no mesh cooked and no model looked up. Read back:
+
+  | | From the cache | From the package |
+  |---|---|---|
+  | Resident, whole | 0.56 to 0.64 s | 0.46 s |
+  | Streamed, the hierarchies alone | 0.21 s | 0.12 s |
+
+- **The checks:**
+  - **The look:** four of the baseline's stills from the package differ from the cache's as the cache's differ from
+    themselves run to run (121, 155, 234 and 0 pixels against 115, 158, 271 and 0).
+  - **The streamed path, real time:** 15.94 ms a frame against 15.81 from the cache. VRAM and geometry are the same.
+  - **A corrupted entry:** one byte changed in a mesh entry refuses the package, naming the entry.
+  - **Unit tests:** both readings, and both refusals.
+- **Next:** the layered setups' masks as made, the 2.6 s their making takes at each start.
+
 ## D-054 — The caches packed with LZ4 ✅ (the owner's choice on #215, 2026-10-09)
 
 **The owner's question:** "What do games use for efficient compressions?" The answer was posted
