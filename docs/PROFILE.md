@@ -3027,9 +3027,20 @@ package:
 | The neon signs' 144 gradient maps baked on all cores (the district's viewer) | 1.3 s | 0.22 s |
 | **The loading screen** | **7.3 s** (12.2 s on a colder start the same day) | **4.3 and 4.4 s** |
 
-What is left: the maps' upload (1.37 GiB, 0.65 s), the masks' upload (0.96 s), their reading (0.2 s warm) and the scene's
-build. The device and DLSS's start (about 4.7 s, NGX) come before the loading screen. The stills stay within the runs'
-noise.
+**Then the textures' alpha on all cores.** What the CPU knows of each texture's alpha (for the rays' opacity
+micromaps, #333) was found one texture after another as each was added: the 7,700 block-compressed maps' alpha planes
+decoded, the 5,000 mask textures' alpha scanned. A probe of the upload showed where the time went:
+
+- **The maps:** the GPU's part (allocating, writing the staging, the copies and their wait) was 0.32 s of the maps'
+  0.65 s. The decoding took the rest.
+- **The masks:** the GPU's part was 0.46 s of 0.95 s. Scanning their 3.4 GiB took the rest.
+
+`TextureSet::add_all` and the new `add_all_compressed` now find the alphas on all cores (`par_chunks_mut`), the same
+alphas as one at a time (a GPU test). The maps' upload went 0.65 → 0.44 s and the masks' 0.95 → 0.82 s. The loading
+screen is now 4.0 to 4.15 s over three runs.
+
+What is left: those uploads, the masks' reading as made (0.7 s), the maps' reading (0.2 s warm) and the scene's build.
+The device and DLSS's start (about 4.7 s, NGX) come before the loading screen. The stills stay within the runs' noise.
 
 ## A streamed district's meshes with its cells (#338, D-096, 2026-11-07)
 

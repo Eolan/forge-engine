@@ -379,6 +379,23 @@ pub(crate) enum TextureAlpha {
     Plane(Arc<AlphaPlane>),
 }
 
+/// What the CPU knows of a block-compressed texture's alpha ([`crate::dds::alpha_plane`]):
+/// unknown for a format whose alpha it doesn't decode.
+fn compressed_alpha(texture: &CompressedTexture) -> TextureAlpha {
+    let Some(texels) = crate::dds::alpha_plane(texture) else {
+        return TextureAlpha::Unknown;
+    };
+    if texels.iter().all(|&a| a == 255) {
+        TextureAlpha::Opaque
+    } else {
+        TextureAlpha::Plane(Arc::new(AlphaPlane {
+            width: texture.width,
+            height: texture.height,
+            texels,
+        }))
+    }
+}
+
 /// The alpha of RGBA8 `data`'s level 0.
 fn texture_alpha(data: &TextureData) -> TextureAlpha {
     let Some(level) = data.levels.first() else {
@@ -661,6 +678,40 @@ impl TextureSet {
         bytes: u64,
         texture: &CompressedTexture,
     ) -> Result<TextureId> {
+        self.add_compressed_with(image, bytes, texture, compressed_alpha(texture))
+    }
+
+    /// Adds every texture [`upload_compressed`] uploaded from `textures`, as
+    /// [`Self::add_compressed`] adds one, what the CPU knows of their alpha found on all cores (a
+    /// loader's thousands of maps decoded one after another took a good part of its upload);
+    /// their ids, in order.
+    pub fn add_all_compressed(
+        &mut self,
+        uploaded: Vec<(Image, u64)>,
+        textures: &[CompressedTexture],
+    ) -> Result<Vec<TextureId>> {
+        let mut alphas = vec![TextureAlpha::Unknown; textures.len()];
+        forge_core::pack::par_chunks_mut(&mut alphas, 1, 4, |i, out| {
+            out[0] = compressed_alpha(&textures[i]);
+        });
+        uploaded
+            .into_iter()
+            .zip(textures)
+            .zip(alphas)
+            .map(|(((image, bytes), texture), alpha)| {
+                self.add_compressed_with(image, bytes, texture, alpha)
+            })
+            .collect()
+    }
+
+    /// [`Self::add_compressed`] with its alpha found.
+    fn add_compressed_with(
+        &mut self,
+        image: Image,
+        bytes: u64,
+        texture: &CompressedTexture,
+        alpha: TextureAlpha,
+    ) -> Result<TextureId> {
         let image = if texture.format == crate::dds::BlockFormat::Bc5 {
             image.with_view_components(vk::ComponentMapping {
                 r: vk::ComponentSwizzle::IDENTITY,
@@ -672,17 +723,7 @@ impl TextureSet {
             image
         };
         let id = self.add_uploaded(image, bytes);
-        if let Some(texels) = crate::dds::alpha_plane(texture) {
-            self.alpha[id.0 as usize] = if texels.iter().all(|&a| a == 255) {
-                TextureAlpha::Opaque
-            } else {
-                TextureAlpha::Plane(Arc::new(AlphaPlane {
-                    width: texture.width,
-                    height: texture.height,
-                    texels,
-                }))
-            };
-        }
+        self.alpha[id.0 as usize] = alpha;
         Ok(id)
     }
 
@@ -691,12 +732,18 @@ impl TextureSet {
     /// its workers uploads them so, not one wait a texture.
     pub fn add_all(&mut self, data: &[TextureData]) -> Result<Vec<TextureId>> {
         let uploaded = upload_textures(&self.device, data)?;
+        // Their alpha on all cores: a loader's thousands of mask textures scanned one after
+        // another took about as long as their upload.
+        let mut alphas = vec![TextureAlpha::Unknown; data.len()];
+        forge_core::pack::par_chunks_mut(&mut alphas, 1, 4, |i, out| {
+            out[0] = texture_alpha(&data[i]);
+        });
         Ok(uploaded
             .into_iter()
-            .zip(data)
-            .map(|((image, bytes), d)| {
+            .zip(alphas)
+            .map(|((image, bytes), alpha)| {
                 let id = self.add_uploaded(image, bytes);
-                self.alpha[id.0 as usize] = texture_alpha(d);
+                self.alpha[id.0 as usize] = alpha;
                 id
             })
             .collect())
@@ -1321,6 +1368,58 @@ pub mod stock {
 mod tests {
     use super::*;
     use forge_core::material::{Material, RenderLayer, ShadingClass};
+
+    /// A GPU test (`FORGE_GPU_TESTS=1`): textures added together know their alpha as textures
+    /// added one at a time do: opaque, a plane, or unknown.
+    #[test]
+    fn textures_added_together_know_their_alpha() {
+        let Some(gpu) = forge_gpu::Headless::for_test(forge_gpu::headless::shaders_of(env!(
+            "CARGO_MANIFEST_DIR"
+        ))) else {
+            return;
+        };
+        let rgba = |alpha: fn(usize) -> u8| TextureData {
+            name: "alpha".into(),
+            size: 4,
+            height: 4,
+            srgb: true,
+            levels: vec![
+                (0..16).flat_map(|t| [9, 9, 9, alpha(t)]).collect(),
+                vec![9; 16],
+                vec![9; 4],
+            ],
+        };
+        let data: Vec<TextureData> = (0..40)
+            .map(|k| {
+                if k % 3 == 0 {
+                    rgba(|_| 255)
+                } else {
+                    rgba(|t| (t * 16) as u8)
+                }
+            })
+            .collect();
+        let mut one = TextureSet::new(&gpu.device);
+        let mut all = TextureSet::new(&gpu.device);
+        for d in &data {
+            one.add(d).unwrap();
+        }
+        all.add_all(&data).unwrap();
+        let kind = |a: &TextureAlpha| match a {
+            TextureAlpha::Unknown => (0, Vec::new()),
+            TextureAlpha::Opaque => (1, Vec::new()),
+            TextureAlpha::Plane(p) => (2, p.texels.clone()),
+        };
+        assert_eq!(
+            one.alpha.iter().map(kind).collect::<Vec<_>>(),
+            all.alpha.iter().map(kind).collect::<Vec<_>>()
+        );
+        assert!(
+            all.alpha
+                .iter()
+                .any(|a| matches!(a, TextureAlpha::Plane(_)))
+        );
+        assert!(all.alpha.iter().any(|a| matches!(a, TextureAlpha::Opaque)));
+    }
 
     /// A GPU test (`FORGE_GPU_TESTS=1`): presence maps uploaded together come back as ids in
     /// order, their bytes counted as one at a time would count them, over more than one
