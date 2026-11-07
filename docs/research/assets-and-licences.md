@@ -642,6 +642,17 @@ indefinitely" (CG Channel, 6 May 2025, read). *Bearing:* class 2; whether the ow
 the library in 2024 decides whether it is already paid for (`vegetation-materials.md` §1 asked the
 same).
 
+*Update, 7 November 2026.* Quixel's news post of 5 November 2026 (read) announces the full Megascans
+library free on Fab. It refunds Megascans bought since 1 January 2025, and it changes the terms of all
+Quixel assets so that AI models may be trained on Megascans and Megaplants. The post names no licence
+and no date, and it says nothing on engines. When read, the licence pages were not yet updated:
+fab.com/eula is the generic Fab Standard summary, and quixel.com/terms redirects to Epic's content
+licence, which refused the fetch. The owner noted the same day that some assets are not free yet.
+*Bearing:* Megascans stay class 2 until the updated licence is read, which decides between Fab
+Standard (any engine) and a UE-only label. Either way they are good reference points, measured scans
+to hold Forge's materials and vegetation against. Downloads still wait for the owner's go. Forge's
+rule that learned models train on class 1 or its own data stands until the owner changes it.
+
 **Grass and ground cover** come from three places: Poly Haven's 4 grass models and 32 ground-cover
 items (class 1), Megascans (class 2), and Forge's own GPU grass (`vegetation-materials.md` §3), which
 needs only blade textures.
@@ -716,7 +727,7 @@ Quality and consistency are this note's assessments; licence and cost are from t
 | Mixamo | mid | one rig | 2 | free (Adobe ID) | no raw files, no ML |
 | Sketchfab CC0 / CC-BY | varies | none | 1 | free | CC-BY credit follows the asset |
 | BlendKit | varies | none | 1 (CC0) / 2 (RF) | free; Full $90/yr; Business $29/mo | not easily extractable |
-| Fab Standard / Megascans | high (Megascans scans) | Megascans consistent | 2 | per listing | no open-source combination; extraction restricted |
+| Fab Standard / Megascans | high (Megascans scans) | Megascans consistent | 2 | free on Fab, partly (announced 5 Nov 2026, §6) | no open-source combination; extraction restricted |
 | Fab CC-BY items | varies | none | 1 | free | credit |
 | City Sample packs | AAA | one city | 3 | free | Unreal only |
 | Synty POLYGON | low-poly | very consistent | 2 | e.g. $49.99 a pack | 5 seats, no AI, no game-creation tools |
@@ -744,7 +755,7 @@ city; prices as listed when read on 2026-10-10. Nothing has been bought or downl
 | 3 | KitBash3D, Utopia | <https://kitbash3d.com/products/utopia> | $145 | 2 | 31 neo-futuristic landmark buildings (civic, museum, arena, observatory, botanical garden) |
 | 4 | Adobe Substance 3D Collection | <https://www.adobe.com/products/substance3d/plans.html> | $59.99/month (individuals) | tools: own output; assets 2 | Designer for trims and facade materials; the asset library under §8's terms |
 | 5 | Reallusion Character Creator 5 | <https://www.reallusion.com/character-creator/> | $299 Standard, $479 Deluxe (perpetual); $99/yr subscription (CG Channel), plus Extended licences | 2 | hero characters with a clothing ecosystem, one character per Standard licence |
-| 6 | Fab Megascans (per listing) | <https://dev.epicgames.com/documentation/en-us/fab/licenses-and-pricing-in-fab> | from about $0.99 an asset (search record) | 2 | scanned rocks, plants, surfaces in any engine |
+| 6 | Fab Megascans (per listing) | <https://dev.epicgames.com/documentation/en-us/fab/licenses-and-pricing-in-fab> | free on Fab, partly, since the 5 November 2026 announcement (§6); before, from about $0.99 an asset (search record) | 2 | scanned rocks, plants, surfaces in any engine |
 | 7 | Marvelous Designer, Personal | <https://www.marvelousdesigner.com/support/news/view/ed03ffe524f444bf80d86d28bdab32c1> | $39/month (2020 post; current price not read) | tool | sewing-pattern garments for a wardrobe; output terms to confirm |
 
 Considered and not shortlisted: Synty (consistent but low-poly), Daz (per-product licences and
@@ -856,7 +867,9 @@ credit text, and a SHA-256 of the archive.
 - **Unity's SpeedTree support article** does not name the governing terms; that the Professional
   Artistry Additional Terms apply to SpeedTree is a reading of their scope.
 - **Megascans prices on Fab:** listings are per asset and none was read; the $0.99 and $24.99 figures
-  are a search record.
+  are a search record. Since 5 November 2026 the library is announced free; which listings already
+  are, and the licence that governs them, were not read (the licence pages were not yet updated on
+  7 November 2026).
 - **City Sample Crowd's listing:** not found; the UE-only label is from search records of the City
   Sample and Buildings listings.
 - **A free or affordable realistic futuristic vehicle set** and **a modern European modular building
