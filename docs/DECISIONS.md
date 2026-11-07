@@ -12158,5 +12158,13 @@ The benchmark path at 2560 x 1440 under DLSS Quality, 5,000 frames, at most 32 M
   - **Slideshows' pictures, decals and holograms hold slots too.** Their textures stay resident until they follow.
 - **Step 2's first part is built (the same day):** `GpuMaterial::texture_slots` and `remap_texture` know a row's slot
   fields by kind. A microblend row's floats are never taken for slots, even when their bits equal the slot moved; a unit
-  test checks that case. Next are the scene's frame-slot tables for a streamed scene, and the old image retired once
-  every slot's table holds the new index.
+  test checks that case.
+- **Step 2's scene part is built (the same day):**
+  - **Opting in:** a scene built with `set_streamed_textures` keeps its table as built and a table per frame slot, as
+    a scene with moving rows does.
+  - **The remap:** `MeshletScene::remap_texture(from, to)` moves the slot in every row. Each frame slot's table takes
+    the rows as its slot comes up, slot 0's included, which the rays read.
+  - **Retiring:** `texture_remap_done(generation)` says when every slot holds the remap. From that frame on, the old
+    image retires through `Frames::destroy_later`.
+  - **Tested:** a GPU test. Scenes that don't opt in are unchanged.
+  - **Next:** wiring the planner, `remake` and the remap together in the private district, then the files (step 4).

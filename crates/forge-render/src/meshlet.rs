@@ -1498,6 +1498,8 @@ pub struct MeshletSceneBuilder {
     motions: Vec<(u32, MaterialMotion)>,
     /// The rows that show pictures in turn (D-104), by row.
     slides: Vec<(u32, Slideshow)>,
+    /// Its rows' textures may be remade in new slots (D-105, [`Self::set_streamed_textures`]).
+    streamed_textures: bool,
     /// The textures its rows sample.
     textures: Option<TextureSet>,
     /// Build acceleration structures for shadow rays (issue #45), when the device has ray queries.
@@ -1984,6 +1986,13 @@ impl MeshletSceneBuilder {
             Some(slot) => slot.1 = show,
             None => self.slides.push((row, show)),
         }
+    }
+
+    /// Lets the scene's textures be remade in new slots as they stream (D-105,
+    /// [`MeshletScene::remap_texture`]): the scene keeps its table as built and a table per frame
+    /// slot, as a scene with moving rows does, even without any.
+    pub fn set_streamed_textures(&mut self, on: bool) {
+        self.streamed_textures = on;
     }
 
     /// Asks for acceleration structures (issue #45): one per mesh at [`MeshletSceneBuilder::build_with`]
@@ -2838,19 +2847,26 @@ impl MeshletSceneBuilder {
         let cutouts = cutouts || self.ladders;
         // With rows that move (D-104), the table as built is frame slot 0's, mapped, and each other
         // slot has a copy: the frame reads its slot's.
-        let (materials, motions) = if self.motions.is_empty() && self.slides.is_empty() {
-            let materials = device.create_buffer_with_data(
-                &self.materials,
-                usage,
-                MemoryCategory::Geometry,
-                "materials",
-            )?;
-            (materials, None)
-        } else {
-            let (materials, motions) =
-                SceneMotions::new(device, &self.materials, &self.motions, &self.slides, usage)?;
-            (materials, Some(motions))
-        };
+        let (materials, motions) =
+            if self.motions.is_empty() && self.slides.is_empty() && !self.streamed_textures {
+                let materials = device.create_buffer_with_data(
+                    &self.materials,
+                    usage,
+                    MemoryCategory::Geometry,
+                    "materials",
+                )?;
+                (materials, None)
+            } else {
+                let (materials, motions) = SceneMotions::new(
+                    device,
+                    &self.materials,
+                    &self.motions,
+                    &self.slides,
+                    usage,
+                    self.streamed_textures,
+                )?;
+                (materials, Some(motions))
+            };
         // The structure's builds read the rows: an instance whose rows are all opaque tells it so
         // (#265). They read the table as built, slot 0's: a moving row is never cut out, and its
         // flags and alpha, the fields they read, never change.
@@ -3309,6 +3325,18 @@ struct SceneMotions {
     written: Vec<Cell<Option<u64>>>,
     /// The scene's clock, seconds ([`MeshletScene::set_material_clock`]).
     clock: Cell<f64>,
+    /// With streamed textures (D-105): the rows as they stand.
+    all: Option<RefCell<StreamedRows>>,
+}
+
+/// A streamed-texture scene's rows (D-105): the table as built, its texture slots moved as
+/// textures are remade ([`MeshletScene::remap_texture`]); per frame slot, the rows to write again
+/// and the last remap its table holds.
+struct StreamedRows {
+    rows: Vec<GpuMaterial>,
+    pending: Vec<std::collections::BTreeSet<u32>>,
+    generation: u64,
+    written: Vec<u64>,
 }
 
 impl SceneMotions {
@@ -3320,6 +3348,7 @@ impl SceneMotions {
         motions: &[(u32, MaterialMotion)],
         slides: &[(u32, Slideshow)],
         usage: vk::BufferUsageFlags,
+        streamed: bool,
     ) -> Result<(Buffer, Self)> {
         // By row: its motion (still without one) and its slideshow.
         let mut by_row: std::collections::BTreeMap<u32, (MaterialMotion, Option<Slideshow>)> =
@@ -3393,6 +3422,14 @@ impl SceneMotions {
                 extra: slots,
                 written: (0..FRAMES_IN_FLIGHT).map(|_| Cell::new(None)).collect(),
                 clock: Cell::new(0.0),
+                all: streamed.then(|| {
+                    RefCell::new(StreamedRows {
+                        rows: table.to_vec(),
+                        pending: vec![std::collections::BTreeSet::new(); FRAMES_IN_FLIGHT],
+                        generation: 0,
+                        written: vec![0; FRAMES_IN_FLIGHT],
+                    })
+                }),
             },
         ))
     }
@@ -3407,6 +3444,15 @@ impl SceneMotions {
         if self.written[slot.index].get() != Some(slot.frame_number) {
             let seconds = self.clock.get();
             let size = std::mem::size_of::<GpuMaterial>() as u64;
+            // The rows a remade texture moved (D-105), before the moving rows over them.
+            if let Some(all) = &self.all {
+                let mut all = all.borrow_mut();
+                let pending = std::mem::take(&mut all.pending[slot.index]);
+                for row in pending {
+                    buffer.write(u64::from(row) * size, &[all.rows[row as usize]]);
+                }
+                all.written[slot.index] = all.generation;
+            }
             for (row, built, motion, show) in &self.rows {
                 let shown = match show.as_ref().and_then(|s| s.at(seconds)) {
                     Some(slide) => built.showing(slide),
@@ -3644,6 +3690,44 @@ impl MeshletScene {
         if let Some(motions) = &self.motions {
             motions.clock.set(seconds);
         }
+    }
+
+    /// Moves every material row's texture slot `from` to `to` (D-105: a streamed texture remade
+    /// in a new slot, [`crate::material::TextureSet::remake`]). Each frame slot's table takes the
+    /// rows when its slot next comes up, slot 0's too, which the rays read for every frame. Its
+    /// generation for [`Self::texture_remap_done`]; `None` when no row uses `from`, or the scene
+    /// was built without [`MeshletSceneBuilder::set_streamed_textures`]. A slideshow's pictures
+    /// are not moved: their textures stay resident.
+    pub fn remap_texture(&mut self, from: u32, to: u32) -> Option<u64> {
+        let motions = self.motions.as_mut()?;
+        let all = motions.all.as_mut()?.get_mut();
+        let mut hit = false;
+        for (k, row) in all.rows.iter_mut().enumerate() {
+            if row.remap_texture(from, to) {
+                hit = true;
+                for pending in &mut all.pending {
+                    pending.insert(k as u32);
+                }
+            }
+        }
+        for (_, built, _, _) in &mut motions.rows {
+            built.remap_texture(from, to);
+        }
+        if !hit {
+            return None;
+        }
+        all.generation += 1;
+        Some(all.generation)
+    }
+
+    /// Whether every frame slot's table holds the remap of `generation`
+    /// ([`Self::remap_texture`]): from the frame being recorded on, no frame reads the old slot,
+    /// so the old image retires through `Frames::destroy_later` at it.
+    pub fn texture_remap_done(&self, generation: u64) -> bool {
+        self.motions
+            .as_ref()
+            .and_then(|m| m.all.as_ref())
+            .is_some_and(|all| all.borrow().written.iter().all(|&w| w >= generation))
     }
 
     /// The material table frame `slot` reads: a scene with moving rows, the slot's own (D-104);
@@ -7980,6 +8064,66 @@ mod tests {
                 .zip(1u32..)
                 .all(|(i, k)| i.id == k)
         );
+    }
+
+    /// A GPU test (`FORGE_GPU_TESTS=1`, D-105's second step): a remade texture's slot moves into
+    /// each frame slot's table as the slot comes up, slot 0's too; the remap is done once every
+    /// slot holds it; a scene built without streamed textures, or a slot no row uses, has none.
+    #[test]
+    fn a_remade_textures_slot_moves_into_every_frame_slots_table() {
+        let Some(gpu) = forge_gpu::Headless::for_test(forge_gpu::headless::shaders_of(env!(
+            "CARGO_MANIFEST_DIR"
+        ))) else {
+            return;
+        };
+        let rock = forge_geom::procedural::asteroid(forge_core::Seed::new(7), 16, 1.0, 0.3);
+        let picture = |picture| {
+            GpuMaterial::uv_test_row([0.0; 3]).showing(&crate::material::motion::Slide {
+                picture,
+                uv: [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+            })
+        };
+        let build = |streamed: bool| {
+            let mut builder = MeshletSceneBuilder::new();
+            let mesh = builder.add_mesh(&MeshletMesh::build(&rock));
+            builder.add_instance(mesh, Mat4::IDENTITY);
+            builder.set_material_rows(vec![picture(5), picture(6)]);
+            builder.set_streamed_textures(streamed);
+            builder.build(&gpu.device).unwrap()
+        };
+        let mut plain = build(false);
+        assert_eq!(plain.remap_texture(5, 9), None);
+        let mut scene = build(true);
+        assert_eq!(scene.remap_texture(7, 9), None);
+        let generation = scene.remap_texture(5, 9).unwrap();
+        assert!(!scene.texture_remap_done(generation));
+        let slot = |index, frame_number| FrameSlot {
+            index,
+            frame_number,
+            previous_gpu_ms: None,
+        };
+        let read = |scene: &MeshletScene, index: usize, row: u64| {
+            let buffer = match index {
+                0 => &scene.materials,
+                k => &scene.motions.as_ref().unwrap().extra[k - 1],
+            };
+            let mut out = [GpuMaterial::zeroed()];
+            buffer.read(row * std::mem::size_of::<GpuMaterial>() as u64, &mut out);
+            out[0].pictures()
+        };
+        for index in 0..FRAMES_IN_FLIGHT {
+            assert_eq!(read(&scene, index, 0), (5, 5), "slot {index} before");
+        }
+        for (k, index) in (0..FRAMES_IN_FLIGHT).rev().enumerate() {
+            assert!(!scene.texture_remap_done(generation));
+            scene.material_table(slot(index, 10 + k as u64));
+            assert_eq!(read(&scene, index, 0), (9, 9), "slot {index} after");
+            assert_eq!(read(&scene, index, 1), (6, 6));
+        }
+        assert!(scene.texture_remap_done(generation));
+        // A second remap waits for every slot again.
+        let next = scene.remap_texture(6, 11).unwrap();
+        assert!(next > generation && !scene.texture_remap_done(next));
     }
 
     /// A GPU test (`FORGE_GPU_TESTS=1`): a scene's moving row (D-104) goes into the frame slot's
