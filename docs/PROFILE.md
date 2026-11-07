@@ -3013,6 +3013,24 @@ packed four to a texture, given their levels and uploaded one texture at a time 
 - **The district's loading screen:** 17.6 s → 13.2 and 14.7 s over two runs.
 - **The picture:** two of its stills differ from its baseline's by 109 and 299 pixels (FLIP mean 0.0007, 0.0004). The same build differs from itself by 97 and 350, so the change is within run-to-run noise.
 
+**Then the presence maps together too** (`TextureSet::add_presences`, the same day). Each setup's presence map went up
+in its own submission, waited on: 2,424 waits. Now they go up as the masks do, 16 MiB a submission. The upload after
+the masks took about 0.35 s; it now takes 0.045 s.
+
+**The district's streamed start through the day,** its loading screen, warm (the files in the system's cache), from its
+package:
+
+| Step | Before | After |
+|---|---|---|
+| The layered setups' masks, stored as made (D-053 step 5) | 2.6 s made | 0.7 s read |
+| Their presence maps together | 0.35 s | 0.045 s |
+| The neon signs' 144 gradient maps baked on all cores (the district's viewer) | 1.3 s | 0.22 s |
+| **The loading screen** | **7.3 s** (12.2 s on a colder start the same day) | **4.3 and 4.4 s** |
+
+What is left: the maps' upload (1.37 GiB, 0.65 s), the masks' upload (0.96 s), their reading (0.2 s warm) and the scene's
+build. The device and DLSS's start (about 4.7 s, NGX) come before the loading screen. The stills stay within the runs'
+noise.
+
 ## A streamed district's meshes with its cells (#338, D-096, 2026-11-07)
 
 The private district streamed along its path in real time (one edit a frame), at 2560 × 1440 under DLSS Quality, two

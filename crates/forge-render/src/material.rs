@@ -599,6 +599,56 @@ impl TextureSet {
         Ok(TextureId(self.textures.len() as u32 - 1))
     }
 
+    /// Uploads presence maps as [`Self::add_presence`] would, each a name, its size at level 0
+    /// and its levels, as many to a submission as [`forge_gpu::STAGING_CHUNK`] holds: a loader
+    /// with thousands of layered setups waits a few times, not once a map. Their ids, in order.
+    pub fn add_presences(
+        &mut self,
+        maps: &[(&str, u32, u32, &[Vec<u32>])],
+    ) -> Result<Vec<TextureId>> {
+        let bytes = |levels: &[Vec<u32>]| levels.iter().map(|l| l.len() * 4).sum::<usize>();
+        let mut ids = Vec::with_capacity(maps.len());
+        let mut start = 0;
+        while start < maps.len() {
+            // At least one, then as many more as fit.
+            let mut end = start + 1;
+            let mut total = bytes(maps[start].3);
+            while end < maps.len() && total + bytes(maps[end].3) <= forge_gpu::STAGING_CHUNK {
+                total += bytes(maps[end].3);
+                end += 1;
+            }
+            let levels: Vec<Vec<&[u8]>> = maps[start..end]
+                .iter()
+                .map(|m| m.3.iter().map(|l| bytemuck::cast_slice(l)).collect())
+                .collect();
+            let images: Vec<(ImageDesc<'_>, &[&[u8]])> = maps[start..end]
+                .iter()
+                .zip(&levels)
+                .map(|(&(name, width, height, _), levels)| {
+                    (
+                        ImageDesc {
+                            width,
+                            height,
+                            format: vk::Format::R32_UINT,
+                            usage: vk::ImageUsageFlags::SAMPLED,
+                            aspect: vk::ImageAspectFlags::COLOR,
+                            mip_levels: levels.len() as u32,
+                            name,
+                        },
+                        levels.as_slice(),
+                    )
+                })
+                .collect();
+            let made = self.device.create_images_with_mips(&images)?;
+            for (image, levels) in made.into_iter().zip(&levels) {
+                let b = levels.iter().map(|l| l.len() as u64).sum();
+                ids.push(self.add_uploaded(image, b));
+            }
+            start = end;
+        }
+        Ok(ids)
+    }
+
     /// Adds a block-compressed texture [`upload_compressed`] uploaded, of `bytes` over its
     /// levels, with what the CPU knows of its alpha (the rays' opacity micromaps, #333), and
     /// returns its id for a material row. A two-channel (BC5) normal map is sampled through a
@@ -1271,6 +1321,35 @@ pub mod stock {
 mod tests {
     use super::*;
     use forge_core::material::{Material, RenderLayer, ShadingClass};
+
+    /// A GPU test (`FORGE_GPU_TESTS=1`): presence maps uploaded together come back as ids in
+    /// order, their bytes counted as one at a time would count them, over more than one
+    /// submission.
+    #[test]
+    fn presence_maps_upload_together() {
+        let Some(gpu) = forge_gpu::Headless::for_test(forge_gpu::headless::shaders_of(env!(
+            "CARGO_MANIFEST_DIR"
+        ))) else {
+            return;
+        };
+        let mut one = TextureSet::new(&gpu.device);
+        let mut all = TextureSet::new(&gpu.device);
+        // 600 maps of 128 x 128 at level 0 (85 KiB with their levels): about 50 MiB, four submissions.
+        let mask: Vec<u8> = (0..1024 * 1024).map(|i| u8::from(i % 7 == 0)).collect();
+        let (w, h, levels) = layer_presence(&[&mask], 1024, 1024);
+        let names: Vec<String> = (0..600).map(|k| format!("presence {k}")).collect();
+        let maps: Vec<(&str, u32, u32, &[Vec<u32>])> = names
+            .iter()
+            .map(|n| (n.as_str(), w, h, levels.as_slice()))
+            .collect();
+        let ids = all.add_presences(&maps).unwrap();
+        assert_eq!(ids, (0..600).map(TextureId).collect::<Vec<_>>());
+        for (name, w, h, levels) in &maps {
+            one.add_presence(name, *w, *h, levels).unwrap();
+        }
+        assert_eq!(all.bytes(), one.bytes());
+        assert!(all.bytes() as usize > forge_gpu::STAGING_CHUNK);
+    }
 
     #[test]
     fn about_a_fifth_of_the_rocks_are_ice() {
