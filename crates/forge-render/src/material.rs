@@ -17,6 +17,8 @@ use forge_gpu::{Device, Image, ImageDesc, Result, SampledImageId, vk};
 use crate::dds::CompressedTexture;
 use crate::textures::{ImageUse, TextureData, decode_image};
 
+pub mod motion;
+
 /// The mask texels a layered material's presence map gathers per texel (D-095): 8 × 8.
 pub const PRESENCE_BLOCK: u32 = 8;
 

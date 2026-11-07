@@ -11882,3 +11882,46 @@ mask in fixed-function hardware), was filed in 2000 and has expired. The searche
 **What it did.** `holograms/draw` 0.009 ms on the benchmark's path at 2560 x 1440. The pictures are small on screen, so the 33 scored frames barely move.
 
 **Also landed with it:** `smoke-cigarette`, a particle effect in `data/particles.toml`, a thin thread of smoke for a held cigarette, lit by the room's lamps. The private viewer emits one at each smoker's hand. Its values are a fit by eye: the source's own effect wasn't read.
+
+## D-104 — Materials that move with the scene's clock: their rows rewritten per frame slot ✅ (#398; the owner, 2026-11-01: "There are plenty of animated things like screen or other supports, you might need to support that as well"; 2026-11-07: "follow recommendations and the plan")
+
+**The need.** Forge's materials stood still: a screen showed one picture, and a sign's glow never blinked. The private district's source animates thousands of them. Among its mesh materials, 2,655 signs blink, 422 neon tubes flicker, about 440 screens play flipbooks of frames, and some 20 surfaces pan their texture coordinates. Comparisons with its frames kept meeting this: a board showing another advert than the source's frame is only timing.
+
+**Decided.** `MeshletSceneBuilder::set_material_motion(row, MaterialMotion)` and `MeshletScene::set_material_clock(seconds)`, in `forge_render::material::motion`:
+
+- **Four motions:**
+  - a scroll, in texture coordinates a second;
+  - a flipbook: a grid of frames (columns by rows, the first `frames` of them) played at a rate;
+  - a glow that blinks: period, duty, phase, low level, eased edges;
+  - a glow that flickers: steps a second, a chance to dip, the lowest dip, a seed.
+- **Where it's worked out:**
+  - On the CPU, once a frame, in f64 at the application's clock.
+  - The moving rows are written into the frame slot's own copy of the material table, and the frame block points at that copy. Every pass of the frame reads the same rows, so the ray hits and the probes see the same glow as the screen does.
+  - The copies are in mapped device memory (Resizable BAR), as per-frame data is. A device without it reads them over the bus, with a warning.
+- **What moves in the row:**
+  - Its UV transform (`uv_u`, `uv_v`) and its emissive colour. The shader already reads both, so no shader changed.
+  - The texture gradients follow the transform, so a flipbook's cell takes its own mip level.
+- **A scene without motions** keeps its single table, and the frame block points at it as before.
+
+**What it leaves out.**
+
+- **Rows that can't move their coordinates:** a row that is cut out (masked, jelly, a house's clear glass), layered, or a room atlas. Its opacity micromaps and the structures' opacity checks keep the row as built. A glow alone suits any row.
+- **No blending in a flipbook:** it steps from frame to frame. Blending would need a second sample in the shader.
+- **The upscaler:** the geometry doesn't move, so the motion vectors are zero and the upscaler takes a scrolling picture as changed shading. It may smear a fast scroll a little; #360's reactive mask is the hint for later.
+- **Lamps:** a blinking lamp's glowing part blinks, but its light (the lamp lists, RTXDI) is the application's to switch.
+- **The probes and the caches** take in a glow's change at their own pace, as they do any change of light.
+- **Later steps of #398:** the holograms (D-103) keep their own rows, and their flipbooks come later, as does video on surfaces.
+- **The source's formulas aren't known.** The private viewer maps the source's parameters onto these four motions by their names and values.
+
+**Patents.** Animated textures by frame sequences and by scrolling coordinates are 1990s practice. Nothing here goes past it, so no search was run.
+
+**Checked.**
+
+- **Unit tests of each motion:**
+  - a flipbook's order and wrap, and its cell on the row's own transform;
+  - a scroll's wrap an hour in;
+  - a blink's duty, phase and eased edges;
+  - a flicker's share of dips and its repeat by seed;
+  - which rows refuse moving coordinates.
+- **A GPU test of the slots' tables:** the moving row is written at the clock, once a frame, and the other rows stay as built.
+- **Scenes without motions are unchanged:** the guard captures `ast240` and `lab-creatures120` differ from the code before by 0 px.

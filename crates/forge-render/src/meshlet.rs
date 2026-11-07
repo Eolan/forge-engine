@@ -18,6 +18,7 @@ use bytemuck::{Pod, Zeroable};
 use forge_geom::{GpuMeshlet, MeshletMesh, PAGE_NONE, PAGE_SIZE, SkinnedMesh};
 
 use crate::cells::CellPos;
+use crate::material::motion::MaterialMotion;
 use crate::material::{GpuMaterial, TextureSet, gpu_rows};
 use crate::opacity;
 use crate::probes::ProbeLight;
@@ -1492,6 +1493,8 @@ pub struct MeshletSceneBuilder {
     instance_meshlets: u64,
     /// The material table (the default row when none is set).
     materials: Vec<GpuMaterial>,
+    /// The rows that change with the scene's clock (D-104), by row.
+    motions: Vec<(u32, MaterialMotion)>,
     /// The textures its rows sample.
     textures: Option<TextureSet>,
     /// Build acceleration structures for shadow rays (issue #45), when the device has ray queries.
@@ -1952,6 +1955,19 @@ impl MeshletSceneBuilder {
     pub fn set_material_rows(&mut self, rows: Vec<GpuMaterial>) {
         self.materials = rows;
         self.textures = None;
+    }
+
+    /// Makes material row `row` change with the scene's clock (D-104,
+    /// [`MeshletScene::set_material_clock`]): its texture coordinates scroll or step through a
+    /// flipbook, and its glow blinks or flickers. A second call for the same row replaces the
+    /// first. [`MeshletSceneBuilder::build`] refuses a row that isn't in the table, and moving
+    /// coordinates on a row that doesn't read the mesh's UVs or is cut out
+    /// ([`crate::material::motion`]).
+    pub fn set_material_motion(&mut self, row: u32, motion: MaterialMotion) {
+        match self.motions.iter_mut().find(|(r, _)| *r == row) {
+            Some(slot) => slot.1 = motion,
+            None => self.motions.push((row, motion)),
+        }
     }
 
     /// Asks for acceleration structures (issue #45): one per mesh at [`MeshletSceneBuilder::build_with`]
@@ -2810,6 +2826,18 @@ impl MeshletSceneBuilder {
         if let Some(rays) = &mut rays {
             rays.set_materials(materials.address());
         }
+        // The rows that move (D-104): a copy of the table per frame slot, which the frame reads.
+        // The structure's builds keep the table as built: moving rows can't be cut out.
+        let motions = if self.motions.is_empty() {
+            None
+        } else {
+            Some(SceneMotions::new(
+                device,
+                &self.materials,
+                &self.motions,
+                usage,
+            )?)
+        };
         // The decals' tables, then the record the frame points at (D-074).
         let decals_smooth = self.decals.kinds.iter().any(|k| k.roughness.is_some());
         let decals = match self.decals.tables(|id| {
@@ -2959,6 +2987,7 @@ impl MeshletSceneBuilder {
             skins,
             rays,
             materials,
+            motions,
             material_count: self.materials.len() as u32,
             cutouts,
             jelly,
@@ -3183,6 +3212,8 @@ pub struct MeshletScene {
     rays: Option<SceneRays>,
     /// The material table ([`GpuMaterial`] rows) and the textures they sample.
     materials: Buffer,
+    /// The rows that change with the scene's clock and the frame slots' own tables (D-104).
+    motions: Option<SceneMotions>,
     /// Rows in `materials`.
     pub material_count: u32,
     /// Whether a row an instance draws with is cut out or double-sided: its clusters then take
@@ -3245,6 +3276,90 @@ pub struct MeshletScene {
 /// Ring slots of the movers' records: this frame's, the frame before's (which the motion vectors
 /// read) and one more, so the CPU never writes a slot a frame in flight still reads.
 const MOVER_SLOTS: usize = FRAMES_IN_FLIGHT + 1;
+
+/// A scene's moving material rows (D-104) and a copy of its table per frame slot, which that
+/// frame's passes read in place of the table as built.
+struct SceneMotions {
+    /// Per moving row: its index, the row as built, its motion.
+    rows: Vec<(u32, GpuMaterial, MaterialMotion)>,
+    /// The table per frame slot, mapped: a slot is written only once the frame before that used it
+    /// is done.
+    slots: Vec<Buffer>,
+    /// The frame each slot's moving rows were last written for.
+    written: Vec<Cell<Option<u64>>>,
+    /// The scene's clock, seconds ([`MeshletScene::set_material_clock`]).
+    clock: Cell<f64>,
+}
+
+impl SceneMotions {
+    fn new(
+        device: &Arc<Device>,
+        table: &[GpuMaterial],
+        motions: &[(u32, MaterialMotion)],
+        usage: vk::BufferUsageFlags,
+    ) -> Result<Self> {
+        let mut rows = Vec::with_capacity(motions.len());
+        for &(row, motion) in motions {
+            let Some(built) = table.get(row as usize) else {
+                return Err(GpuError::Unsupported(format!(
+                    "a material motion for row {row}, in a table of {} rows",
+                    table.len()
+                )));
+            };
+            if let Some(why) = built.refuses(&motion) {
+                return Err(GpuError::Unsupported(format!(
+                    "material row {row} can't move its texture coordinates: {why}"
+                )));
+            }
+            rows.push((row, *built, motion));
+        }
+        let size = std::mem::size_of_val(table) as u64;
+        let slots = (0..FRAMES_IN_FLIGHT)
+            .map(|_| {
+                let buffer = device.create_buffer(BufferDesc {
+                    size: size.max(4),
+                    usage,
+                    location: MemoryLocation::CpuToGpu,
+                    category: MemoryCategory::Geometry,
+                    name: "materials (a frame slot's, D-104)",
+                })?;
+                buffer.write(0, table);
+                Ok(buffer)
+            })
+            .collect::<Result<Vec<_>>>()?;
+        if !slots.iter().all(Buffer::device_local_mapped) {
+            tracing::warn!(
+                "the moving materials' tables are in the host's memory (no Resizable BAR): \
+                 the frame's shading reads them over the bus"
+            );
+        }
+        tracing::info!(
+            rows = rows.len(),
+            "material rows that move with the scene's clock (D-104)"
+        );
+        Ok(Self {
+            rows,
+            slots,
+            written: (0..FRAMES_IN_FLIGHT).map(|_| Cell::new(None)).collect(),
+            clock: Cell::new(0.0),
+        })
+    }
+
+    /// The table frame `slot` reads: the slot's own, its moving rows written at the clock once a
+    /// frame.
+    fn table(&self, slot: FrameSlot) -> u64 {
+        let buffer = &self.slots[slot.index];
+        if self.written[slot.index].get() != Some(slot.frame_number) {
+            let seconds = self.clock.get();
+            let size = std::mem::size_of::<GpuMaterial>() as u64;
+            for (row, built, motion) in &self.rows {
+                buffer.write(u64::from(*row) * size, &[built.moved(motion, seconds)]);
+            }
+            self.written[slot.index].set(Some(slot.frame_number));
+        }
+        buffer.address()
+    }
+}
 
 /// Runs of movers (first, past the last) sorted and merged where they touch or overlap (#344).
 fn merge_runs(mut runs: Vec<(usize, usize)>) -> Vec<(usize, usize)> {
@@ -3462,6 +3577,24 @@ impl SceneMovers {
 }
 
 impl MeshletScene {
+    /// The clock of the scene's moving materials, seconds (D-104,
+    /// [`MeshletSceneBuilder::set_material_motion`]): the frames drawn after it take their rows at
+    /// it. Give the application's own time, such as its simulation's, so that runs which step it
+    /// alike draw alike. It does nothing on a scene without moving rows.
+    pub fn set_material_clock(&self, seconds: f64) {
+        if let Some(motions) = &self.motions {
+            motions.clock.set(seconds);
+        }
+    }
+
+    /// The material table frame `slot` reads: a scene with moving rows, the slot's own (D-104);
+    /// else the table as built.
+    fn material_table(&self, slot: FrameSlot) -> u64 {
+        self.motions
+            .as_ref()
+            .map_or_else(|| self.materials.address(), |m| m.table(slot))
+    }
+
     /// The movers' transforms for the frame about to be drawn (#79), one per reserved mover
     /// ([`MeshletSceneBuilder::reserve_movers`]) in that order: written into the next slot of
     /// their ring, which the frame copies into the instance table before its culls. Call it
@@ -5620,7 +5753,7 @@ impl MeshletRenderer {
                 .streamer
                 .as_ref()
                 .map_or(0, |s| s.need_buffer.address()),
-            materials: scene.materials.address(),
+            materials: scene.material_table(slot),
             sun_color: self.sun_color.extend(0.0).to_array(),
             tlas: scene.rays.as_ref().map_or(0, SceneRays::tlas_address),
             rt_scene: scene.rays.as_ref().map_or(0, SceneRays::hit_address),
@@ -7777,6 +7910,73 @@ mod tests {
                 .zip(1u32..)
                 .all(|(i, k)| i.id == k)
         );
+    }
+
+    /// A GPU test (`FORGE_GPU_TESTS=1`): a scene's moving row (D-104) goes into the frame slot's
+    /// own table at the scene's clock, once a frame, and the slot's other rows stay as built.
+    #[test]
+    fn moving_material_rows_go_into_the_frame_slots_tables() {
+        let Some(gpu) = forge_gpu::Headless::for_test(forge_gpu::headless::shaders_of(env!(
+            "CARGO_MANIFEST_DIR"
+        ))) else {
+            return;
+        };
+        let rock = forge_geom::procedural::asteroid(forge_core::Seed::new(7), 16, 1.0, 0.3);
+        let mut builder = MeshletSceneBuilder::new();
+        let mesh = builder.add_mesh(&MeshletMesh::build(&rock));
+        builder.add_instance(mesh, Mat4::IDENTITY);
+        let still = GpuMaterial::uv_test_row([0.0; 3]);
+        builder.set_material_rows(vec![still, GpuMaterial::uv_test_row([2.0; 3])]);
+        builder.set_material_motion(
+            1,
+            MaterialMotion {
+                scroll: [0.25, 0.0],
+                glow: Some(crate::material::motion::Glow::Blink {
+                    period: 1.0,
+                    duty: 0.5,
+                    phase: 0.0,
+                    low: 0.5,
+                    smooth: 0.0,
+                }),
+                flipbook: None,
+            },
+        );
+        let scene = builder.build(&gpu.device).unwrap();
+        let motions = scene.motions.as_ref().unwrap();
+        let read = |row: u64| {
+            let mut out = [GpuMaterial::zeroed()];
+            motions.slots[1].read(row * std::mem::size_of::<GpuMaterial>() as u64, &mut out);
+            out[0].motion_fields()
+        };
+        let slot = |frame_number| FrameSlot {
+            index: 1,
+            frame_number,
+            previous_gpu_ms: None,
+        };
+        // Three quarters of a second in: scrolled by 0.1875, the blink off (half of 2).
+        scene.set_material_clock(0.75);
+        assert_eq!(scene.material_table(slot(9)), motions.slots[1].address());
+        assert_eq!(read(1), ([1.0, 0.0, 0.1875], [0.0, 1.0, 0.0], [1.0; 3]));
+        assert_eq!(read(0), still.motion_fields());
+        // The same frame keeps what it wrote; the next takes the clock.
+        scene.set_material_clock(0.25);
+        scene.material_table(slot(9));
+        assert_eq!(read(1).0, [1.0, 0.0, 0.1875]);
+        scene.material_table(slot(10));
+        assert_eq!(read(1), ([1.0, 0.0, 0.0625], [0.0, 1.0, 0.0], [2.0; 3]));
+        // A row out of the table is refused (the rows that can't scroll: `material::motion`).
+        let mut builder = MeshletSceneBuilder::new();
+        let mesh = builder.add_mesh(&MeshletMesh::build(&rock));
+        builder.add_instance(mesh, Mat4::IDENTITY);
+        builder.set_material_rows(vec![still]);
+        builder.set_material_motion(
+            3,
+            MaterialMotion {
+                scroll: [1.0, 0.0],
+                ..MaterialMotion::default()
+            },
+        );
+        assert!(builder.build(&gpu.device).is_err());
     }
 
     /// The rays' worlds an instance is met by follow its visibility: every one by default, none

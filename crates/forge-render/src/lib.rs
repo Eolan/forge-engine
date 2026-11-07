@@ -100,6 +100,7 @@ pub use liquid::{
     LiquidStep, LiquidTank,
 };
 pub use local_exposure::{LocalExposure, LocalExposureRead, LocalExposureSettings};
+pub use material::motion::{Flipbook, Glow, MaterialMotion};
 pub use meshlet::{
     AmbientLight, CullCamera, CullFlags, DiffuseForDenoiser, DrawTargets, DynamicCapacity,
     FrameStats, GeometryPath, InstanceOcclusion, LampShadows, MeshId, MeshRays, MeshletRenderer,
