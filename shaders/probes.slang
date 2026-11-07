@@ -239,10 +239,32 @@ public struct ProbeField
     public float far_lamp_scale;  // the far rooms' lamps' light (lux in the table) to the resolve's units: 1 over the sun's illuminance (#363)
     public uint4* far_table;      // the far rooms' light (#356, #363): (region, its share's bits, its lamps' bounce as three halves), region 0 an empty entry; null: none
     public float3 focus;          // world metres: where the finest cascade stands and fades round (`Probes::set_focus`), else `camera`
-    public uint focus_pad;
+    public uint debug_mode;       // the probe debug view (`r.show.probes`, `probe_debug_tint`): 0 off
     public BakedHit* baked;       // D-097's first step (#388): per probe and ray, its hit as first traced; null: traced every frame
-    public uint2 baked_pad;
+    public float4* debug;         // per probe, its last update's record (`probe_blend_main`); null unless `debug_mode`
 };
+
+// The probe debug view (`r.show.probes`): the records of the probes a surface's lookup reads,
+// summed with the weights the lookup gives them within each cascade or room grid (the cascades'
+// blend over one another is left out: a view of which probes, not of how much light). Only the
+// view's own lookup in the resolve sums them (`probe_debug_tint`), so no other pass reads the
+// records.
+static bool g_probe_debug_on = false;
+static float3 g_probe_debug = float3(0.0); // what they keep, their irradiance's change, their distances'
+static float g_probe_debug_young = 0.0;    // the weight of the young or reset ones
+static float g_probe_debug_lowered = 0.0;  // the settled ones' weight times how far their update lowered what they keep
+static float g_probe_debug_weight = 0.0;
+
+void probe_debug_add(ProbeField* field, uint probe, float w)
+{
+    if (!g_probe_debug_on)
+        return;
+    float4 r = field[0].debug[probe];
+    g_probe_debug += w * r.xyz;
+    g_probe_debug_young += r.w >= 0.75 ? w : 0.0;
+    g_probe_debug_lowered += r.w < 0.75 ? w * 2.0 * r.w : 0.0;
+    g_probe_debug_weight += w;
+}
 
 // A probe ray's hit as first traced (D-097's first step, #388), relit every frame without a ray:
 // where it met what (a miss at PROBE_MISS_DISTANCE, a back face at minus its distance), what that
@@ -783,6 +805,7 @@ public float4 cascade_irradiance<let MIRROR : int>(ProbeField* field, uint c, fl
             sum_d += w * sqrt(max(e_d, 0.0));
         }
         total += w;
+        probe_debug_add(field, probe, w);
     }
     if (!found || total <= 0.0)
         return float4(0.0);
@@ -1027,6 +1050,7 @@ float4 room_irradiance<let MIRROR : int>(ProbeField* field, uint index, float3 p
             sum_d += w * max(e_d, 0.0);
         }
         total += w;
+        probe_debug_add(field, probe, w);
     }
     if (!found || total <= 0.0)
         return float4(0.0);
@@ -1407,4 +1431,46 @@ public float3 probe_region_tint(ProbeField* field, float3 p, float3 g, float3 v)
     if (mask.kind == REGION_DOORWAY)
         return lerp(region_colour(mask.region), region_colour(mask.other), mask.ramp);
     return region_colour(mask.region);
+}
+
+// A heat scale for `probe_debug_tint`: black, blue, green, yellow, red as `t` goes 0 to 1.
+float3 probe_heat(float t)
+{
+    if (t < 0.25)
+        return lerp(float3(0.03), float3(0.0, 0.1, 1.0), t / 0.25);
+    if (t < 0.5)
+        return lerp(float3(0.0, 0.1, 1.0), float3(0.0, 1.0, 0.0), (t - 0.25) / 0.25);
+    if (t < 0.75)
+        return lerp(float3(0.0, 1.0, 0.0), float3(1.0, 1.0, 0.0), (t - 0.5) / 0.25);
+    return lerp(float3(1.0, 1.0, 0.0), float3(1.0, 0.0, 0.0), (t - 0.75) / 0.25);
+}
+
+// The probe debug view's colour at a surface (`r.show.probes`, `debug_mode`), from the records of
+// the probes its lookup reads (`probe_debug_add`). Mode 1, their state: red young or reset (an
+// update keeps little of its maps then), green settled, blue a settled one whose update lowered
+// what it keeps (a change it believed). Modes 2 and 3, how much their last update changed their
+// irradiance (2) or their distances (3), relative, on a logarithmic heat scale from black (0.01 %
+// or less) through blue (about 0.05 %), green (0.3 %) and yellow (2 %) to red (10 % or more):
+// with a still camera, the probes' share of the flicker. Grey where no probe lights it.
+public float3 probe_debug_tint(ProbeField* field, float3 p, float3 n, float3 v)
+{
+    g_probe_debug = float3(0.0);
+    g_probe_debug_young = 0.0;
+    g_probe_debug_lowered = 0.0;
+    g_probe_debug_weight = 0.0;
+    g_probe_debug_on = true;
+    probe_irradiance(field, p, n, n, v, float3(0.0));
+    g_probe_debug_on = false;
+    if (!(g_probe_debug_weight > 0.0))
+        return float3(0.3);
+    float total = g_probe_debug_weight;
+    if (field[0].debug_mode == 1u)
+    {
+        // Each a share of the whole weight: the young, the settled ones' lowering, the rest.
+        float young = saturate(g_probe_debug_young / total);
+        float lowered = saturate(g_probe_debug_lowered / total);
+        return float3(young, saturate(1.0 - young - lowered), lowered);
+    }
+    float change = field[0].debug_mode == 2u ? g_probe_debug.y / total : g_probe_debug.z / total;
+    return probe_heat(saturate((log10(max(change, 1e-6)) + 4.0) / 3.0));
 }

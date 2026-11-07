@@ -211,6 +211,10 @@ groupshared float3 s_irradiance_old[IRRADIANCE_TEXELS * IRRADIANCE_TEXELS];
 groupshared float2 s_distance[DISTANCE_TEXELS * DISTANCE_TEXELS];
 groupshared float s_hysteresis;
 groupshared float s_drift[DRIFT_UPDATES];
+// The probe debug view's (`r.show.probes`): how far this update lowered what a settled probe
+// keeps, and each distance texel's relative change.
+groupshared float s_lowered;
+groupshared float s_distance_gap[DISTANCE_TEXELS * DISTANCE_TEXELS];
 
 [shader("compute")]
 [numthreads(BLEND_GROUP, 1, 1)]
@@ -278,6 +282,7 @@ void probe_blend_main(uint3 group : SV_GroupID, uint thread : SV_GroupIndex)
     if (thread == 0)
     {
         float kept = h;
+        s_lowered = 0.0;
         for (uint k = 0; k < DRIFT_UPDATES; k++)
             s_drift[k] = 0.0;
         if (!reset && age > PROBE_SETTLE_UPDATES)
@@ -335,6 +340,7 @@ void probe_blend_main(uint3 group : SV_GroupID, uint thread : SV_GroupIndex)
                                 smoothstep(DRIFT_START, DRIFT_FULL, abs(drift_mean))
                                     * smoothstep(DRIFT_SURE_START, DRIFT_SURE_FULL, sure));
             kept = min(h, lerp(h, CHANGED_HYSTERESIS, lowered));
+            s_lowered = lowered;
         }
         s_hysteresis = kept;
     }
@@ -372,6 +378,12 @@ void probe_blend_main(uint3 group : SV_GroupID, uint thread : SV_GroupIndex)
         float2 old = distance[distance_tile + 1 + t];
         float2 measured = total > 1e-6 ? sum / total : (reset ? float2(farthest, farthest * farthest) : old);
         s_distance[thread] = h > 0.0 ? lerp(measured, old, h) : measured;
+        if (field[0].debug != nullptr)
+        {
+            // A map never written may hold anything, NaN included: such a texel counts as changed.
+            float gap = abs(s_distance[thread].x - old.x) / max(max(s_distance[thread].x, old.x), 1e-3);
+            s_distance_gap[thread] = reset ? 1.0 : (gap <= 1.0 ? gap : 1.0);
+        }
     }
     GroupMemoryBarrierWithGroupSync();
 
@@ -384,6 +396,30 @@ void probe_blend_main(uint3 group : SV_GroupID, uint thread : SV_GroupIndex)
         uint2 e = border_source(u, IRRADIANCE_TEXELS);
         uint i = e.y * IRRADIANCE_TEXELS + e.x;
         irradiance[irradiance_tile + u] = float4(s_irradiance[i], i < DRIFT_UPDATES ? s_drift[i] : 0.0);
+    }
+    if (thread == 0 && field[0].debug != nullptr)
+    {
+        // The probe debug view's record (`r.show.probes`, `probe_debug_tint`): what the update
+        // kept; how much it changed the irradiance (its texels' luminance changes over their
+        // light) and the distances (its texels' relative changes, a mean); its state: 1 young, 2
+        // reset, else settled, as half the share its update lowered what it keeps.
+        float3 luma = float3(0.2126, 0.7152, 0.0722);
+        float moved = 0.0;
+        float light = 0.0;
+        for (uint i = 0; i < IRRADIANCE_TEXELS * IRRADIANCE_TEXELS; i++)
+        {
+            float now = dot(s_irradiance[i], luma);
+            float before = dot(s_irradiance_old[i], luma);
+            moved += abs(now - before);
+            light += max(now, before);
+        }
+        float changed = moved / max(light, 1e-12);
+        float spread = 0.0;
+        for (uint i = 0; i < DISTANCE_TEXELS * DISTANCE_TEXELS; i++)
+            spread += s_distance_gap[i];
+        float state = reset ? 2.0 : (age > PROBE_SETTLE_UPDATES ? 0.5 * s_lowered : 1.0);
+        field[0].debug[probe] = float4(h, reset ? 1.0 : (changed <= 1.0 ? changed : 1.0),
+                                       spread / float(DISTANCE_TEXELS * DISTANCE_TEXELS), state);
     }
 }
 

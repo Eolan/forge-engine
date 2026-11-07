@@ -997,6 +997,8 @@ struct Gallery {
     exposure_rooms: Vec<forge_render::RegionVolume>,
     probes_on: bool,
     probes_live: bool,
+    /// The probe debug view's mode (`r.show.probes`, [`forge_render::Probes::set_debug`]).
+    probe_debug: u32,
     /// The island's sea (issue #105): the GPU's cascades and the CPU's spectra they came
     /// from (the start-up check), the seconds of waves played, and the time the last
     /// submitted frame's waves were at.
@@ -2452,6 +2454,7 @@ impl Gallery {
             exposure_rooms,
             probes_on,
             probes_live: false,
+            probe_debug: 0,
             water,
             sea_time: 0.0,
             sea_time_submitted: 0.0,
@@ -3812,6 +3815,7 @@ impl Demo for Gallery {
                     self.probe_focus = focus;
                 }
                 probes.set_focus(self.camera.forward() * self.probe_focus);
+                probes.set_debug(&ctx.device, self.probe_debug)?;
                 // The far rooms' daylight follows the sun (#356).
                 probes.set_sun(
                     self.renderer.sun_dir,

@@ -52,7 +52,10 @@ rasteriser (auto, on, off), `r.show.raster` what it drew, `r.lod.error` the LOD 
 bloom (`--bloom S`, 0.04), `r.shadows` shadows, `r.sky_light` sky light, `r.ao` ambient
 occlusion, `r.show.ao` its view, `r.reflections.sky` sky reflections, `r.reflections.rays`
 mirror rays in the glass and the water, `r.sun.disc` soft or hard shadows, `r.probes` the
-probes' light, `r.show.gi` that light alone, `r.show.wireframe` wireframe, `r.tonemap` tone
+probes' light, `r.show.gi` that light alone, `r.show.probes` what the probes lighting each
+surface did at their last update (1 their state: red young or reset, green settled, blue a
+settled one whose update lowered what it keeps; 2 and 3 how much it changed their irradiance or
+their distances, black 0.01 % to red 10 %), `r.show.wireframe` wireframe, `r.tonemap` tone
 curve, `r.sky.real` the real night sky (`--real-sky`, D-046); `camera.where` logs the view as
 `--view` takes it (to start a run where something was seen).
 

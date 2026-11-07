@@ -339,7 +339,7 @@ impl Sharc {
             builder = builder
                 .buffer(p.data, BufferAccess::ShaderRead(compute))
                 .buffer(p.region, BufferAccess::ShaderRead(compute))
-                .with(|b| p.declare_far(b, compute))
+                .with(|b| p.declare_tables(b, compute))
                 .image(p.irradiance, ImageAccess::Sampled(compute))
                 .image(p.distance, ImageAccess::Sampled(compute));
         }

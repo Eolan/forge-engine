@@ -133,11 +133,13 @@ struct GpuProbeField {
     far_table: u64,
     /// Where the finest cascade stands ([`Probes::set_focus`]).
     focus: [f32; 3],
-    focus_pad: u32,
+    /// The probe debug view ([`Probes::set_debug`]): 0 off.
+    debug_mode: u32,
     /// D-097's first step (#388): each settled probe's rays' hits as first traced, relit every
     /// frame without a ray (`BakedHit` in `probes.slang`); 0: the rays traced every frame.
     baked: u64,
-    baked_pad: [u32; 2],
+    /// Each probe's last update's record for the debug view; 0 unless `debug_mode`.
+    debug: u64,
 }
 
 const _: () = assert!(std::mem::size_of::<GpuProbeField>() == 616);
@@ -619,18 +621,25 @@ pub struct ProbeLight {
     pub(crate) distance: ImageHandle,
     /// The far rooms' table this frame (#356), which the lookup reads where a room is far.
     pub(crate) far: Option<BufferHandle>,
+    /// The probe debug view's records ([`Probes::set_debug`]), which the resolve's view reads.
+    pub(crate) debug: Option<BufferHandle>,
 }
 
 impl ProbeLight {
-    /// Declares the far rooms' table (#356) for a pass that looks the probes up at `stages`,
-    /// where the frame has one.
-    pub(crate) fn declare_far<'b, 'f>(
+    /// Declares the buffers a pass that looks the probes up at `stages` may read beyond the
+    /// field's own, where the frame has them: the far rooms' table (#356) and the debug view's
+    /// records ([`Probes::set_debug`]).
+    pub(crate) fn declare_tables<'b, 'f>(
         &self,
         builder: forge_gpu::PassBuilder<'b, 'f>,
         stages: vk::PipelineStageFlags2,
     ) -> forge_gpu::PassBuilder<'b, 'f> {
-        match self.far {
+        let builder = match self.far {
             Some(table) => builder.buffer(table, BufferAccess::ShaderRead(stages)),
+            None => builder,
+        };
+        match self.debug {
+            Some(records) => builder.buffer(records, BufferAccess::ShaderRead(stages)),
             None => builder,
         }
     }
@@ -713,6 +722,10 @@ pub struct Probes {
     /// D-097's first step (#388, `FORGE_GI_BAKED=1`): each ray's hit as first traced, relit every
     /// frame without a ray; its rays' directions then never turn.
     baked: Option<GraphBuffer>,
+    /// The probe debug view ([`Self::set_debug`]): each probe's last update's record, made when
+    /// the view is first asked for, and the view's mode (0 off).
+    debug: Option<GraphBuffer>,
+    debug_mode: u32,
     /// Each probe's region (D-068), `REGION_NONE` until its first update with regions.
     region: GraphBuffer,
     /// The scene's region volumes in sets and the grids that find them, when it knows its rooms
@@ -920,6 +933,8 @@ impl Probes {
             distance: atlas(DISTANCE_TILE, vk::Format::R16G16_SFLOAT, "probe distance")?,
             rays,
             baked,
+            debug: None,
+            debug_mode: 0,
             data: GraphBuffer::new(data),
             region: GraphBuffer::new(region),
             regions: None,
@@ -1031,6 +1046,31 @@ impl Probes {
         self.focus = offset;
     }
 
+    /// The probe debug view (`r.show.probes`, `probe_debug_tint` in `probes.slang`): at each
+    /// surface, what the probes its lookup reads did at their last update. `mode` 1 their state
+    /// (red young or reset, green settled, blue a settled one whose update lowered what it keeps),
+    /// 2 how much their update changed their irradiance, 3 their distances (a heat scale, black
+    /// 0.01 % to red 10 %); 0 off. Each probe's record (16 bytes) is made at the first ask and
+    /// kept. Kept until set again.
+    pub fn set_debug(&mut self, device: &Arc<Device>, mode: u32) -> Result<()> {
+        if mode != 0 && self.debug.is_none() {
+            let size = u64::from(self.params.probe_count()) * 16;
+            let buffer = device.create_buffer(BufferDesc {
+                size,
+                usage: vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_DST,
+                location: MemoryLocation::GpuOnly,
+                category: MemoryCategory::Work,
+                name: "probe debug records",
+            })?;
+            device.execute_compute_once_on(QueueKind::Compute, |commands| {
+                commands.fill_buffer(&buffer, 0, size, 0);
+            })?;
+            self.debug = Some(GraphBuffer::new(buffer));
+        }
+        self.debug_mode = mode;
+        Ok(())
+    }
+
     /// The scene's lamps this frame and the shares of them it lights (#363,
     /// [`ProbeParams::far_room_lamps`], [`crate::lamps::choose_shares`]): each room's that are on,
     /// summed for the far rooms' light round their walls; the far rooms' records are written again
@@ -1109,7 +1149,8 @@ impl Probes {
         self.params.atlas_size(DISTANCE_TILE)
     }
 
-    /// Bytes of the atlases, the rays and the probes' state.
+    /// Bytes of the atlases, the rays and the probes' state (and the debug view's records, once
+    /// asked for).
     pub fn bytes(&self) -> u64 {
         let texels = |tile: u32| {
             let [w, h] = self.params.atlas_size(tile);
@@ -1124,6 +1165,7 @@ impl Probes {
             + self.regions.as_ref().map_or(0, RegionStore::bytes)
             + self.wake_boxes.iter().map(Buffer::size).sum::<u64>()
             + self.rooms.as_ref().map_or(0, RoomGrids::bytes)
+            + self.debug.as_ref().map_or(0, |b| b.size())
     }
 
     /// Every probe's offset from its cell's centre (xyz, metres) and state and age (w: the
@@ -1314,9 +1356,16 @@ impl Probes {
             far_lamp_scale: 1.0 / self.sun_illuminance.max(1e-9),
             far_table: far.map_or(0, |f| f.3),
             focus: (camera + self.focus).to_array(),
-            focus_pad: 0,
+            debug_mode: if self.debug.is_some() {
+                self.debug_mode
+            } else {
+                0
+            },
             baked: self.baked.as_ref().map_or(0, |b| b.address()),
-            baked_pad: [0; 2],
+            debug: match (&self.debug, self.debug_mode) {
+                (Some(b), 1..) => b.address(),
+                _ => 0,
+            },
         };
         self.fields[slot.index].write(0, &[field]);
 
@@ -1325,6 +1374,10 @@ impl Probes {
         let compute = vk::PipelineStageFlags2::COMPUTE_SHADER;
         let rays = graph.import_buffer(&this.rays);
         let baked = this.baked.as_ref().map(|b| graph.import_buffer(b));
+        let debug = match (&this.debug, this.debug_mode) {
+            (Some(b), 1..) => Some(graph.import_buffer(b)),
+            _ => None,
+        };
         let data = graph.import_buffer(&this.data);
         let region = graph.import_buffer(&this.region);
         let irradiance = graph.import(&this.irradiance);
@@ -1502,6 +1555,10 @@ impl Probes {
                 .buffer(data, BufferAccess::ShaderRead(compute))
                 .image(irradiance, ImageAccess::StorageReadWrite(compute))
                 .image(distance, ImageAccess::StorageReadWrite(compute))
+                .with(|b| match debug {
+                    Some(d) => b.buffer(d, BufferAccess::ShaderWrite(compute)),
+                    None => b,
+                })
                 .run(move |_, commands| {
                     commands.bind_pipeline(blend);
                     commands.push_constants(blend, &push);
@@ -1516,6 +1573,7 @@ impl Probes {
             irradiance,
             distance,
             far: far_table,
+            debug,
         }
     }
 }

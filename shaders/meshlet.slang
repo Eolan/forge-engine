@@ -8505,6 +8505,12 @@ uint shade_pixel<let SHADOWS : int>(uint class_index, uint2 pixel, uint vis)
         color = probe_region_tint(s.probes, s.world, s.n, s.view);
         debug_view = true;
     }
+    if (!grass && s.probes != nullptr && s.probes[0].debug_mode != 0u && s.probes[0].debug != nullptr)
+    {
+        // The probe debug view (`r.show.probes`), its colour out of the exposure below.
+        color = probe_debug_tint(s.probes, s.world, s.n, s.view) / max(f[0].sun_illuminance * f[0].exposure / 3.14159265, 1e-9);
+        debug_view = true;
+    }
     if (debug_view)
         g_reflection_request = float4(0.0);
     color *= f[0].sun_illuminance * f[0].exposure / 3.14159265;

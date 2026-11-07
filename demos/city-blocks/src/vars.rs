@@ -29,6 +29,7 @@ pub(crate) struct RenderVars {
     ao_radius: Var<f64>,
     texture_lod_bias: Var<f64>,
     show_input: Var<i64>,
+    show_probes: Var<i64>,
     gi_reference: Var<i64>,
     gi_trace: Var<bool>,
     gi_cache: Var<usize>,
@@ -251,6 +252,7 @@ impl Gallery {
             ao_radius: s.add_from_f32(rs::ao_radius(1.5), 1.5, self.args.ao_radius),
             texture_lod_bias: s.add_from_f32(rs::texture_lod_bias(0.0), 0.0, self.texture_bias),
             show_input: s.add(rs::show_input(0)),
+            show_probes: s.add(rs::show_probes(0)),
             gi_reference: s.add(rs::gi_reference(0)),
             gi_trace: s.add(rs::gi_trace(true)),
             gi_cache: s.add(rs::gi_cache(gi_cache_default(&self.args.settings))),
@@ -439,6 +441,9 @@ impl Gallery {
         }
         if s.changed_since(v.show_input, seen) {
             self.renderer.show_input = s.get(v.show_input).clamp(0, 6) as u32;
+        }
+        if s.changed_since(v.show_probes, seen) {
+            self.probe_debug = s.get(v.show_probes).clamp(0, 3) as u32;
         }
         if s.changed_since(v.gi_reference, seen) {
             self.renderer.gi_reference = s.get(v.gi_reference).clamp(0, 8) as u32;

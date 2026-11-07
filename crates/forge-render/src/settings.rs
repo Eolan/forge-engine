@@ -277,6 +277,19 @@ pub fn show_input(default: i64) -> Spec<i64> {
     )
 }
 
+/// The probe debug view (`Probes::set_debug`): what the probes a surface's light comes from did
+/// at their last update.
+pub fn show_probes(default: i64) -> Spec<i64> {
+    Spec::int(
+        "r.show.probes",
+        default,
+        0..=3,
+        "The probes a surface's light comes from: 1 their state (red young or reset, green \
+         settled, blue a settled one whose update lowered what it keeps), 2 how much their last \
+         update changed their irradiance, 3 their distances (black 0.01 % to red 10 %); 0 none.",
+    )
+}
+
 /// How many frames the sun's shadows' denoiser steadies over (#337, SIGMA's stabilisation).
 pub fn shadow_history(default: i64) -> Spec<i64> {
     Spec::int(
