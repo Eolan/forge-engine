@@ -352,6 +352,11 @@ pub trait Running: Send {
     fn glass(&self) -> forge_render::GlassPanes {
         forge_render::GlassPanes::default()
     }
+    /// Its pictures of light with no surface, taken once after the build, in the world frame (as
+    /// `glass`): pictures its meshes leave out. None by default.
+    fn holograms(&self) -> forge_render::HologramPanes {
+        forge_render::HologramPanes::default()
+    }
     /// Its grass near the camera (#300, D-075), taken once after the build, in the world frame
     /// (as `glass`): its map, and the material row of its blades. None by default.
     fn grass(&self) -> Option<(forge_render::grass::GrassMap, u32)> {

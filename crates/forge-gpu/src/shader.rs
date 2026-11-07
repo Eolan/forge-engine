@@ -188,6 +188,9 @@ const PRECISE_ENTRIES: &[(&str, &str)] = &[
     ("particles.slang", "frag_main"),
     ("particles.slang", "frag_layer_main"),
     ("particles.slang", "composite_main"),
+    // Pictures of light drawn into what DLSS's or FSR's history keeps.
+    ("holograms.slang", "vert_main"),
+    ("holograms.slang", "frag_main"),
 ];
 
 /// The shader files that include a vendor SDK's headers, and the SDK's include directory beside

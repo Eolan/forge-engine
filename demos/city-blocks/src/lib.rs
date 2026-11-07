@@ -1042,6 +1042,8 @@ struct Gallery {
     particle_born: u64,
     /// The scene's clear glass over its built rooms (D-065's part 4), when it has any.
     glass: Option<forge_render::Glass>,
+    /// Its pictures of light with no surface (`Running::holograms`), when it has any.
+    holograms: Option<forge_render::Holograms>,
     /// `FORGE_GLASS_SETS` (#338's check): the glass given by sets.
     glass_check: Option<GlassCheck>,
     /// `FORGE_LAMP_TABLE` (#338's check): the frames' lamps by stable ids.
@@ -2175,6 +2177,27 @@ impl Gallery {
                 glass = Some(made);
             }
         }
+        // Its pictures of light with no surface, from the world frame to the scene's.
+        let holograms = match running
+            .as_ref()
+            .map(|r| r.holograms())
+            .filter(|h| !h.is_empty())
+        {
+            Some(mut panes) => {
+                let origin = scene.origin();
+                for p in &mut panes.positions {
+                    *p = forge_render::CellPos::from_f64(p.as_dvec3()).relative_to(origin);
+                }
+                let made = forge_render::Holograms::new(&ctx.device, &ctx.shaders, &panes)?;
+                tracing::info!(
+                    triangles = made.triangle_count(),
+                    kib = made.bytes() / 1024,
+                    "holograms"
+                );
+                Some(made)
+            }
+            None => None,
+        };
         // The scene's grass near the camera (#300, `--grass`), from the world frame to the
         // scene's.
         if let (Some(reach), Some((mut map, row))) =
@@ -2347,6 +2370,7 @@ impl Gallery {
             particle_peak: 0,
             particle_born: 0,
             glass,
+            holograms,
             glass_check,
             lamp_check,
             cell_check,
@@ -4568,6 +4592,21 @@ impl Demo for Gallery {
                     },
                 );
             }
+        }
+        // The pictures of light with no surface, over the glass.
+        if let Some(holograms) = self.holograms.as_ref() {
+            holograms.draw(
+                &mut frame.graph,
+                frame.slot,
+                forge_render::HologramParams {
+                    view_proj: taa_frame.jittered_projection * self.camera.view_rotation(),
+                    camera: camera_in_scene,
+                    exposure,
+                },
+                taa_frame.color,
+                targets.depth,
+                extent,
+            );
         }
         // The spray where it splashes (#107), over the water and its reflections; and the ground a
         // slipping wheel throws, with or without water (#192: the yard's).

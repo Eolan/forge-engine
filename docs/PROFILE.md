@@ -1585,6 +1585,7 @@ walker's dust):
 | `particles/advance [compute]` (a sun ray a particle) | 0.005 |
 | `particles/emit [compute]` | 0.001 |
 | `particles/lamps [compute]` (only a scene that asks: `Look::particle_lamps`) | 0.001 to 0.03 |
+| `holograms/draw` (only a scene with pictures of light: `Running::holograms`; not in this yard: 3,746 triangles, 31 pictures on the private district's path at 2560 x 1440) | 0.009 |
 
 The frame was 1.65 ms (best of three). The puffs are fill-bound: the plumes' overlapping sprites
 cost the draw, and the flipbook's are larger with four reads each (the procedural puffs drew in

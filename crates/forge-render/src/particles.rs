@@ -1094,7 +1094,8 @@ mod tests {
                 "haze-room-dense",
                 "haze-room-quick",
                 "haze-room-wide",
-                "haze-room-thin"
+                "haze-room-thin",
+                "smoke-cigarette",
             ]
         );
         assert!(effects[1].burst);

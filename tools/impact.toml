@@ -119,6 +119,9 @@
 "shaders/splashes.slang" = ["island", "lab"]
 "shaders/particles.slang" = ["lab"]
 "shaders/particles_lamps.slang" = ["lab"]
+# Only a scene that hands over pictures draws them; none of the sentinels does.
+"shaders/holograms.slang" = []
+"crates/forge-render/src/holograms.rs" = []
 "crates/forge-render/src/particles.rs" = ["lab"]
 "crates/forge-render/data/particles.toml" = ["lab"]
 "crates/forge-render/src/lamps.rs" = ["lab"]

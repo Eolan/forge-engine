@@ -32,6 +32,7 @@ pub mod fsr;
 pub mod glass;
 pub mod grass;
 pub mod gtao;
+pub mod holograms;
 pub mod impostor;
 pub mod lamps;
 pub mod linear_capture;
@@ -92,6 +93,7 @@ pub use forge_gpu::DlssMode;
 pub use fsr::{FsrGroup, FsrMode, FsrUpscaler};
 pub use glass::{Glass, GlassCapacity, GlassLook, GlassPanes, GlassParams, NO_LAMP, PaneSetId};
 pub use gtao::{Gtao, GtaoParams};
+pub use holograms::{HologramPanes, HologramParams, HologramRow, Holograms};
 pub use liquid::{
     FRESH_FOAM_LIFE, LIQUID_MAX_OBSTACLES, LIQUID_MAX_SUBSTEPS, Liquid, LiquidDrawParams,
     LiquidHole, LiquidLook, LiquidMode, LiquidObstacle, LiquidSolver, LiquidState, LiquidStats,

@@ -11841,3 +11841,24 @@ doorway. A smooth surface's mirror ray still sees a real window.
 **Patents.** A light mask per object is old practice: light linking in offline renderers, lighting channels in
 released game engines. Two searches found no live patent on it. The closest, US 6,639,595 (a per-channel light
 mask in fixed-function hardware), was filed in 2000 and has expired. The searches were not exhaustive.
+
+## D-103 — Pictures of light with no surface: a pass over the HDR scene ✅ (the owner's go 2026-11-07: "go with people, bottles and holograms"; D-065, D-083)
+
+**The need.** The private district's shipped open-world city game draws floating signs, prices over stalls and pictures on fridge doors as light with no surface: a texture added over what is behind it. Forge's visibility pass has no such thing. Drawn solid, they stood as dark slabs, so the viewer left them out, 31 pictures on 3,746 triangles near the benchmark's path.
+
+**Decided.** `forge_render::Holograms` and `shaders/holograms.slang`, `Running::holograms`: triangles in the world frame, each corner naming a row (a picture, its glow in cd/m², its hue, saturation and value). One pass, `holograms/draw`, after the glass: the picture's colour times its alpha, times the glow and the exposure, added to the HDR scene where nothing nearer stands. It tests the frame's depth itself and writes none. A scene that hands over none has no pass and no buffers, so every other scene renders as before.
+
+**What it leaves out.**
+
+- No surface means no light taken, no shadow, nothing in the ray-traced scene and nothing lit by it. A picture's glow on what is near it isn't drawn.
+- It writes no depth, so the upscaler reprojects a pixel by what is behind it. A picture in front of something near may trail a little when the camera moves fast. Not seen yet; to look at on a walk.
+- The glass writes no depth either, so "where nothing nearer stands" doesn't count a pane: a picture behind one isn't dimmed, and shines through a roller blind.
+- The sky's aerial haze isn't laid over a picture, as it is over the glass and the particles, so a far one keeps its full light. The froxels' fog, drawn later, still reaches it.
+- The picture's level of detail is the plain derivative's: the upscaler's texture bias doesn't reach it, so a picture is slightly blurrier than the scene under DLSS Quality.
+- The source's pictures carry up to four layers parted along the view, which is what makes them read as deep, plus scan lines and scrolling. Only the first layer is drawn: **Sony US 12,293,452 (a live patent on layered atlases, D-060) is to be reread before any layering**, so none is built here. The pass has no flipbook: a scene that wants one tile gives its corners that tile's places.
+
+**Patents.** Adding a texture's light over a scene in a blended pass is old practice. No search was run for it specifically, because the pass has no claimed trick in it; the one live patent known near this area is the layering above, which it avoids.
+
+**What it did.** `holograms/draw` 0.009 ms on the benchmark's path at 2560 x 1440. The pictures are small on screen, so the 33 scored frames barely move.
+
+**Also landed with it:** `smoke-cigarette`, a particle effect in `data/particles.toml`, a thin thread of smoke for a held cigarette, lit by the room's lamps. The private viewer emits one at each smoker's hand. Its values are a fit by eye: the source's own effect wasn't read.
