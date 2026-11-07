@@ -690,6 +690,11 @@ impl TextureSet {
         uploaded: Vec<(Image, u64)>,
         textures: &[CompressedTexture],
     ) -> Result<Vec<TextureId>> {
+        assert_eq!(
+            uploaded.len(),
+            textures.len(),
+            "add_all_compressed: one uploaded image per texture"
+        );
         let mut alphas = vec![TextureAlpha::Unknown; textures.len()];
         forge_core::pack::par_chunks_mut(&mut alphas, 1, 4, |i, out| {
             out[0] = compressed_alpha(&textures[i]);
@@ -815,6 +820,12 @@ impl TextureSet {
         format: vk::Format,
         levels: &[&[u8]],
     ) -> Result<RetiredTexture> {
+        // An image takes at least one level: none would register one of undefined contents.
+        if levels.is_empty() {
+            return Err(forge_gpu::GpuError::Unsupported(
+                "a texture remade with no levels".into(),
+            ));
+        }
         let image = self.device.create_image_with_mips(
             ImageDesc {
                 width,
@@ -896,6 +907,7 @@ impl Drop for TextureSet {
 /// A texture's image and slot that [`TextureSet::remake`] replaced: dropped (through
 /// `Frames::destroy_later`, once no frame in flight may sample them), the image goes and the slot
 /// is freed.
+#[must_use = "dropped now, it frees the image and its slot while frames in flight may still               sample them: give it to `Frames::destroy_later`"]
 pub struct RetiredTexture {
     device: Arc<Device>,
     image: Option<Image>,
@@ -1562,6 +1574,12 @@ mod tests {
         assert_eq!(set.textures[id.0 as usize].0.mip_levels(), 3);
         assert_eq!(set.textures[id.0 as usize].0.extent().width, 4);
         drop(retired);
+        // No levels: refused, the texture as it was.
+        assert!(
+            set.remake(id, 4, 4, vk::Format::R8G8B8A8_SRGB, &[])
+                .is_err()
+        );
+        assert_eq!(set.textures[id.0 as usize].0.mip_levels(), 3);
         let all: Vec<&[u8]> = data.levels.iter().map(Vec::as_slice).collect();
         let retired = set
             .remake(id, 16, 16, vk::Format::R8G8B8A8_SRGB, &all)
