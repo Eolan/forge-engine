@@ -3525,7 +3525,25 @@ make without the source's models, and a picture checks them exactly.
   - **The streamed path, real time:** 15.94 ms a frame against 15.81 from the cache. VRAM and geometry are the same.
   - **A corrupted entry:** one byte changed in a mesh entry refuses the package, naming the entry.
   - **Unit tests:** both readings, and both refusals.
-- **Next:** the layered setups' masks as made, the 2.6 s their making takes at each start.
+
+**Then the layered setups' masks, stored as made (the same day).** The private district's viewer keeps each setup's mask
+textures and presence map as `layer_mask_textures` and `layer_presence` make them. It stores them as a `Stored` value in
+two places:
+- **the derived-data cache:** keyed by the mask files (path, size, time), the options that shape the masks, and the
+  viewer's binary. Setups that share their mask files share one entry.
+- **the package:** written with the meshes, one entry a setup.
+
+| The district's 2,424 setups | Made at each start | Read as made |
+|---|---|---|
+| Their masks made or read | 2.6 s (3.9 s the first time, with the stores) | 0.70 s from the cache, 0.72 to 0.76 s from the package |
+| The whole step, with the upload | 4.6 s | 2.06 to 2.14 s |
+| The streamed path's loading screen | 7.3 s | 6.2 s from either |
+
+- **Size:** 480 MiB in the cache and 686 MiB in the package, where shared setups are stored once each.
+- **The look:** the stills are within the runs' noise, read from the cache or the package against made afresh (127 to
+  240 pixels of 3.7 million).
+- **What is left of the step:** the masks' upload, 1.3 s. Their rows are RGBA8 with full mip chains; a block-compressed
+  layout is D-105's to settle.
 
 ## D-054 — The caches packed with LZ4 ✅ (the owner's choice on #215, 2026-10-09)
 
