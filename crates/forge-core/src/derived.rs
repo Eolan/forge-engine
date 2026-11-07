@@ -131,6 +131,76 @@ fn invalid(what: &str) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, what.to_owned())
 }
 
+/// `value`'s payload as a body of its own (a package's entry, `crate::package`): the payload's
+/// length, then the frames an entry of the cache holds (each its length, its codec and its bytes,
+/// packed apart) and the checksum of the frames.
+pub(crate) fn encode_body<T: Stored>(value: &T) -> io::Result<Vec<u8>> {
+    let mut payload = Vec::new();
+    value.put(&mut Sink { out: &mut payload })?;
+    let mut packed = vec![(Codec::Raw, Vec::new()); payload.len().div_ceil(FRAME)];
+    par_chunks_mut(&mut packed, 1, 1, |i, frame| {
+        let end = ((i + 1) * FRAME).min(payload.len());
+        frame[0] = pack(&payload[i * FRAME..end], false);
+    });
+    let mut body = Vec::new();
+    payload.len().put(&mut Sink { out: &mut body })?;
+    let mut checksum = Xxh3::new();
+    for (codec, bytes) in &packed {
+        let mut frame = Vec::with_capacity(5);
+        (bytes.len() as u32).put(&mut Sink { out: &mut frame })?;
+        frame.push(*codec as u8);
+        checksum.update(&frame);
+        checksum.update(bytes);
+        body.extend_from_slice(&frame);
+        body.extend_from_slice(bytes);
+    }
+    body.extend_from_slice(&checksum.digest().to_le_bytes());
+    Ok(body)
+}
+
+/// A body [`encode_body`] wrote, read back whole: refused when its checksum fails, a frame is
+/// short, or bytes are left over.
+pub(crate) fn decode_body<T: Stored>(body: &[u8]) -> io::Result<T> {
+    let mut header = Source { input: body };
+    let length = usize::take(&mut header)?;
+    let Some((frames, trailer)) = header.input.split_last_chunk::<8>() else {
+        return Err(invalid("a body without its checksum"));
+    };
+    let mut checksum = Xxh3::new();
+    checksum.update(frames);
+    if u64::from_le_bytes(*trailer) != checksum.digest() {
+        return Err(invalid("a body whose checksum fails"));
+    }
+    let mut input = Source { input: frames };
+    let packed = (0..length.div_ceil(FRAME))
+        .map(|_| {
+            let len = u32::take(&mut input)? as usize;
+            let codec = Codec::from_byte(u8::take(&mut input)?)?;
+            Ok((codec, input.slice(len)?))
+        })
+        .collect::<io::Result<Vec<_>>>()?;
+    if input.left() != 0 {
+        return Err(invalid("bytes after a body's frames"));
+    }
+    let mut payload = vec![0; length];
+    let failed = Mutex::new(None);
+    par_chunks_mut(&mut payload, FRAME, 1, |i, out| {
+        let (codec, packed) = packed[i];
+        if let Err(error) = unpack(codec, packed, out) {
+            *failed.lock().unwrap() = Some(error);
+        }
+    });
+    if let Some(error) = failed.into_inner().unwrap() {
+        return Err(error);
+    }
+    let mut source = Source { input: &payload };
+    let value = T::take(&mut source)?;
+    if source.left() != 0 {
+        return Err(invalid("a body longer than its value"));
+    }
+    Ok(value)
+}
+
 /// A type written to and read from derived data. Use [`crate::stored!`] for a struct.
 pub trait Stored: Sized {
     /// Writes it.

@@ -3478,6 +3478,29 @@ into `forge-app`) is a decision for when another demo than the lab needs it.
 
 ROADMAP's Phase 9 holds the rest for later.
 
+**Step 5's first part (2026-11-07, #214; the owner: "move the effort to ... the content package and cell streaming"):**
+`forge_core::package`, the format and its reader and writer.
+
+- **The directory:** `manifest.toml` plus the entries' files. The manifest lists each entry's id, kind, format version, file, size and the
+  xxh3 digest of its whole file.
+- **Two kinds of entry:**
+  - a `Stored` value, written as a short header and the payload packed in the derived-data cache's frames;
+  - a file copied as it is.
+- **What a read refuses,** naming the entry: another kind or format, a size or digest that isn't the manifest's, a missing entry, and a
+  manifest of another format. Unit tests cover each.
+
+Next is the cook and the runtime's use of it, on the private district.
+- **Why:** its load takes 24 s on one thread and uploads 8.6 GiB.
+- **Where the time goes:**
+  - the layered materials' setups, 7.5 s;
+  - the scene build, 4.9 s;
+  - the maps, 2.7 s;
+  - the rays' structures, 1.9 s.
+- **What the package holds first:**
+  - the setups' derived data;
+  - its cells' records;
+  - its textures, in the format D-105 settles.
+
 ## D-054 — The caches packed with LZ4 ✅ (the owner's choice on #215, 2026-10-09)
 
 **The owner's question:** "What do games use for efficient compressions?" The answer was posted

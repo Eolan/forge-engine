@@ -1028,6 +1028,7 @@ dependencies = [
  "libm",
  "lz4_flex",
  "serde",
+ "toml",
  "tracing",
  "xxhash-rust",
 ]

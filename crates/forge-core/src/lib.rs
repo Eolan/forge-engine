@@ -15,6 +15,7 @@ pub mod hash;
 pub mod id;
 pub mod material;
 pub mod pack;
+pub mod package;
 pub mod seed;
 pub mod settings;
 pub mod switch;

@@ -100,7 +100,7 @@ Where Forge uses them:
 - `serde_json`: credits, forge-geom, physics-lab
 - `thiserror`: forge-anim, forge-audio, forge-geom, forge-gpu, forge-mission, forge-net, forge-physics, forge-script, forge-sim
 - `tokio`: forge-net
-- `toml`: city-blocks, forge-anim, forge-fauna, forge-flora, forge-procgen, forge-render, forge-terrain
+- `toml`: city-blocks, forge-anim, forge-core, forge-fauna, forge-flora, forge-procgen, forge-render, forge-terrain
 - `tracing`: asteroids, city-blocks, city-plan, forge-app, forge-core, forge-gpu, forge-render, forge-task, forge-terrain, meshlets, physics-lab, planet
 - `tracing-subscriber`: forge-app
 - `tracy-client`: forge-app, forge-task
