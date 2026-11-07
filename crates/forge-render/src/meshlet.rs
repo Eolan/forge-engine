@@ -5842,7 +5842,7 @@ impl MeshletRenderer {
                 .run(move |_, commands| {
                     commands.bind_pipeline(pipeline);
                     commands.push_constants(pipeline, &push);
-                    commands.dispatch(groups, 1, 1);
+                    commands.dispatch(groups.min(65_535), groups.div_ceil(65_535), 1);
                     Ok(())
                 });
             if let (Some(rays), Some(positions)) = (rays, ray_positions) {

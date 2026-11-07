@@ -401,10 +401,6 @@ impl SceneSkins {
             vertices.extend_from_slice(&source.vertices);
             joints += source.joints;
         }
-        assert!(
-            clusters.len() <= 65_535,
-            "the skin pass dispatches a workgroup per cluster, at most 65 535"
-        );
         // Without targets the pass reads no range, and without eight joints a vertex no record.
         if morph_count == 0 {
             morph_ranges.clear();

@@ -337,7 +337,8 @@ float3 field_normal(float* heights, HeightField h, float2 p)
 [numthreads(64, 1, 1)]
 void skin_main(uint3 group : SV_GroupID, uint3 thread : SV_GroupThreadID)
 {
-    uint c_index = group.x;
+    // A dispatch counts at most 65 535 groups along an axis: a larger crowd runs over a second one.
+    uint c_index = group.x + group.y * 65535;
     if (c_index >= push.cluster_count)
         return;
     SkinCluster c = push.clusters[c_index];
