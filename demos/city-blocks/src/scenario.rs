@@ -121,6 +121,11 @@ pub struct Look {
     /// The particle effects that take a share of the lamps are lit by them
     /// (`Particles::light_by_lamps`).
     pub particle_lamps: bool,
+    /// A bloom of the highlights alone, added over the image: from nothing at the first pre-exposed
+    /// luminance to all of it at the second (`Bloom::highlights`), and how much is added. The
+    /// image keeps its sharpness where a share of a blur of all of it would soften it. None: the
+    /// app's bloom.
+    pub bloom_highlights: Option<[f32; 3]>,
     /// An environment map as the sky (D-084), for a scene authored under one: no air, no
     /// clouds, no night; the sun's direction from `sun`.
     pub environment: Option<Environment>,
@@ -189,6 +194,7 @@ impl Default for Look {
             exposure_speeds: None,
             ray_glow: None,
             particle_lamps: false,
+            bloom_highlights: None,
             environment: None,
             tonemap: None,
             grading: None,

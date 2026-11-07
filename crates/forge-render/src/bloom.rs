@@ -26,12 +26,18 @@ struct Push {
     texel: [f32; 2],
     src_level: f32,
     karis: u32,
+    highlights: [f32; 2],
 }
 
 /// The bloom chain's two passes.
 pub struct Bloom {
     downsample: Pipeline,
     upsample: Pipeline,
+    /// A bloom of the highlights alone, for a strength that adds it (`Display::draw`, a negative
+    /// strength): what the first step keeps, from nothing at the first pre-exposed luminance to
+    /// all of it at the second, with no damping of the brightest. None: all of the image, the
+    /// brightest damped against fireflies.
+    pub highlights: Option<[f32; 2]>,
 }
 
 impl Bloom {
@@ -53,6 +59,7 @@ impl Bloom {
         Ok(Self {
             downsample: compute("downsample_main", "bloom down")?,
             upsample: compute("upsample_main", "bloom up")?,
+            highlights: None,
         })
     }
 
@@ -65,6 +72,7 @@ impl Bloom {
         extent: vk::Extent2D,
     ) -> ImageHandle {
         let compute = vk::PipelineStageFlags2::COMPUTE_SHADER;
+        let highlights = self.highlights.unwrap_or([0.0; 2]);
         let size = |level: u32| {
             [
                 (extent.width >> (level + 1)).max(1),
@@ -117,6 +125,7 @@ impl Bloom {
                             texel: [1.0 / src_size[0] as f32, 1.0 / src_size[1] as f32],
                             src_level,
                             karis: u32::from(level == 0),
+                            highlights,
                         },
                     );
                     commands.dispatch(dst[0].div_ceil(GROUP), dst[1].div_ceil(GROUP), 1);
@@ -142,6 +151,7 @@ impl Bloom {
                             texel: [1.0 / src_size[0] as f32, 1.0 / src_size[1] as f32],
                             src_level: (level + 1) as f32,
                             karis: 0,
+                            highlights: [0.0; 2],
                         },
                     );
                     commands.dispatch(dst[0].div_ceil(GROUP), dst[1].div_ceil(GROUP), 1);

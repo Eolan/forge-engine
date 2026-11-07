@@ -236,7 +236,16 @@ impl Gallery {
             fsr_sharpness: s.add(rs::fsr_sharpness(rs::FSR_SHARPNESS)),
             tonemap,
             bloom: s.add_from(rs::bloom(true), true, self.bloom_on),
-            bloom_strength: s.add_from_f32(rs::bloom_strength(0.04), 0.04, self.taa.bloom_strength),
+            // A look's own as the setting's default (`--set` and forge.cfg win over it), written as in decimal.
+            bloom_strength: {
+                let strength = self.taa.bloom_strength;
+                let default = if self.bloom.highlights.is_some() {
+                    strength.to_string().parse().unwrap_or(f64::from(strength))
+                } else {
+                    0.04
+                };
+                s.add_from_f32(rs::bloom_strength(default), default, strength)
+            },
             local: s.add_from(rs::local_exposure(0), 0, local_now),
             ao: s.add_from(rs::ao(true), true, self.ao_on),
             ao_radius: s.add_from_f32(rs::ao_radius(1.5), 1.5, self.args.ao_radius),

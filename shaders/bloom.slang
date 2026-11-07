@@ -14,6 +14,7 @@ struct Push
     float2 texel;     // one texel of the level read, in uv
     float src_level;  // the mip of `src` read
     uint karis;       // 1 on the first step down
+    float2 highlights; // the first step keeps what is over x and whole from y (`Bloom::highlights`); y 0: all of it
 };
 
 [[vk::push_constant]]
@@ -36,6 +37,11 @@ float3 box(float3 a, float3 b, float3 c, float3 d, out float weight)
 {
     float3 mean = (a + b + c + d) * 0.25;
     weight = push.karis != 0 ? 1.0 / (1.0 + luma(mean)) : 1.0;
+    if (push.karis != 0 && push.highlights.y > 0.0)
+    {
+        weight = 1.0;
+        mean *= smoothstep(push.highlights.x, push.highlights.y, luma(mean));
+    }
     return mean;
 }
 

@@ -1194,7 +1194,7 @@ impl Gallery {
         let mut taa = Taa::new(&ctx.device, &ctx.shaders, ctx.extent())?;
         taa.enabled = !args.no_taa;
         taa.bloom_strength = args.bloom;
-        let bloom = Bloom::new(&ctx.device, &ctx.shaders)?;
+        let mut bloom = Bloom::new(&ctx.device, &ctx.shaders)?;
         let bloom_on = args.bloom > 0.0;
         let sky_light = !args.no_sky_light;
         let gtao = Gtao::new(&ctx.device, &ctx.shaders)?;
@@ -1225,6 +1225,10 @@ impl Gallery {
         // it; space's sky (the owner's ask of 2026-10-03) is the stars, the sun's disc and a
         // planet below.
         let look = scenario.as_ref().map(|s| s.look()).unwrap_or_default();
+        if let Some([from, to, strength]) = look.bloom_highlights {
+            bloom.highlights = Some([from, to]);
+            taa.bloom_strength = strength;
+        }
         let sky_light_share = look
             .sky_light
             .filter(|k| k.is_finite() && *k > 0.0)
@@ -3033,7 +3037,13 @@ impl Demo for Gallery {
             }
         }
         // The bloom's share at the hour (the night as the last frame left it).
-        let bloom_share = self.taa.bloom_strength * self.night_bloom();
+        let bloom_share = self.taa.bloom_strength
+            * self.night_bloom()
+            * if self.bloom.highlights.is_some() {
+                -1.0
+            } else {
+                1.0
+            };
         // The impostors' bakes (D-075 step 4) before the scene is drawn: a frame of each bake a
         // frame (`Context::preparing`: they do not count), the screen black (an interactive
         // run's loading screen over it, counting the kinds handed back); each bake's

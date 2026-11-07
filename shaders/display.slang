@@ -12,7 +12,7 @@ struct DisplayPush
     uint image;
     uint curve;
     uint bloom;           // the bloom chain's top level (sampled index), 0xFFFFFFFF for none (bloom.slang)
-    float bloom_strength; // how much of the shown image is bloom
+    float bloom_strength; // how much of the shown image is bloom; negative: how much is added over it
     Output output;
     ToneTables tables;
     LocalExposure local;  // local exposure's read: its grid 0xFFFFFFFF for none
@@ -49,7 +49,7 @@ float4 frag_main(Varyings input) : SV_Target
     if (display_push.bloom != 0xFFFFFFFFu)
     {
         float3 bloom = sample_image_level(display_push.bloom, SAMPLER_LINEAR_CLAMP, uv, 0.0).rgb / BLOOM_LEVELS;
-        hdr = lerp(hdr, bloom, display_push.bloom_strength);
+        hdr = display_push.bloom_strength < 0.0 ? hdr - bloom * display_push.bloom_strength : lerp(hdr, bloom, display_push.bloom_strength);
     }
     Output output = display_push.output;
     LocalExposure local = display_push.local;
