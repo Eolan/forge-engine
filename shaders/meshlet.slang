@@ -4175,10 +4175,10 @@ LampPicks lamp_picks(Frame* f, LampPlace place, float3 world, float3 n, uint2 pi
 //   half then its highlight denoised, over the surface's directional albedo, likewise; or of the
 //   lamps past the nearest (`lamp_restir_from` over 0, `--lamp-restir-near`), the high half their
 //   light packed (`lamp_restir_pack_main`), the low half the lists' share for the nearest;
-// - else its low half, the penumbra filter's share (the sampled index of `lamp_filter_main`'s
+// - else its low half, the penumbra filter's share (the sampled index of `lamp_spread_main`'s
 //   output): every lamp unshadowed, without a ray, times the share of their light that reaches
-//   the pixel, which the filter took from `lamp_rays_main`'s rays over its neighbours (Heitz et
-//   al. 2018);
+//   the pixel, which the filter and the spread took from `lamp_rays_main`'s rays over its
+//   neighbours (Heitz et al. 2018);
 // - or 0xFFFF (`--no-lamp-filter`): with SHADOWS, the picked lamps' (`lamp_picks`) own shadow rays
 //   towards points of their spheres that move with the frame's noise, so TAA averages the
 //   penumbra as it did the sun's single ray (#54).
@@ -6437,7 +6437,7 @@ struct ResolvePush
     uint color_image;    // storage-image index of the colour target (RGBA16F)
     uint width;
     uint height;
-    uint lamp_share;     // sampled index of the lamps' filtered share of their light (rgba16f, `lamp_filter_main`), or with the top bit set ReSTIR's light (restir.slang), or 0xFFFFFFFF: their own rays here
+    uint lamp_share;     // sampled index of the lamps' filtered share of their light (rgba16f, `lamp_spread_main`), or with the top bit set ReSTIR's light (restir.slang), or 0xFFFFFFFF: their own rays here
     uint tile_capacity;
     float4 background;   // written to empty pixels where its w ≥ 0 (else they are left for the sky)
     float4* sky;         // the sky's irradiance (sh.slang), or null: space's constant fill (issue #47)
@@ -8443,7 +8443,7 @@ uint shade_pixel<let SHADOWS : int>(uint class_index, uint2 pixel, uint vis)
         g_near_irradiance = ycocg_to_linear(g_sampled_images[NonUniformResourceIndex(bounce_image)].Load(int3(pixel, 0)).rgb);
     }
     // The lamps (D-065): every one whose reach the surface is in and that lights its room, times
-    // the filtered share of their light that reaches it (`lamp_filter_main`), or with a shadow ray
+    // the filtered share of their light that reaches it (`lamp_spread_main`), or with a shadow ray
     // each; the classes take them where they take the sun (`sun_light`).
     lamps_at<SHADOWS>(f, s.probes, surface_scene, is_grass(vis) ? 0u : f[0].instances[instance_index].channels, s.n, si.li.n, s.view, si.li.power, si.li.specular, si.li.reflectance, lamp_start, pixel, resolve_push.lamp_share);
     s.transmitted = float3(0.0);
@@ -9350,10 +9350,11 @@ void surface_cache_trace_main(uint3 id : SV_DispatchThreadID)
 //   their light that reaches the pixel, Ŝ / Û per channel, the same rays' shadowed over unshadowed
 //   irradiance (Heitz, Hill and McGuire's ratio estimator, 2018), with luminance(Û).
 // - `lamp_filter_main` averages that share over a fixed 7 × 7 tent of the pixel's neighbours on
-//   its surface (a 4 × 4 box twice over), each weighted by its luminance(Û): every point of a
-//   frame's run weighs the same in it.
+//   its surface (a 4 × 4 box twice over), each weighted by its luminance(Û).
+// - `lamp_spread_main` averages the filter's share again over 5 × 5 taps 4 pixels apart: with the
+//   blocks' runs interleaved (`lamp_disc_run`), its window holds all 8 runs in each frame.
 // - The resolve multiplies the exact, unshadowed light of every lamp of the pixel's place by it
-//   (`lamps_at`), and TAA averages the 8 runs: all 128 points.
+//   (`lamps_at`), and TAA averages the frames.
 // No width from the occluders' distance (NVIDIA's US 10,740,954, claims 10 and 15), no variance,
 // no history and no wave intrinsics (the research note's §3 and §6).
 struct LampShadowPush
@@ -9408,13 +9409,30 @@ float2 lamp_disc_table(uint index)
     return r * float2(cos(phi), sin(phi));
 }
 
+// Which run of the table a 4 × 4 block of pixels takes in frame `frame` of TAA's cycle:
+// neighbouring blocks take different runs (interleaved sampling, Keller and Heidrich 2001), each
+// 4 × 2 blocks all 8, so the filters average every run of the cycle in each frame. One run for the
+// whole frame got a tube's share wrong the same way everywhere (16 points along it, a shelf of
+// bottles in front of it): the filters could not average that out, and the shelf's light jumped
+// from frame to frame (`lamp_spread_main`). Entry e takes run (frame + 2 (e / 2)) xor (e mod 2):
+// the strongest lamp's two runs (frame and frame xor 1, `lamp_rays_main`) stay an aligned pair,
+// stratified as a whole.
+static const uint LAMP_RUN_TURN[8] = { 0u, 5u, 2u, 7u, 6u, 3u, 4u, 1u };
+
+uint lamp_disc_run(uint2 pixel, uint frame)
+{
+    uint e = LAMP_RUN_TURN[((pixel.y >> 2u) & 1u) * 4u + ((pixel.x >> 2u) & 3u)];
+    return ((frame + 2u * (e >> 1u)) ^ (e & 1u)) % 8u;
+}
+
 // Where on its disc lamp `i` (the frame's) is traced from `pixel` in frame `frame` of TAA's
-// cycle: point 16 (frame mod 8) + B[x mod 4, y mod 4] of the table (B the Bayer matrix), so every
-// 4 × 4 window of pixels holds a whole stratified run each frame and the cycle's 8 frames hold
-// all 128; turned by the lamp's golden angle, so two lamps' points do not move together.
+// cycle: point 16 r + B[x mod 4, y mod 4] of the table (r its block's run, `lamp_disc_run`; B the
+// Bayer matrix), so every aligned 4 × 4 block of pixels holds a whole stratified run each frame
+// and the cycle's 8 frames hold all 128; turned by the lamp's golden angle, so two lamps' points
+// do not move together.
 float2 lamp_disc_point(uint2 pixel, uint frame, uint i)
 {
-    float2 p = lamp_disc_table(16u * (frame % 8u) + LAMP_BAYER[(pixel.y & 3u) * 4u + (pixel.x & 3u)]);
+    float2 p = lamp_disc_table(16u * lamp_disc_run(pixel, frame) + LAMP_BAYER[(pixel.y & 3u) * 4u + (pixel.x & 3u)]);
     float a = 6.28318530718 * frac(0.618034 * float(i));
     float c = cos(a);
     float s = sin(a);
@@ -9547,9 +9565,10 @@ groupshared float4 g_lamp_weighted[LAMP_TILE * LAMP_TILE];
 groupshared float4 g_lamp_facing[LAMP_TILE * LAMP_TILE];
 groupshared float3 g_lamp_position[LAMP_TILE * LAMP_TILE];
 // The window's weights along each axis: the 4-pixel box twice over, a tent 7 pixels wide. Each
-// of the four columns (and rows) of a 4 × 4 block takes a quarter of them, so every point of the
-// frame's run weighs the same. One box left each point's shadow edge on its own 4-pixel grid,
-// and the penumbrae's edges came out in 4-pixel steps that TAA's clamp kept.
+// of the four columns (and rows) of a 4 × 4 block takes a quarter of them, so every point of a
+// run weighs the same (the window reaches into the neighbouring blocks, whose runs differ,
+// `lamp_disc_run`: the spread evens them out). One box left each point's shadow edge on its own
+// 4-pixel grid, and the penumbrae's edges came out in 4-pixel steps that TAA's clamp kept.
 static const float LAMP_TENT[7] = { 1.0, 2.0, 3.0, 4.0, 3.0, 2.0, 1.0 };
 
 // The share of the lamps' light that reaches each pixel, from `lamp_rays_main`'s: the shares of
@@ -9606,7 +9625,70 @@ void lamp_filter_main(uint3 group : SV_GroupID, uint3 thread : SV_GroupThreadID)
         // The pixel itself weighs its own luminance, so `sum.a` is not 0.
         share = sum.rgb / sum.a;
     }
-    g_storage_images_rgba16f[NonUniformResourceIndex(p.share_image)][pixel] = float4(share, 1.0);
+    // Its unshadowed light's luminance in alpha, the spread's weight (`lamp_spread_main`; the
+    // resolve reads the share alone).
+    g_storage_images_rgba16f[NonUniformResourceIndex(p.share_image)][pixel] = float4(share, g_lamp_weighted[centre].a);
+}
+
+// The lamps' penumbra spread (D-065's next step, `research/lamp-penumbra-denoising.md` §7): after
+// the 7 × 7 filter, the filter's share over 5 × 5 taps LAMP_SPREAD_STEP pixels apart, an à-trous
+// step (Dammertz et al. 2010) with the filter's own weights: the same region, normals within
+// about 25°, the plane test, and each tap's unshadowed light. With the blocks' runs interleaved
+// (`lamp_disc_run`), its window holds every run of the cycle in each frame. A lamp a few centimetres
+// over a shelf of bottles (a game's bar, its neon tubes) cast penumbrae as wide as the bottles
+// stand apart: with one run a frame the shelf's light jumped by up to 236 codes from frame to
+// frame with the camera still (4,898 pixels by more than 30 at 2560 × 1440 under DLSS); with the
+// runs interleaved and spread, by 140 (315 pixels), as with 8 rays a lamp. Interleaved without
+// the spread, a grain of the blocks' size stayed; spread at the penumbrae alone (a share between
+// 0.02 and 0.98), the lit pixels' grain stayed too. A fixed step: no width from a hit distance,
+// no variance (the note's §3).
+static const int LAMP_SPREAD_STEP = 4;
+static const float LAMP_SPREAD_KERNEL[5] = { 1.0, 4.0, 6.0, 4.0, 1.0 };
+
+[shader("compute")]
+[numthreads(8, 8, 1)]
+void lamp_spread_main(uint3 id : SV_DispatchThreadID)
+{
+    LampShadowPush p = lamp_shadow_push;
+    uint2 pixel = id.xy;
+    if (pixel.x >= p.width || pixel.y >= p.height)
+        return;
+    // `ratio_image`: the filter's share (rgb) and the unshadowed light's luminance (a).
+    float4 centre = g_sampled_images[NonUniformResourceIndex(p.ratio_image)].Load(int3(pixel, 0));
+    RWTexture2D<float4> spread = g_storage_images_rgba16f[NonUniformResourceIndex(p.share_image)];
+    if (centre.a <= 0.0)
+    {
+        spread[pixel] = float4(centre.rgb, 1.0);
+        return;
+    }
+    float4 surface = g_sampled_images[NonUniformResourceIndex(p.surface_image)].Load(int3(pixel, 0));
+    float3 facing = oct_decode(g_sampled_images[NonUniformResourceIndex(p.normal_image)].Load(int3(pixel, 0)).xy);
+    float per_metre = 1.0 / (0.005 * length(surface.xyz) + 0.01);
+    float offset = dot(facing, surface.xyz) * per_metre;
+    float3 sum = float3(0.0);
+    float total = 0.0;
+    for (int dy = 0; dy < 5; dy++)
+    {
+        for (int dx = 0; dx < 5; dx++)
+        {
+            int2 q = int2(pixel) + int2(dx - 2, dy - 2) * LAMP_SPREAD_STEP;
+            if (q.x < 0 || q.y < 0 || q.x >= int(p.width) || q.y >= int(p.height))
+                continue;
+            float4 tap = g_sampled_images[NonUniformResourceIndex(p.ratio_image)].Load(int3(q, 0));
+            if (tap.a <= 0.0)
+                continue;
+            float4 other = g_sampled_images[NonUniformResourceIndex(p.surface_image)].Load(int3(q, 0));
+            float3 n = oct_decode(g_sampled_images[NonUniformResourceIndex(p.normal_image)].Load(int3(q, 0)).xy);
+            if (other.w != surface.w || dot(facing, n) <= 0.9)
+                continue;
+            float w = LAMP_SPREAD_KERNEL[dx] * LAMP_SPREAD_KERNEL[dy] * tap.a
+                * saturate(1.0 - abs(dot(facing, other.xyz) * per_metre - offset));
+            sum += w * tap.rgb;
+            total += w;
+        }
+    }
+    // The pixel itself counts (its own plane, region and normal), so `total` is not 0.
+    spread[pixel] = float4(total > 0.0 ? sum / total : centre.rgb, 1.0);
 }
 
 // The rays a pass drawn after the resolve asks for (the sea's surface, issue #105): per pixel,

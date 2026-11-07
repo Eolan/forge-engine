@@ -267,6 +267,12 @@ The expiry dates are Google's estimates, not legal conclusions. Nothing here is 
 > proposed and two changes, each measured: the filter is a 7 × 7 tent (the 4 × 4 box twice over;
 > the box left 4-pixel steps on the penumbrae that TAA's clamp kept), and the strongest lamp's
 > second ray goes to the run paired with the frame's, not frame + 4.
+>
+> **2026-11-07 (D-065, "The penumbrae's runs interleaved and spread"):** the à-trous step below
+> was built, at step 4 over 5 × 5 taps, with one change it needed. Neighbouring 4 × 4 blocks now
+> take different runs of the cycle in each frame. With one run a frame, a tube a few centimetres
+> over a shelf of bottles got the same error at every pixel, and no spatial filter could average
+> that out.
 
 **Build the interleaved ratio filter.** It uses only the ratio estimator, interleaved sampling and
 a geometry-aware box: no NRD, no new rays, no patent found. Keep SIGMA's translucency route (§1) as

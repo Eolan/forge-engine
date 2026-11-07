@@ -1662,6 +1662,11 @@ pixel. 1600 × 900, TAA, 300 frames, best of three:
   - Packing the normal and region into one word made it slower (0.18 ms): the filter is bound by
     its arithmetic, not by its tile's reads.
 
+The lamps' penumbra spread (D-065, 2026-11-07): "shadow/lamp spread" averages the filter's share
+over 5 × 5 taps 4 pixels apart, every pixel the lamps light. In the private district's bar
+(2560 × 1440, DLSS Quality, so 1707 × 960 inside, 240 frames, one run), it takes 0.14 ms;
+"shadow/lamp rays" 1.12 ms and "shadow/lamp filter" 0.26 ms are unchanged. The frame was 15.7 ms.
+
 ## `city-plan` — a city's plan in 3D, measured on the private sandbox's city (D-059, 2026-10-11)
 
 RTX 5070 Ti, 1600 × 900, TAA, 600 frames, a city of 37 506 masses (1 257 of them in the kit

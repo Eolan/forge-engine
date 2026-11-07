@@ -4735,7 +4735,7 @@ pub struct MeshletRenderer {
     pipeline_diffuse_trace: Option<Pipeline>,
     /// The lamps' shadow rays and the filter of their share (D-065): devices with ray queries
     /// only.
-    pipeline_lamp_shadows: Option<[Pipeline; 2]>,
+    pipeline_lamp_shadows: Option<[Pipeline; 3]>,
     /// The mirror and shadow rays another pass asks for (issue #105): devices with ray queries
     /// only.
     pipeline_requested: Option<Pipeline>,
@@ -5220,6 +5220,7 @@ impl MeshletRenderer {
             Some([
                 lamp_pipeline("lamp_rays_main", "lamp shadow rays")?,
                 lamp_pipeline("lamp_filter_main", "lamp shadow filter")?,
+                lamp_pipeline("lamp_spread_main", "lamp shadow spread")?,
             ])
         } else {
             None
@@ -6906,6 +6907,11 @@ impl MeshletRenderer {
     ///   pixels and TAA's cycle; it writes the share of their light that reaches the pixel.
     /// - "shadow/lamp filter": that share averaged over a fixed 7 × 7 tent of the pixel's
     ///   neighbours on its surface, weighted by their unshadowed light.
+    /// - "shadow/lamp spread": the filter's share over 5 × 5 taps 4 pixels apart with the same
+    ///   weights (an à-trous step), every pixel the lamps light. Neighbouring 4 × 4 blocks take
+    ///   different runs of the disc points in each frame, which it averages: with one run a frame,
+    ///   a tube a few centimetres over a shelf of bottles got the same error at every pixel, and
+    ///   the shelf flickered.
     ///
     /// `probes`: the probes the resolve lights with (their regions are the lamps' places).
     /// `street_restir`: ReSTIR DI runs ([`LampShadows::restir`]), so neither pass takes its lamps:
@@ -6922,7 +6928,7 @@ impl MeshletRenderer {
         probes: Option<ProbeLight>,
         street_restir: bool,
     ) -> Option<ImageHandle> {
-        let [rays, filter] = self.pipeline_lamp_shadows.as_ref()?;
+        let [rays, filter, spread] = self.pipeline_lamp_shadows.as_ref()?;
         if scene.lamp_counts[slot.index].get()[0] == 0 {
             return None;
         }
@@ -6941,6 +6947,7 @@ impl MeshletRenderer {
         let surface = graph.transient(image("lamp shadow surface", half4));
         let normal = graph.transient(image("lamp shadow normal", vk::Format::R16G16_SFLOAT));
         let share = graph.transient(image("lamp share", half4));
+        let spread_share = graph.transient(image("lamp share spread", half4));
         let frame = self.frame_buffers[slot.index].address();
         let push = move |vis_image: u32,
                          [ratio_image, surface_image, normal_image]: [u32; 3],
@@ -6999,7 +7006,23 @@ impl MeshletRenderer {
                 commands.dispatch(groups.0, groups.1, 1);
                 Ok(())
             });
-        Some(share)
+        graph
+            .pass("shadow/lamp spread")
+            .image(share, ImageAccess::Sampled(compute))
+            .image(surface, ImageAccess::Sampled(compute))
+            .image(normal, ImageAccess::Sampled(compute))
+            .image(spread_share, ImageAccess::StorageWrite(compute))
+            .run(move |resources, commands| {
+                let read = [share, surface, normal].map(|i| resources.sampled(i).0);
+                commands.bind_pipeline(spread);
+                commands.push_constants(
+                    spread,
+                    &push(u32::MAX, read, resources.storage(spread_share, 0).0),
+                );
+                commands.dispatch(groups.0, groups.1, 1);
+                Ok(())
+            });
+        Some(spread_share)
     }
 
     /// Declares the passes that shade the visibility buffer once per pixel into `color` (a

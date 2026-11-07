@@ -558,6 +558,12 @@ soft edges, their pixel-wide minimum, their reactive mask and their hash:
     Computational Mathematics and Mathematical Physics* 7(4), 1967, mapped onto the disc by Peter
     Shirley and Kenneth Chiu's concentric map, "A Low Distortion Map Between Disk and Square",
     *Journal of Graphics Tools* 2(3), 1997.
+  - *The spread* (`lamp_spread_main`): one step of Holger Dammertz, Daniel Sewtz, Johannes
+    Hanika, Hendrik P. A. Lensch, "Edge-Avoiding À-Trous Wavelet Transform for Fast Global
+    Illumination Filtering", HPG 2010, with the filter's edge weights. The à trous ("with holes")
+    algorithm is Matthias Holschneider, Richard Kronland-Martinet, Jean Morlet and Philippe
+    Tchamitchian's, "A Real-Time Algorithm for Signal Analysis with the Help of the Wavelet
+    Transform", 1989.
   - The tent (the 4 × 4 box twice over), the strongest lamp's paired runs and the filter's edge
     weights are our own.
 - **A flat glowing piece as its rectangle** (`Emission::Flat`, `lamp_rect_share`, #369):

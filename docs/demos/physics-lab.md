@@ -2237,9 +2237,11 @@ Steps 1 and 3 of D-065 (`forge_render::lamps`, `lamps_at` and `hit_lamps` in `me
 - **The shadows** (D-065's penumbra filter, 2026-10-18), before the resolve:
   - "shadow/lamp rays" traces those lamps' shadow rays (two for the strongest) to a table of 128
     stratified points of their spheres, 16 a frame spread over every 4 × 4 pixels, all 128 over
-    TAA's 8 frames. It writes the share of their light that reaches the pixel.
+    TAA's 8 frames. Neighbouring 4 × 4 blocks take different runs of 16 in each frame (since
+    2026-11-07). It writes the share of their light that reaches the pixel.
   - "shadow/lamp filter" averages that share over a 7 × 7 tent of the pixel's neighbours on its
-    surface.
+    surface, and "shadow/lamp spread" over 5 × 5 taps 4 pixels apart (2026-11-07, D-065): the
+    room's frame changed by at most 14 codes on 0.07 % of its pixels, at a shadow's edge.
   - The resolve lights with every lamp unshadowed, times that share.
   - `--no-lamp-filter` keeps the rays in the resolve, to the sun's eight Vogel points a frame, as
     before.

@@ -6019,6 +6019,58 @@ intensity is its candela across its axis times the sine from it; its flux is π�
   - **The village's map-check views:** as before this work (every view's mean at most 0.002 from
     the accepted set, `enter`'s standing 0.046).
 
+**The penumbrae's runs interleaved and spread (2026-11-07):** the filter's next step that
+`research/lamp-penumbra-denoising.md` §7 named for penumbrae that still crawl (an à-trous pass at a
+fixed step), with the frame's runs interleaved over 4 × 4 blocks.
+- **What was seen:** in the private district's bar, a still camera's frames 10 apart changed on a
+  shelf by up to 236 codes (2560 × 1440, DLSS Quality: 4,898 pixels by more than 30). The shelf
+  stands a few centimetres under a neon tube with a row of bottles in front of it.
+  - The probes were suspected first. Turning them off removed it, but only because the lamps'
+    rays then have no rooms: the probes' maps held still at 0.999 changed nothing. The new probe
+    debug view (`r.show.probes`: each probe's last update on screen, `Probes::set_debug`) and a
+    dump of the room grids' probes showed every one of them settled.
+  - Lamp shadows off (`CP_LAMP_SHADOWS=0` in the private viewer) took it to 972 pixels.
+  - Eight rays a lamp, one to each of the cycle's runs, took it to 315.
+- **The cause:** every pixel of a frame took the same run of 16 points along the tube. With
+  bottles in front of it, each run got the tube's visible length wrong in the same way all over
+  the shelf. The filter averages pixels, so it could not remove an error they all shared, and
+  DLSS followed it from frame to frame.
+- **The change** (`meshlet.slang`):
+  - `lamp_disc_run`: neighbouring 4 × 4 blocks take different runs, all 8 in each 4 × 2 blocks.
+    Interleaved sampling again (Keller and Heidrich 2001), one level up.
+  - The strongest lamp's two runs stay an aligned pair, stratified as a whole: run r and r xor 1.
+  - **"shadow/lamp spread":** after the 7 × 7 tent, 5 × 5 taps 4 pixels apart, a B3 kernel
+    (1 4 6 4 1), the filter's own edge weights (the region, n·n′ > 0.9, the plane, the unshadowed
+    light), after Dammertz et al.'s edge-avoiding à-trous (2010).
+  - The step is fixed: no width from a hit distance, no variance, no history (the note's §3).
+- **Tried and left out:**
+  - **Interleaved without the spread:** 438 pixels, but a grain the size of the blocks stayed on
+    the shelf (the crop's 3 × 3 contrast 6.94 against 6.33 with eight rays).
+  - **The spread at the penumbrae only** (a share between 0.02 and 0.98): the lit pixels' grain
+    stayed (579 pixels).
+  - **Steps of 2, 3, 5 and 8:** no better than 4; 4 alone with no gate matched the eight rays.
+  - **The spread without the interleave:** 4,469 pixels. A wider average of the same run keeps
+    the run's error.
+  - **The pick of a fourth lamp left out:** unchanged (4,900). Its rays were not the cause.
+- **Checks** (the bar's shelf at 2560 × 1440, DLSS Quality, frames 220 and 230):
+
+  | | pixels > 30 codes | largest change | the shelf's mean change | its 3 × 3 contrast |
+  |---|---|---|---|---|
+  | before | 4,898 | 236 | 6.33 | 6.04 |
+  | eight rays a lamp (a reference, too dear) | 315 | 145 | 0.36 | 6.33 |
+  | runs interleaved and spread | 315 | 140 | 0.46 | 6.42 |
+
+  - **D-065's own scenes** (1600 × 900, a still camera's frames 210 and 220, pixels changing
+    by more than 2 codes), before → after:
+    - the lab's lamp room: DLAA 0.0036 → 0.0037 %, FSR 0.029 → 0.024 %;
+    - the smoke yard: DLAA 0.101 → 0.102 %, FSR 0.247 → 0.247 %.
+  - **The lamp room's frame** moved by at most 14 codes on 0.07 % of its pixels, at a shadow's
+    edge: the spread softens a sharp shadow there a little. The smoke yard's is unchanged.
+  - **Unchanged:** the guards (ast240, lab-creatures120, 0 px) and the village's map-check views
+    (at most 0.002 % of pixels against the run before).
+- **Cost:** "shadow/lamp spread" 0.14 ms at 1707 × 960 in the bar (`docs/PROFILE.md`). The rays
+  and the filter are unchanged.
+
 ## D-066 — Pieces with sockets: one connector schema for generation, the anomaly check and player building ✅ (proposed 2026-10-16 on the owner's walk of #266; the owner's go the same evening)
 
 **The question:** the owner, walking the village: "would using some kind of snap system with the
