@@ -19,6 +19,12 @@
 //!
 //! **What it doesn't see:** decals, glass, holograms, particles, impostors and the rays' hits,
 //! which sample their own levels, and a layered material's presence maps (small, always wanted).
+//!
+//! **D-105's planner, simulated** ([`crate::texture_stream::LevelPlanner`]): each frame's wants
+//! go into a planner over every texture, with a pool of `FORGE_TEXTURE_POOL_MIB` (1024) and at
+//! most `FORGE_TEXTURE_UPLOAD_MIB` (32) remade a frame. The log adds what it would hold, what it
+//! would upload, and the share of wants the levels it held met. Nothing is streamed: the images
+//! stay whole, so the wants count in their full chains.
 
 use std::cell::RefCell;
 use std::sync::Arc;
@@ -32,6 +38,7 @@ use forge_gpu::{
 };
 
 use crate::material::TextureSet;
+use crate::texture_stream::{LevelPlanner, StreamedTexture};
 
 /// Must match `TextureNeedPush` in `meshlet.slang`.
 #[repr(C)]
@@ -82,6 +89,53 @@ struct Totals {
     frames: u64,
     working_sum: f64,
     working_max: u64,
+    /// D-105's planner run on the wants.
+    simulated: Option<Simulated>,
+}
+
+/// D-105's planner over the scene's textures, fed the frames' wants.
+struct Simulated {
+    planner: LevelPlanner,
+    /// Per bindless index, its texture in the planner.
+    by_slot: Vec<Option<usize>>,
+    /// The bytes a frame may remake.
+    upload: u64,
+    uploaded: u64,
+    changes: u64,
+    wants: u64,
+    met: u64,
+}
+
+impl Simulated {
+    fn new(set: &TextureSet) -> Self {
+        let mib = |name: &str, default: u64| {
+            std::env::var(name)
+                .ok()
+                .and_then(|v| v.parse::<u64>().ok())
+                .unwrap_or(default)
+                << 20
+        };
+        let mut planner = LevelPlanner::new(
+            mib("FORGE_TEXTURE_POOL_MIB", 1024),
+            crate::texture_stream::WINDOW_SECONDS,
+        );
+        let mut by_slot = vec![None; SAMPLED_IMAGE_CAPACITY as usize];
+        for (sampled, side, levels) in set.level_bytes() {
+            let sides = (0..levels.len()).map(|l| (side >> l).max(1)).collect();
+            if let Some(slot) = by_slot.get_mut(sampled as usize) {
+                *slot = Some(planner.add(StreamedTexture { levels, sides }));
+            }
+        }
+        Self {
+            planner,
+            by_slot,
+            upload: mib("FORGE_TEXTURE_UPLOAD_MIB", 32),
+            uploaded: 0,
+            changes: 0,
+            wants: 0,
+            met: 0,
+        }
+    }
 }
 
 impl TextureFeedback {
@@ -217,6 +271,7 @@ impl TextureFeedback {
             && set.len() != t.known
         {
             t.learn(set);
+            t.simulated = Some(Simulated::new(set));
         }
         let mut raw = vec![NONE; SAMPLED_IMAGE_CAPACITY as usize];
         self.readback[slot.index].read(0, &mut raw);
@@ -226,6 +281,21 @@ impl TextureFeedback {
             }
             t.last[i][(level as usize).min(LEVELS - 1)] = now;
             t.finest[i] = t.finest[i].min(level);
+            if let Some(sim) = t.simulated.as_mut()
+                && let Some(Some(p)) = sim.by_slot.get(i).copied()
+            {
+                sim.wants += 1;
+                if sim.planner.top(p) <= level as usize {
+                    sim.met += 1;
+                }
+                sim.planner.wanted(p, level as usize, f64::from(now));
+            }
+        }
+        if let Some(sim) = t.simulated.as_mut() {
+            for change in sim.planner.plan(f64::from(now), sim.upload) {
+                sim.uploaded += sim.planner.bytes_from(change.texture, change.to);
+                sim.changes += 1;
+            }
         }
         let working = t.working_set(now);
         t.frames += 1;
@@ -320,5 +390,19 @@ impl Totals {
             tail_mib = format!("{:.0}", mib(tail)),
             "texture feedback (#385): resident, needed over the run, the working set over {WINDOW} s"
         );
+        if let Some(sim) = &self.simulated {
+            let seconds = self
+                .start
+                .map_or(0.0, |s| s.elapsed().as_secs_f64())
+                .max(1e-3);
+            tracing::info!(
+                resident_mib = format!("{:.0}", mib(sim.planner.resident())),
+                uploaded_mib = format!("{:.0}", mib(sim.uploaded)),
+                upload_mib_per_s = format!("{:.1}", mib(sim.uploaded) / seconds),
+                changes = sim.changes,
+                wants_met = format!("{:.2} %", 100.0 * sim.met as f64 / sim.wants.max(1) as f64),
+                "texture feedback (#385): D-105's planner simulated"
+            );
+        }
     }
 }

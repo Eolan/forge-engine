@@ -12133,4 +12133,26 @@ mask in fixed-function hardware), was filed in 2000 and has expired. The searche
     most the bytes it is given, but always makes at least one change.
   - **Eviction:** textures wanted strictly longer ago drop to their tails, the oldest first. Textures wanted in the same
     frame never evict each other.
-  - **Not yet:** the rows' remap (step 2), and the planner wired to the feedback and to `remake`.
+  - **Not yet:** the rows' remap (step 2), and the planner wired to `remake`.
+- **Simulated on the private district** (`FORGE_TEXTURE_FEEDBACK=1`: the frames' wants fed to a planner over every
+  texture, nothing streamed):
+
+The benchmark path at 2560 x 1440 under DLSS Quality, 5,000 frames, at most 32 MiB remade a frame:
+
+  | Pool | It holds | It uploads | Changes | Wants its levels met |
+  |---|---|---|---|---|
+  | 1,024 MiB | 789 to 862 MiB | 2.5 GiB over the run, 28 to 40 MiB/s | 10,429 | 99.6 to 99.8 % |
+  | 768 MiB | 768 MiB, pinned | 5.4 GiB, 62 to 78 MiB/s | 39,596 | 84 to 89 %: it thrashes |
+
+  The 1 GiB pool D-105 measured holds: a fifth of the 4.8 GiB resident today, with nearly every want met. The 128-texel
+  tails are 601 MiB of it. A smaller pool needs the tail at 64 texels, which is still to be measured.
+
+- **What step 2 must hold (found while planning it):**
+  - **Which fields are slots:** the colour, normal, metal-roughness, occlusion, emissive and presence maps are slots on
+    every row. A microblend row (`MATERIAL_MICROBLEND`) keeps its microblend's slot in its first mask field, and
+    floats (tiling, contrast) in the others. A blind "replace the old index" could hit a float whose bits match.
+  - **The rays read slot 0's table for every frame** (`set_materials` at the build). So a rewritten row reaches the
+    rays only when slot 0's table is written. The old image may retire only after every slot's table, slot 0's
+    included, holds the new index, and the frames that read it are done. Retiring at the frame of the remake would
+    free an image that a later frame's rays still sample.
+  - **Slideshows' pictures, decals and holograms hold slots too.** Their textures stay resident until they follow.

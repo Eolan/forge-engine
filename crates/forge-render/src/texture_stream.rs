@@ -91,6 +91,8 @@ pub struct LevelPlanner {
     pool: u64,
     window: f64,
     textures: Vec<Tracked>,
+    /// The bytes resident over every texture.
+    held: u64,
 }
 
 impl LevelPlanner {
@@ -101,12 +103,14 @@ impl LevelPlanner {
             pool,
             window,
             textures: Vec::new(),
+            held: 0,
         }
     }
 
     /// Adds `texture`, resident from its tail: its number.
     pub fn add(&mut self, texture: StreamedTexture) -> usize {
         let tail = texture.tail();
+        self.held += texture.bytes_from(tail);
         self.textures.push(Tracked {
             texture,
             tail,
@@ -149,49 +153,82 @@ impl LevelPlanner {
         self.textures[texture].top
     }
 
+    /// Texture `texture`'s target at `now`.
+    pub fn target(&self, texture: usize, now: f64) -> usize {
+        self.textures[texture].target(now, self.window)
+    }
+
     /// The bytes resident over every texture.
     pub fn resident(&self) -> u64 {
-        self.textures
-            .iter()
-            .map(|t| t.texture.bytes_from(t.top))
-            .sum()
+        self.held
+    }
+
+    /// The bytes of texture `texture`'s levels from `level` down: what remaking it from there
+    /// uploads.
+    pub fn bytes_from(&self, texture: usize, level: usize) -> u64 {
+        self.textures[texture].texture.bytes_from(level)
+    }
+
+    /// The textures it streams.
+    pub fn len(&self) -> usize {
+        self.textures.len()
+    }
+
+    /// Whether it streams none.
+    pub fn is_empty(&self) -> bool {
+        self.textures.is_empty()
+    }
+
+    /// Texture `i` resident from `to` down: the change.
+    fn set_top(&mut self, i: usize, to: usize) -> LevelChange {
+        let t = &mut self.textures[i];
+        self.held = self.held - t.texture.bytes_from(t.top) + t.texture.bytes_from(to);
+        let change = LevelChange {
+            texture: i,
+            from: t.top,
+            to,
+        };
+        t.top = to;
+        change
     }
 
     /// The changes at `now`, at most `upload` bytes of new levels between them (at least one
     /// change when any is due), applied to the planner's tops: the caller remakes each texture
-    /// from its `to` down. Down first, then up by the largest gap, each up as far as the pool
-    /// allows once textures not wanted for longest have given back what they hold above their
-    /// targets.
+    /// from its `to` down. Down to the targets first; then up, the largest gap first, each as far
+    /// as the pool allows; a texture that can't grow at all makes room by sending textures wanted
+    /// strictly longer ago back to their tails, the oldest first, when that is enough.
     pub fn plan(&mut self, now: f64, upload: u64) -> Vec<LevelChange> {
         let window = self.window;
-        let mut changes = Vec::new();
+        let n = self.textures.len();
+        let mut changes: Vec<LevelChange> = Vec::new();
+        let mut changed = vec![false; n];
         let mut spent = 0u64;
+        // Within the bytes this plan may upload: the first change always is.
+        let fits = |spent: u64, cost: u64, changes: &[LevelChange]| {
+            changes.is_empty() || spent + cost <= upload
+        };
         // Down to the targets: textures no longer wanted as finely.
-        for i in 0..self.textures.len() {
-            let t = &self.textures[i];
-            let to = t.target(now, window);
-            if to > t.top {
-                let cost = t.texture.bytes_from(to);
-                if !changes.is_empty() && spent + cost > upload {
-                    continue;
+        for (i, done) in changed.iter_mut().enumerate() {
+            let (to, top) = (self.textures[i].target(now, window), self.textures[i].top);
+            if to > top {
+                let cost = self.textures[i].texture.bytes_from(to);
+                if fits(spent, cost, &changes) {
+                    spent += cost;
+                    changes.push(self.set_top(i, to));
+                    *done = true;
                 }
-                spent += cost;
-                changes.push(LevelChange {
-                    texture: i,
-                    from: t.top,
-                    to,
-                });
-                self.textures[i].top = to;
             }
         }
         // Up: the largest gap first, then the latest want, then the number (deterministic).
-        let mut ups: Vec<usize> = (0..self.textures.len())
-            .filter(|&i| self.textures[i].target(now, window) < self.textures[i].top)
+        let mut ups: Vec<(usize, usize)> = (0..n)
+            .filter_map(|i| {
+                let target = self.textures[i].target(now, window);
+                (target < self.textures[i].top).then_some((i, target))
+            })
             .collect();
-        ups.sort_by(|&a, &b| {
-            let gap = |i: usize| self.textures[i].top - self.textures[i].target(now, window);
-            gap(b)
-                .cmp(&gap(a))
+        ups.sort_by(|&(a, ta), &(b, tb)| {
+            let (ga, gb) = (self.textures[a].top - ta, self.textures[b].top - tb);
+            gb.cmp(&ga)
                 .then(
                     self.textures[b]
                         .last_use()
@@ -199,78 +236,79 @@ impl LevelPlanner {
                 )
                 .then(a.cmp(&b))
         });
-        for i in ups {
-            let target = self.textures[i].target(now, window);
+        // The textures that may give their levels back, the least recently wanted first.
+        let mut victims: Vec<usize> = (0..n)
+            .filter(|&v| self.textures[v].top < self.textures[v].tail && !changed[v])
+            .collect();
+        victims.sort_by(|&a, &b| {
+            self.textures[a]
+                .last_use()
+                .total_cmp(&self.textures[b].last_use())
+                .then(a.cmp(&b))
+        });
+        let mut next_victim = 0;
+        let bytes = |t: &Tracked, level: usize| t.texture.bytes_from(level);
+        for (i, target) in ups {
             let top = self.textures[i].top;
             // The finest level from the target up that fits the pool as it is.
             let mut to = top;
             for level in (target..top).rev() {
-                let extra = self.textures[i].texture.bytes_from(level)
-                    - self.textures[i].texture.bytes_from(top);
-                if self.resident() + extra > self.pool {
+                let extra = bytes(&self.textures[i], level) - bytes(&self.textures[i], top);
+                if self.held + extra > self.pool {
                     break;
                 }
                 to = level;
             }
+            let mut evict = Vec::new();
             if to == top {
-                // Room by eviction: textures wanted strictly longer ago than this one, which hold
-                // levels finer than their tail, drop to their tail, the oldest first.
                 let mine = self.textures[i].last_use();
-                let need = self.textures[i].texture.bytes_from(target)
-                    - self.textures[i].texture.bytes_from(top);
-                let mut victims: Vec<usize> = (0..self.textures.len())
-                    .filter(|&v| {
-                        v != i
-                            && self.textures[v].top < self.textures[v].tail
-                            && self.textures[v].last_use() < mine
-                    })
-                    .collect();
-                victims.sort_by(|&a, &b| {
-                    self.textures[a]
-                        .last_use()
-                        .total_cmp(&self.textures[b].last_use())
-                        .then(a.cmp(&b))
-                });
+                let need = bytes(&self.textures[i], target) - bytes(&self.textures[i], top);
                 let mut freed = 0u64;
-                let mut evicted = Vec::new();
-                for v in victims {
-                    if self.resident() - freed + need <= self.pool {
+                let mut k = next_victim;
+                while self.held - freed + need > self.pool && k < victims.len() {
+                    let v = victims[k];
+                    let t = &self.textures[v];
+                    if v == i || changed[v] || t.top >= t.tail {
+                        k += 1;
+                        continue;
+                    }
+                    if t.last_use() >= mine {
                         break;
                     }
-                    let t = &self.textures[v];
-                    freed += t.texture.bytes_from(t.top) - t.texture.bytes_from(t.tail);
-                    evicted.push(v);
+                    freed += bytes(t, t.top) - bytes(t, t.tail);
+                    evict.push(v);
+                    k += 1;
                 }
-                if self.resident() - freed + need > self.pool {
+                if self.held - freed + need > self.pool {
                     continue;
                 }
-                for v in evicted {
-                    let t = &self.textures[v];
-                    let cost = t.texture.bytes_from(t.tail);
-                    spent += cost;
-                    changes.push(LevelChange {
-                        texture: v,
-                        from: t.top,
-                        to: t.tail,
-                    });
-                    self.textures[v].top = self.textures[v].tail;
+                let cost: u64 = evict
+                    .iter()
+                    .map(|&v| bytes(&self.textures[v], self.textures[v].tail))
+                    .sum::<u64>()
+                    + bytes(&self.textures[i], target);
+                if !fits(spent, cost, &changes) {
+                    continue;
+                }
+                next_victim = k;
+                for &v in &evict {
+                    let tail = self.textures[v].tail;
+                    spent += bytes(&self.textures[v], tail);
+                    changes.push(self.set_top(v, tail));
+                    changed[v] = true;
                 }
                 to = target;
             }
             if to == top {
                 continue;
             }
-            let cost = self.textures[i].texture.bytes_from(to);
-            if !changes.is_empty() && spent + cost > upload {
+            let cost = bytes(&self.textures[i], to);
+            if evict.is_empty() && !fits(spent, cost, &changes) {
                 continue;
             }
             spent += cost;
-            changes.push(LevelChange {
-                texture: i,
-                from: top,
-                to,
-            });
-            self.textures[i].top = to;
+            changes.push(self.set_top(i, to));
+            changed[i] = true;
         }
         changes
     }
