@@ -184,9 +184,13 @@ static const float FOG_SHADOW_CLEAR = 0.3;
 // Last frame's volume (D-099's amendment, the history) at the point that stands at screen `uv`
 // and `t` m from the camera now: reprojected through last frame's camera, its slice found by
 // inverting the light's sample distances (slice k's at the middle of its near and far ends:
-// `far / (2 S²) · (2k² + 2k + 1)`), bilinear within two slices and linear between them, brought
-// to this frame's exposure. False where last frame's volume did not reach the point, or there is
-// none, or its value is not finite (a fault kept in a history would never clear).
+// `far / (2 S²) · (2k² + 2k + 1)`), from the eight froxels round it (bilinear within two slices,
+// linear between them), brought to this frame's exposure. A culled froxel among the eight (behind
+// every surface last frame, FOG_CULLED) is left out and the others weighed alone: refused whenever
+// one was culled, the froxels along a body's edge lost their history as the camera moved and lit
+// afresh, a band trailing the body (the owner, 2026-11-07). False where last frame's volume did not
+// reach the point, none of the eight was lit, there is no history, or its value is not finite (a
+// fault kept in a history would never clear).
 bool fog_history(Fog* g, Frame* f, float2 uv, float t, out float4 previous)
 {
     previous = float4(0.0);
@@ -205,16 +209,35 @@ bool fog_history(Fog* g, Frame* f, float2 uv, float t, out float4 previous)
     float slices = float(FOG_SLICES);
     float w = 0.5 * (sqrt(max(4.0 * distance * slices * slices / g[0].camera.w - 1.0, 0.0)) - 1.0);
     Texture2D<float4> history = g_sampled_images[NonUniformResourceIndex(g[0].history_read)];
-    SamplerState linear = g_samplers[SAMPLER_LINEAR_CLAMP];
-    float2 atlas_size = float2(FOG_FROXELS_X * FOG_SLICES, FOG_FROXELS_Y);
     float2 inside = clamp(prev_uv * float2(FOG_FROXELS_X, FOG_FROXELS_Y), 0.5, float2(FOG_FROXELS_X, FOG_FROXELS_Y) - 0.5);
     float k = clamp(floor(w), 0.0, slices - 2.0);
     float s = saturate(w - k);
-    float4 a = history.SampleLevel(linear, (inside + float2(k * FOG_FROXELS_X, 0.0)) / atlas_size, 0.0);
-    float4 b = history.SampleLevel(linear, (inside + float2((k + 1.0) * FOG_FROXELS_X, 0.0)) / atlas_size, 0.0);
-    previous = lerp(a, b, s);
-    // Not finite (a fault kept in a history would never clear), or reaching a culled froxel.
-    if (!all(isfinite(previous)) || previous.a < 0.0)
+    // The bilinear corners (texel centres at +0.5) and their weights, in each of the two slices.
+    float2 corner = inside - 0.5;
+    int2 base = int2(floor(corner));
+    float2 fraction = corner - float2(base);
+    float4 sum = float4(0.0);
+    float weight = 0.0;
+    [unroll]
+    for (uint c = 0u; c < 8u; c++)
+    {
+        int2 at = clamp(base + int2(c & 1u, (c >> 1) & 1u), int2(0), int2(FOG_FROXELS_X - 1, FOG_FROXELS_Y - 1));
+        float slice = k + float(c >> 2);
+        float2 share = lerp(1.0 - fraction, fraction, float2(c & 1u, (c >> 1) & 1u));
+        float tap = share.x * share.y * ((c >> 2) == 0u ? 1.0 - s : s);
+        float4 v = history.Load(int3(at.x + int(slice) * FOG_FROXELS_X, at.y, 0));
+        // A culled froxel (its extinction FOG_CULLED) left out, and one not finite.
+        if (tap <= 0.0 || v.a < 0.0 || !all(isfinite(v)))
+            continue;
+        sum += v * tap;
+        weight += tap;
+    }
+    // A NaN fails every comparison: a reprojection gone non-finite (a degenerate camera) would pass
+    // a check of the weight's smallness, and the blend after it.
+    if (!(weight >= 1e-4))
+        return false;
+    previous = sum / weight;
+    if (!all(isfinite(previous)))
         return false;
     float last_exposure = g[0].last_exposure;
     previous.rgb = min(previous.rgb * (last_exposure > 0.0 ? g[0].exposure / last_exposure : 1.0), 65000.0);
@@ -256,7 +279,7 @@ void fog_tiles_main(uint3 id : SV_DispatchThreadID)
 }
 
 // A culled froxel's extinction (fog_light_main): far below any real one, so that a history read
-// blending it in at any weight comes out negative and is refused.
+// knows it and leaves it out (fog_history).
 static const float FOG_CULLED = -10000.0;
 
 // Each froxel column's last slice lit: two past the farthest surface its column and the two
@@ -306,7 +329,7 @@ void fog_light_main(uint3 id : SV_DispatchThreadID)
     float near = fog_slice_distance(g, float(id.z));
     float far = fog_slice_distance(g, float(id.z) + 1.0);
     // Behind every surface in view: not lit, marked (FOG_CULLED) so that the integration skips it and
-    // a history read reaching it is refused (the froxel then lit afresh: no stale light fading in).
+    // a history read leaves it out, weighing the lit froxels round it alone (fog_history).
     if (g[0].cull != 0u && fog_culled(g, id))
     {
         g_storage_images_rgba16f[NonUniformResourceIndex(g[0].history_write)][uint2(id.z * FOG_FROXELS_X + id.x, id.y)] = float4(0.0, 0.0, 0.0, FOG_CULLED);
@@ -315,9 +338,12 @@ void fog_light_main(uint3 id : SV_DispatchThreadID)
     // The history: last frame's volume where this froxel's middle stood then.
     float4 previous;
     bool remembered = fog_history(g, f, middle_uv, 0.5 * (near + far), previous);
-    // With it, a point jittered within the froxel (the frame's offset and the froxel's own), the
-    // history averaging ten frames of them; without, its middle.
-    bool jittered = remembered;
+    // A point jittered within the froxel (the frame's offset and the froxel's own), the history
+    // averaging ten frames of them. A froxel without a history this frame (uncovered as the camera
+    // moves) is lit at its jittered point too, like its neighbours: at its middle, it stood apart
+    // from them for the ten frames its history took to fill. Without any history at all (the first
+    // frame, a cut, `FogParams::history` off), its middle, as before.
+    bool jittered = remembered || g[0].prev_camera.w > 0.0;
     float3 j = jittered ? frac(g[0].jitter.xyz + fog_froxel_offset(id)) - 0.5 : float3(0.0);
     float2 uv = jittered ? (float2(id.xy) + 0.5 + j.xy) / float2(FOG_FROXELS_X, FOG_FROXELS_Y) : middle_uv;
     float3 direction = fog_view_direction(g, uv);

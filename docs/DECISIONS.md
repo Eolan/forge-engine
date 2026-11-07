@@ -10805,7 +10805,8 @@ The levers, in the order they pay:
 - **The lamps, −3 ms:** fewer ReSTIR candidates, half-resolution reservoirs, and the lists for near lamps.
 - **The GI, −2 ms:** the trace at a quarter of the pixels, and the probes' rays capped per frame.
 - **Shading, −1.3 ms:** a material level of detail (far pixels read a layered material's flat colour), and the layers cut more tightly by their presence maps.
-- **The movers' structure, −0.3 ms:** refitted, not rebuilt each frame.
+- **Not the movers' structure:** its zone, about 0.45 ms, counts the wait on the work before it. Refitted, it shows 0.03 ms
+  and the frame stays the same (PROFILE, the district's turning meshes).
 
 The CPU's frame thread does about 1.4 ms of work, well within budget. Each cut is checked against the baseline's scores and stills before it lands.
 
@@ -11546,6 +11547,25 @@ froxels that lie behind every surface in view, so they are not lit.
   - The district's path at 2560 × 1440: `fog/light`'s zone 0.49 → 0.37 ms. The frame's gain is
     inside the runs' spread there: the lamps' ReSTIR alone moved by 0.26 ms between runs. Most
     of the path is outdoors, its far views reaching the volume's end.
+
+**The history kept at silhouettes (2026-11-07, the owner's catch: "when the camera was moving, there was some kind of
+trail behind the bodies").**
+- **Found by clips, not stills:** the bar path at the same frames, as it was, without the history and without the cull. The
+  owner picked the one without the history as free of the trail.
+- **The cause:** a history read takes the eight froxels round the reprojected point. It was refused whenever one of them
+  was culled. Along a body's edge, the froxels behind the body are culled, so the froxels beside them lost their history as
+  the camera moved. They were then lit afresh at their unjittered middles, which stood apart from their neighbours' averaged
+  light for the ten frames the history took to fill: a band trailing each body.
+- **Now:**
+  - the read takes the eight froxels one by one, leaves out the culled ones, and weighs the rest. It is refused only when
+    none of the eight is lit.
+  - a froxel without a history in a frame that has one is lit at its jittered point, like its neighbours.
+  - with no history at all (the first frame, a cut, the history off), a froxel is lit at its middle, as before.
+- **What it changes:** only motion. A still camera's frames ten apart differ alike: the bar 2.07 % of its pixels by over two
+  codes with and without, the landing 2.09 %. That is more than this amendment's 0.71 % of 2026-11-05, because the signs
+  now blink (D-104).
+- **Cost:** none measurable. Alternated runs on the path gave a frame of 18.26 and 18.02 ms before, 18.26 and 18.07 ms
+  with it; `fog/light` 0.46 and 0.45 ms before, 0.45 and 0.47 ms with it.
 
 ## D-100 — A scene's own colour grading: a 3-D LUT after a log encoding, as a display transform ✅ (proposed 2026-11-05; the owner's go the same day: "Follow recommendations"; D-045, D-083, D-084, D-094)
 
