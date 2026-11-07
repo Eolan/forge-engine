@@ -2828,6 +2828,12 @@ impl MeshletSceneBuilder {
         let shown =
             |f: fn(&GpuMaterial) -> bool| self.materials.iter().zip(&used).any(|(m, &u)| u && f(m));
         let (cutouts, jelly) = (shown(GpuMaterial::cut_out), shown(GpuMaterial::jelly));
+        // A dynamic scene's instances mostly come later (#220, a streamer's cells, #338), so any
+        // cut-out row of its table may be drawn: it takes the cut-outs' raster when its table has
+        // one. Counted from the instances at the start alone, a streamed district had none, took
+        // no such raster, and its grilles and fences drew solid.
+        let cutouts =
+            cutouts || (self.dynamic.is_some() && self.materials.iter().any(GpuMaterial::cut_out));
         // A ladder's crossing takes the cut-outs' raster (D-075).
         let cutouts = cutouts || self.ladders;
         // With rows that move (D-104), the table as built is frame slot 0's, mapped, and each other

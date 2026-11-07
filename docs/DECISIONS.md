@@ -11042,6 +11042,29 @@ frame by default, `FORGE_CELLS_REALTIME=1` one edit a frame).
   5.79 / 7.65 (two runs: 7.65, 7.68), no frame's GPU over 8 ms; the worker's longest edit 47 →
   23 ms.
 
+**Amended (2026-11-07): meshes come and go with the cells that use them.** This closes the first gap above (the owner moved
+the effort to cell streaming).
+
+- **The unload hook:** `CellSource::unload(cell, editor)`, called by the streamer once a cell's instances and its own meshes are
+  out. It does nothing by default.
+- **`SharedMeshes`:**
+  - a source acquires a mesh by its key for a cell; the editor adds it with the first cell that asks for it;
+  - on unload, the source releases the cell's meshes and takes out those no cell holds any more.
+- **Measured:** the private district streamed along its path in real time (one edit a frame, 2560 x 1440, DLSS Quality),
+  two alternated runs each:
+
+  | | Every mesh registered at the start | Meshes with their cells |
+  |---|---|---|
+  | Frame | 15.45, 15.24 ms | 14.39, 14.38 ms |
+  | p99 | 18.66, 18.62 ms | 17.48, 17.50 ms |
+  | Geometry | 5,397 MiB | 4,395 MiB |
+
+  That is 1.0 GB less and 1 ms less a frame.
+
+**Fixed with it (the owner's catch): a dynamic scene's cut-outs drew solid.** Such a scene decided whether it needs the
+cut-outs' raster from the instances it had at its start. A streamed district has none then, so its grilles, fences and leaves
+drew solid. It now takes that raster whenever its table has a cut-out row.
+
 ## D-097 — A rasterised mode lit by precomputed transfer: relit probes in sparse bricks ✅ (proposed 2026-11-01; the owner's go the same day; D-094, D-095, D-096)
 
 **Why:** D-094's amendment holds Forge to the shipped city game's benchmark mode for mode, its

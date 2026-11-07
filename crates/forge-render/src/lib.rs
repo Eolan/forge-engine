@@ -77,7 +77,9 @@ pub use atmosphere::{Atmosphere, AtmosphereFrame, AtmosphereParams};
 pub use blit::blit;
 pub use bloom::Bloom;
 pub use cell_record::{CellRecord, CellSets, CellSystems};
-pub use cell_stream::{CellSource, CellStreamConfig, CellStreamStats, CellStreamer, LoadedCell};
+pub use cell_stream::{
+    CellSource, CellStreamConfig, CellStreamStats, CellStreamer, LoadedCell, SharedMeshes,
+};
 pub use cells::{CELL_SIZE, CellPos};
 pub use clouds::{CloudParams, CloudShadow, Clouds};
 pub use decals::{Decal, DecalAlpha, DecalKind, DecalSet};

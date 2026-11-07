@@ -3013,6 +3013,21 @@ packed four to a texture, given their levels and uploaded one texture at a time 
 - **The district's loading screen:** 17.6 s → 13.2 and 14.7 s over two runs.
 - **The picture:** two of its stills differ from its baseline's by 109 and 299 pixels (FLIP mean 0.0007, 0.0004). The same build differs from itself by 97 and 350, so the change is within run-to-run noise.
 
+## A streamed district's meshes with its cells (#338, D-096, 2026-11-07)
+
+The private district streamed along its path in real time (one edit a frame), at 2560 × 1440 under DLSS Quality, two
+alternated runs each:
+
+| | Every mesh registered at the start | Meshes with the cells that use them (`SharedMeshes`) |
+|---|---|---|
+| Frame | 15.45, 15.24 ms | 14.39, 14.38 ms |
+| p50 | 15.85, 15.66 ms | 14.91, 14.88 ms |
+| p99 | 18.66, 18.62 ms | 17.48, 17.50 ms |
+| Geometry | 5,397 MiB | 4,395 MiB |
+| VRAM | 12.8 GB | 11.8 GB |
+
+Both were measured before the cut-out fix of the same day, so neither run drew the cut-outs' raster.
+
 ## The textures' feedback (#385, 2026-11-07, a developer's switch)
 
 `FORGE_TEXTURE_FEEDBACK=1`, on the private district's path at 2560 × 1440 under DLSS Quality:

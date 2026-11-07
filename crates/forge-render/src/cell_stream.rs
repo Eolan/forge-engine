@@ -14,6 +14,9 @@
 //!   content's reach shows its proxy ([`CellSource::load_proxy`]), typically one mesh merged from
 //!   its own (`forge_geom::proxy`). A cell swapping between the two has the one taken out and the
 //!   other put in by the same edit: never both on a frame, never neither.
+//! - **Meshes several cells share** ([`SharedMeshes`]): a source adds one with the first cell
+//!   that uses it and takes it out with the last, told when a cell leaves
+//!   ([`CellSource::unload`]), rather than keeping every mesh resident from the start.
 //! - **Not here:** a cell's own state, which the game keeps and gives back when the cell loads
 //!   again.
 
@@ -55,6 +58,84 @@ pub trait CellSource: Send + 'static {
     fn load_proxy(&mut self, cell: CellId, editor: &mut SceneEditor) -> Result<LoadedCell> {
         let _ = (cell, editor);
         Ok(LoadedCell::default())
+    }
+
+    /// Cell `cell` has left, at either detail: its instances and its own meshes are out. A source
+    /// sharing meshes between cells releases the cell's ([`SharedMeshes::release`]) and takes out
+    /// through `editor` those no cell uses any more. Nothing by default.
+    fn unload(&mut self, cell: CellId, editor: &mut SceneEditor) {
+        let _ = (cell, editor);
+    }
+}
+
+/// Meshes several cells share, counted by the source's key (#338): one is added with the first
+/// cell that asks for it ([`SharedMeshes::acquire`]) and taken out with the last that leaves
+/// ([`SharedMeshes::release`], from [`CellSource::unload`]). A world then keeps resident the meshes
+/// of the cells in, not every mesh it has. `M` is the mesh's handle, a [`MeshId`].
+#[derive(Debug)]
+pub struct SharedMeshes<M = MeshId> {
+    /// Per key, the mesh and how many cells hold it.
+    meshes: HashMap<u64, (M, u32)>,
+    /// Per cell, the keys it holds (a key once per cell however often it asked).
+    by_cell: HashMap<CellId, Vec<u64>>,
+}
+
+impl<M> Default for SharedMeshes<M> {
+    fn default() -> Self {
+        Self {
+            meshes: HashMap::new(),
+            by_cell: HashMap::new(),
+        }
+    }
+}
+
+impl<M: Copy> SharedMeshes<M> {
+    /// Mesh `key` for cell `cell`: `add` makes and adds it the first time any cell asks for it,
+    /// its mesh is returned after that. A cell asking twice holds it once.
+    pub fn acquire(
+        &mut self,
+        cell: CellId,
+        key: u64,
+        add: impl FnOnce() -> Result<M>,
+    ) -> Result<M> {
+        if let Some((mesh, count)) = self.meshes.get_mut(&key) {
+            let held = self.by_cell.entry(cell).or_default();
+            if !held.contains(&key) {
+                held.push(key);
+                *count += 1;
+            }
+            return Ok(*mesh);
+        }
+        let mesh = add()?;
+        self.meshes.insert(key, (mesh, 1));
+        self.by_cell.entry(cell).or_default().push(key);
+        Ok(mesh)
+    }
+
+    /// Cell `cell` gone: each mesh it held counted down, and those no cell holds any more
+    /// returned, for the source to take out ([`SceneEditor::remove_mesh`]).
+    pub fn release(&mut self, cell: CellId) -> Vec<M> {
+        let mut gone = Vec::new();
+        for key in self.by_cell.remove(&cell).unwrap_or_default() {
+            if let Some((mesh, count)) = self.meshes.get_mut(&key) {
+                *count -= 1;
+                if *count == 0 {
+                    gone.push(*mesh);
+                    self.meshes.remove(&key);
+                }
+            }
+        }
+        gone
+    }
+
+    /// Meshes held.
+    pub fn len(&self) -> usize {
+        self.meshes.len()
+    }
+
+    /// Whether it holds none.
+    pub fn is_empty(&self) -> bool {
+        self.meshes.is_empty()
     }
 }
 
@@ -389,14 +470,15 @@ impl<P: Partition, S: CellSource> Worker<P, S> {
             .sort_by(|a, b| rank(&a.0).total_cmp(&rank(&b.0)));
     }
 
-    /// Takes out what a cell added.
-    fn take_out(&mut self, live: Live) {
+    /// Takes out what cell `cell` added, then tells its source it left.
+    fn take_out(&mut self, cell: CellId, live: Live) {
         for i in live.instances {
             self.editor.remove_instance(i);
         }
         for m in live.meshes {
             self.editor.remove_mesh(m);
         }
+        self.source.unload(cell, &mut self.editor);
     }
 
     /// The next edit: unloads first, then loads, up to the configured cells. A cell in at the
@@ -411,7 +493,7 @@ impl<P: Partition, S: CellSource> Worker<P, S> {
             && let Some(cell) = self.unloads.pop_front()
         {
             if let Some(live) = self.live.remove(&cell) {
-                self.take_out(live);
+                self.take_out(cell, live);
             }
             unloaded.push(cell);
         }
@@ -419,7 +501,7 @@ impl<P: Partition, S: CellSource> Worker<P, S> {
             && let Some((cell, detail)) = self.loads.pop_front()
         {
             if let Some(live) = self.live.remove(&cell) {
-                self.take_out(live);
+                self.take_out(cell, live);
                 unloaded.push(cell);
                 swapped += 1;
             }
@@ -450,5 +532,59 @@ impl<P: Partition, S: CellSource> Worker<P, S> {
             swapped,
             took: start.elapsed(),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A mesh two cells share is added once, with the first, and taken out with the last to
+    /// leave; asked again after, it is added again.
+    #[test]
+    fn a_shared_mesh_comes_with_the_first_cell_and_goes_with_the_last() {
+        let (a, b) = (CellId::flat(4, 0, 0), CellId::flat(4, 1, 0));
+        let mut shared = SharedMeshes::<u32>::default();
+        let added = std::cell::Cell::new(0);
+        let add = |id: u32| {
+            added.set(added.get() + 1);
+            Ok(id)
+        };
+        assert_eq!(shared.acquire(a, 7, || add(70)).unwrap(), 70);
+        assert_eq!(
+            shared.acquire(a, 7, || add(71)).unwrap(),
+            70,
+            "a cell asking twice"
+        );
+        assert_eq!(shared.acquire(b, 7, || add(72)).unwrap(), 70);
+        assert_eq!(shared.acquire(b, 8, || add(80)).unwrap(), 80);
+        assert_eq!(added.get(), 2);
+        assert_eq!(shared.len(), 2);
+        assert_eq!(shared.release(a), Vec::<u32>::new(), "b still holds 7");
+        let mut gone = shared.release(b);
+        gone.sort_unstable();
+        assert_eq!(gone, [70, 80]);
+        assert!(shared.is_empty());
+        assert_eq!(shared.acquire(a, 7, || add(73)).unwrap(), 73, "added again");
+        assert_eq!(added.get(), 3);
+        assert_eq!(
+            shared.release(CellId::flat(4, 9, 9)),
+            Vec::<u32>::new(),
+            "a cell that held none"
+        );
+    }
+
+    /// A mesh that fails to be made is held by no cell.
+    #[test]
+    fn a_mesh_not_made_is_not_held() {
+        let a = CellId::flat(4, 0, 0);
+        let mut shared = SharedMeshes::<u32>::default();
+        assert!(
+            shared
+                .acquire(a, 1, || Err(GpuError::Unsupported("no room".into())))
+                .is_err()
+        );
+        assert!(shared.is_empty());
+        assert_eq!(shared.release(a), Vec::<u32>::new());
     }
 }
