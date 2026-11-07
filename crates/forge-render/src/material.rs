@@ -800,6 +800,75 @@ impl TextureSet {
         self.textures[id.0 as usize].1.0
     }
 
+    /// Remakes texture `id` with `levels`, finest first, the finest `width × height` in `format`
+    /// (D-105's first step: a streamed texture grows or shrinks so). The new image is uploaded
+    /// whole into a new slot. The old one is left untouched, since frames in flight on either
+    /// queue may still sample it; it comes back with its slot to retire once none may
+    /// ([`RetiredTexture`], `Frames::destroy_later`). Rows that refer to the texture take its new
+    /// slot ([`Self::sampled`]). A two-channel (BC5) image is viewed as [`Self::add_compressed`]
+    /// views one. What the CPU knows of its alpha stays: its levels are the same picture's.
+    pub fn remake(
+        &mut self,
+        id: TextureId,
+        width: u32,
+        height: u32,
+        format: vk::Format,
+        levels: &[&[u8]],
+    ) -> Result<RetiredTexture> {
+        let image = self.device.create_image_with_mips(
+            ImageDesc {
+                width,
+                height,
+                format,
+                usage: vk::ImageUsageFlags::SAMPLED,
+                aspect: vk::ImageAspectFlags::COLOR,
+                mip_levels: levels.len() as u32,
+                name: "streamed texture",
+            },
+            levels,
+        )?;
+        let image = if format == vk::Format::BC5_UNORM_BLOCK {
+            image.with_view_components(vk::ComponentMapping {
+                r: vk::ComponentSwizzle::IDENTITY,
+                g: vk::ComponentSwizzle::IDENTITY,
+                b: vk::ComponentSwizzle::ONE,
+                a: vk::ComponentSwizzle::ONE,
+            })?
+        } else {
+            image
+        };
+        let sampled = self
+            .device
+            .register_sampled_image(image.view(), vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL);
+        let (old, slot) = std::mem::replace(&mut self.textures[id.0 as usize], (image, sampled));
+        self.bytes = self.bytes.saturating_sub(image_bytes(&old))
+            + levels.iter().map(|l| l.len() as u64).sum::<u64>();
+        Ok(RetiredTexture {
+            device: self.device.clone(),
+            image: Some(old),
+            slot,
+        })
+    }
+
+    /// [`Self::remake`] with `texture`'s levels from level `top` down: the coarser ones a
+    /// streamed texture keeps, or all of them back.
+    pub fn remake_compressed(
+        &mut self,
+        id: TextureId,
+        texture: &CompressedTexture,
+        top: usize,
+    ) -> Result<RetiredTexture> {
+        let top = top.min(texture.levels.len().saturating_sub(1));
+        let levels: Vec<&[u8]> = texture.levels[top..].iter().map(Vec::as_slice).collect();
+        self.remake(
+            id,
+            (texture.width >> top).max(1),
+            (texture.height >> top).max(1),
+            texture.format.vk_format(texture.srgb),
+            &levels,
+        )
+    }
+
     /// Number of textures.
     pub fn len(&self) -> usize {
         self.textures.len()
@@ -822,6 +891,43 @@ impl Drop for TextureSet {
             self.device.release_sampled_image(*sampled);
         }
     }
+}
+
+/// A texture's image and slot that [`TextureSet::remake`] replaced: dropped (through
+/// `Frames::destroy_later`, once no frame in flight may sample them), the image goes and the slot
+/// is freed.
+pub struct RetiredTexture {
+    device: Arc<Device>,
+    image: Option<Image>,
+    slot: SampledImageId,
+}
+
+impl RetiredTexture {
+    /// The bindless index it held.
+    pub fn slot(&self) -> u32 {
+        self.slot.0
+    }
+}
+
+impl Drop for RetiredTexture {
+    fn drop(&mut self) {
+        self.image = None;
+        self.device.release_sampled_image(self.slot);
+    }
+}
+
+/// The bytes of `image`'s levels.
+fn image_bytes(image: &Image) -> u64 {
+    let e = image.extent();
+    (0..image.mip_levels())
+        .map(|l| {
+            level_size(
+                image.format(),
+                (e.width >> l).max(1),
+                (e.height >> l).max(1),
+            )
+        })
+        .sum()
 }
 
 /// Uploads every texture of `data` (RGBA8, every level) as [`TextureSet::add`] would, as many
@@ -1419,6 +1525,84 @@ mod tests {
                 .any(|a| matches!(a, TextureAlpha::Plane(_)))
         );
         assert!(all.alpha.iter().any(|a| matches!(a, TextureAlpha::Opaque)));
+    }
+
+    /// A GPU test (`FORGE_GPU_TESTS=1`, D-105's first step): a texture remade with fewer levels
+    /// takes a new slot and counts only its levels; the slot it left is freed when its retiree
+    /// drops; remade with all its levels again, it counts what it did at first.
+    #[test]
+    fn a_remade_texture_takes_a_new_slot_and_retires_the_old() {
+        let Some(gpu) = forge_gpu::Headless::for_test(forge_gpu::headless::shaders_of(env!(
+            "CARGO_MANIFEST_DIR"
+        ))) else {
+            return;
+        };
+        let mut set = TextureSet::new(&gpu.device);
+        let size = |k: u32| (16u32 >> k).max(1);
+        let data = TextureData {
+            name: "streamed".into(),
+            size: 16,
+            height: 16,
+            srgb: true,
+            levels: (0..5)
+                .map(|k| vec![(k * 40) as u8; (size(k) * size(k) * 4) as usize])
+                .collect(),
+        };
+        let id = set.add(&data).unwrap();
+        let other = set.add(&data).unwrap();
+        let (whole, first) = (set.bytes(), set.sampled(id));
+        let tail: Vec<&[u8]> = data.levels[2..].iter().map(Vec::as_slice).collect();
+        let retired = set
+            .remake(id, 4, 4, vk::Format::R8G8B8A8_SRGB, &tail)
+            .unwrap();
+        assert_eq!(retired.slot(), first);
+        assert_ne!(set.sampled(id), first);
+        assert_ne!(set.sampled(id), set.sampled(other));
+        assert_eq!(set.bytes(), whole - 16 * 16 * 4 - 8 * 8 * 4);
+        assert_eq!(set.textures[id.0 as usize].0.mip_levels(), 3);
+        assert_eq!(set.textures[id.0 as usize].0.extent().width, 4);
+        drop(retired);
+        let all: Vec<&[u8]> = data.levels.iter().map(Vec::as_slice).collect();
+        let retired = set
+            .remake(id, 16, 16, vk::Format::R8G8B8A8_SRGB, &all)
+            .unwrap();
+        assert_eq!(set.bytes(), whole);
+        assert_eq!(set.textures[id.0 as usize].0.mip_levels(), 5);
+        drop(retired);
+        // A block-compressed one, from its top level down.
+        let bc = CompressedTexture {
+            name: "bc".into(),
+            width: 16,
+            height: 16,
+            format: crate::dds::BlockFormat::Bc1,
+            srgb: true,
+            levels: (0..5)
+                .map(|k| vec![0u8; (size(k).div_ceil(4) * size(k).div_ceil(4) * 8) as usize])
+                .collect(),
+        };
+        let image = gpu
+            .device
+            .create_image_with_mips(
+                ImageDesc {
+                    width: 16,
+                    height: 16,
+                    format: vk::Format::BC1_RGBA_SRGB_BLOCK,
+                    usage: vk::ImageUsageFlags::SAMPLED,
+                    aspect: vk::ImageAspectFlags::COLOR,
+                    mip_levels: 5,
+                    name: "bc",
+                },
+                &bc.levels.iter().map(Vec::as_slice).collect::<Vec<_>>(),
+            )
+            .unwrap();
+        let bc_bytes: u64 = bc.levels.iter().map(|l| l.len() as u64).sum();
+        let b = set.add_compressed(image, bc_bytes, &bc).unwrap();
+        let before = set.bytes();
+        let retired = set.remake_compressed(b, &bc, 3).unwrap();
+        assert_eq!(set.textures[b.0 as usize].0.mip_levels(), 2);
+        // Its levels 3 and 4: a block each.
+        assert_eq!(set.bytes(), before - bc_bytes + 2 * 8);
+        drop(retired);
     }
 
     /// A GPU test (`FORGE_GPU_TESTS=1`): presence maps uploaded together come back as ids in

@@ -12079,7 +12079,7 @@ mask in fixed-function hardware), was filed in 2000 and has expired. The searche
 - **Refused:** a show without pictures, one of no length, or a row that can't move its coordinates.
 - **In the private district,** 299 advert boards cycle through every district's fallback picture of their format, 8 s each. That interval is a guess at the source's rotation. Each board starts from its own picture, and boards change apart from their neighbours. The source's boards play videos; their stills are what the slideshow cycles.
 
-## D-105 — Textures streamed by whole levels, by need, into a pool 🟡 (proposed 2026-11-07, #385; the owner: "move the effort to ... texture streaming (#385)")
+## D-105 — Textures streamed by whole levels, by need, into a pool ✅ (proposed 2026-11-07, #385; the owner: "move the effort to ... texture streaming (#385)"; accepted the same day: "ok for D-105")
 
 **What was measured** (#385's first step, `FORGE_TEXTURE_FEEDBACK=1`, `meshlet/feedback.rs`). The private district on its benchmark path at 2560 x 1440:
 
@@ -12099,4 +12099,29 @@ mask in fixed-function hardware), was filed in 2000 and has expired. The searche
 5. **The files:** each level readable alone (KTX2 with per-level supercompression), held in the package (#214).
 6. **What decides a texture's level:** the finest level its samples wanted within the window, from the feedback as measured.
 
-**Still the owner's call:** the proposal itself (steps 1 to 5), before the streamer is built.
+**Accepted** (the owner, 2026-11-07: "ok for D-105"), steps 1 to 6.
+
+**How it is built (2026-11-07):**
+- **A remade image takes a new slot.** Material rows hold bindless slots, and Vulkan doesn't allow rewriting a
+  descriptor that a frame in flight may still sample. So a remade image is registered in a new slot. Its old image and
+  slot retire after the frames that may sample them.
+- **The rows follow, frame slot by frame slot.** A row that refers to a streamed texture is rewritten into each frame
+  slot's own material table with the texture's current slot, as D-104's moving rows are.
+- **The material table's textures first.** A texture that decals or holograms also refer to stays resident until their
+  tables follow too.
+- **The steps:**
+  1. Remaking an image, uploaded whole. Copying the coarser levels from the old image would take it out of its
+     sampled layout while frames on either queue may read it (the probes' rays on the async queue sample materials
+     too). Those coarser levels are a third of the new top's bytes. Tested.
+  2. The rows' remap in the frame slots' tables.
+  3. The policy: the feedback's levels, the pool, eviction by last use.
+  4. The files: each level readable alone (KTX2) in the package.
+- **Step 1 is built (2026-11-07):** `TextureSet::remake` and `remake_compressed` make a texture's image again from a
+  level down, uploaded whole into a new slot. The old image and slot come back as a `RetiredTexture`; dropped through
+  `Frames::destroy_later`, it frees both. A GPU test covers fewer levels and all of them back, RGBA8 and BC1, and the
+  set's bytes.
+- **For step 3:**
+  - **The feedback's levels count from the image's current top.** A remade texture's wanted level in its full chain is
+    the recorded one plus its top.
+  - **Masks and presence maps stay resident.** The shading counts the presence map's blocks on the masks' full size
+    (`multilayer_light`), so the streamed textures are the maps: colour, normal, roughness, metal and microblend.
