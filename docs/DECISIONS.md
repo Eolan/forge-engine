@@ -11844,7 +11844,7 @@ mask in fixed-function hardware), was filed in 2000 and has expired. The searche
 
 ## D-103 — Pictures of light with no surface: a pass over the HDR scene ✅ (the owner's go 2026-11-07: "go with people, bottles and holograms"; D-065, D-083)
 
-**The need.** The private district's shipped open-world city game draws floating signs, prices over stalls and pictures on fridge doors as light with no surface: a texture added over what is behind it. Forge's visibility pass has no such thing. Drawn solid, they stood as dark slabs, so the viewer left them out, 31 pictures on 3,746 triangles near the benchmark's path.
+**The need.** The private district's shipped open-world city game draws floating signs, prices over stalls and pictures on fridge doors as light with no surface: a texture added over what is behind it. Forge's visibility pass has no such thing. Drawn solid, they stood as dark slabs, so the viewer left them out: 42 pictures on 5,831 triangles along the benchmark's path.
 
 **Decided.** `forge_render::Holograms` and `shaders/holograms.slang`, `Running::holograms`: triangles in the world frame, each corner naming a row (a picture, its glow in cd/m², its hue, saturation and value). One pass, `holograms/draw`, after the glass: the picture's colour times its alpha, times the glow and the exposure, added to the HDR scene where nothing nearer stands. It tests the frame's depth itself and writes none. A scene that hands over none has no pass and no buffers, so every other scene renders as before.
 
