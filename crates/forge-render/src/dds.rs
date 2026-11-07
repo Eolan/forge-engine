@@ -559,6 +559,66 @@ fn normals_to_bc7(texture: &CompressedTexture, level0: Vec<Vec3>) -> CompressedT
     }
 }
 
+/// Two masks (`a` and `b`, `width × height` bytes each, rows top to bottom) as one BC5 texture
+/// with every level (D-105's masks in BC4: BC5 is two BC4 channels, a mask in each). Each level's
+/// masks are box-filtered from the level above as the RGBA8 masks' are (each 2 × 2 texels' sum
+/// over four, rounded up; the last row and column of an odd size kept), and encoded by Intel's ISPC
+/// compressor.
+pub fn masks_to_bc5(name: &str, width: u32, height: u32, a: &[u8], b: &[u8]) -> CompressedTexture {
+    let (w0, h0) = (width as usize, height as usize);
+    assert!(
+        a.len() == w0 * h0 && b.len() == w0 * h0,
+        "masks of {width} × {height}"
+    );
+    let mut level: Vec<u8> = a.iter().zip(b).flat_map(|(&x, &y)| [x, y]).collect();
+    let (mut w, mut h) = (w0, h0);
+    let mut levels = Vec::new();
+    loop {
+        // Padded to whole blocks with the edge's texels.
+        let (pw, ph) = (w.div_ceil(4) * 4, h.div_ceil(4) * 4);
+        let mut padded = vec![0_u8; pw * ph * 2];
+        for y in 0..ph {
+            for x in 0..pw {
+                let from = (y.min(h - 1) * w + x.min(w - 1)) * 2;
+                padded[(y * pw + x) * 2..][..2].copy_from_slice(&level[from..from + 2]);
+            }
+        }
+        levels.push(intel_tex_2::bc5::compress_blocks(&intel_tex_2::RgSurface {
+            data: &padded,
+            width: pw as u32,
+            height: ph as u32,
+            stride: pw as u32 * 2,
+        }));
+        if w == 1 && h == 1 {
+            break;
+        }
+        let (nw, nh) = ((w / 2).max(1), (h / 2).max(1));
+        let mut next = vec![0_u8; nw * nh * 2];
+        for y in 0..nh {
+            for x in 0..nw {
+                for c in 0..2 {
+                    let mut sum = 0_u32;
+                    for (dx, dy) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
+                        let (sx, sy) = ((2 * x + dx).min(w - 1), (2 * y + dy).min(h - 1));
+                        sum += u32::from(level[(sy * w + sx) * 2 + c]);
+                    }
+                    next[(y * nw + x) * 2 + c] = sum.div_ceil(4) as u8;
+                }
+            }
+        }
+        level = next;
+        (w, h) = (nw, nh);
+    }
+    CompressedTexture {
+        name: name.to_owned(),
+        width,
+        height,
+        format: BlockFormat::Bc5,
+        srgb: false,
+        levels,
+    }
+}
+
 /// `texture` as a DDS file [`read_dds`] reads back: the DX10 header's DXGI format (BC1, BC3, BC4, BC5 or
 /// BC7, sRGB where it is) and every level.
 pub fn write_dds(texture: &CompressedTexture) -> Vec<u8> {
@@ -616,6 +676,51 @@ mod tests {
             bytes.extend(std::iter::repeat_n(level as u8, n));
         }
         bytes
+    }
+
+    /// Two masks as BC5: each level's blocks decode near the masks box-filtered (a flat mask
+    /// exactly, a soft edge within a few codes), the levels down to one texel.
+    #[test]
+    fn two_masks_go_into_bc5_near_as_they_were() {
+        let (w, h) = (40_usize, 24_usize);
+        // A flat mask and a soft diagonal edge.
+        let flat = vec![200_u8; w * h];
+        let edge: Vec<u8> = (0..w * h)
+            .map(|i| {
+                let (x, y) = ((i % w) as f32, (i / w) as f32);
+                ((x + y - 30.0) * 12.0).clamp(0.0, 255.0) as u8
+            })
+            .collect();
+        let t = masks_to_bc5("masks", w as u32, h as u32, &flat, &edge);
+        assert_eq!(t.format, BlockFormat::Bc5);
+        // 40 x 24 down to 1 x 1: six levels.
+        assert_eq!(t.levels.len(), 6);
+        assert_eq!(t.levels[0].len(), (w / 4) * (h / 4) * 16);
+        let (bw, bh) = (w / 4, h / 4);
+        let (mut worst, mut sum) = (0_u32, 0_u32);
+        for by in 0..bh {
+            for bx in 0..bw {
+                let block = &t.levels[0][(by * bw + bx) * 16..][..16];
+                let (red, green) = (channel_values(&block[..8]), channel_values(&block[8..]));
+                for k in 0..16 {
+                    let (x, y) = (bx * 4 + k % 4, by * 4 + k / 4);
+                    assert_eq!(red[k], 200, "the flat mask at {x}, {y}");
+                    let e = u32::from(green[k].abs_diff(edge[y * w + x]));
+                    worst = worst.max(e);
+                    sum += e;
+                }
+            }
+        }
+        assert!(worst <= 12, "worst {worst}");
+        assert!(
+            sum as f32 / ((w * h) as f32) < 2.0,
+            "mean {}",
+            sum as f32 / (w * h) as f32
+        );
+        // The last level: one block of the masks' means.
+        let last = t.levels.last().unwrap();
+        assert_eq!(last.len(), 16);
+        assert_eq!(channel_values(&last[..8])[0], 200);
     }
 
     #[test]
