@@ -576,6 +576,8 @@ public struct Frame
     public uint show_input;         // a debug view of a standard row's shading input (D-086, `r.show.input`, `shading_input`); 0: none
     public uint gi_reference;       // D-088's reference for the diffuse light (`r.gi.reference`, `near_field_reference`); 0: the probes
     public NearLamps* near_lamps;   // the frame's lamps by columns round the camera when none has regions (#386), null: none
+    public float ray_glow;          // what a diffuse ray meets of a glow, times this (`MeshletRenderer::ray_glow`)
+    public uint ray_glow_pad;
 };
 
 // Whether this thread's rays meet the movers: every pass's but the probes' unless their scene asks
@@ -6952,12 +6954,14 @@ RayHit ray_hit(Frame* f, uint instance, uint primitive, float2 b, float3 origin,
 // (`path_from`) takes it too; with it the asteroids' rocks shadow each other again on NVIDIA, as
 // on the AMD iGPU with or without it (#355: the resolve's mover rays lost at some code sizes, the
 // images accepted since 2026-10-29 without those shadows). `lit` false: the glow kept (the
-// near-field reference, which adds no lamps).
+// near-field reference, which adds no lamps). A diffuse ray's glow takes the scene's `ray_glow`, a
+// mirror's stays as the eye sees it.
 RayHit ray_hit_lit(Frame* f, ClosestHit c, float3 origin, float3 direction, bool lit = true)
 {
     RayHit hit = ray_hit(f, c.instance, c.primitive, c.barycentrics, origin, direction, c.t);
     if (lit && (candidate_row(f, c.instance, c.primitive).flags & MATERIAL_FLAG_LAMP) != 0)
         hit.emissive = float3(0.0);
+    hit.emissive *= f[0].ray_glow;
     return hit;
 }
 
@@ -9839,6 +9843,7 @@ void probe_trace_main(uint3 group : SV_GroupID, uint thread : SV_GroupThreadID)
                 // (D-065): met by one ray in hundreds, it flickered the probe.
                 if ((candidate_row(f, c.instance, c.primitive).flags & MATERIAL_FLAG_LAMP) != 0)
                     hit.emissive = float3(0.0);
+                hit.emissive *= f[0].ray_glow;
                 radiance = probe_push.first_update != 0 ? hit_sunlight(f, hit) : hit_radiance(f, sky, field, hit, direction, region == REGION_OUTSIDE);
                 // The lamps lighting the probe's region (all for a probe without one).
                 radiance += hit_lamps(f, hit, region, probe * 0x9E3779B9u + ray, true);
@@ -9870,6 +9875,7 @@ void probe_trace_main(uint3 group : SV_GroupID, uint thread : SV_GroupThreadID)
             RayHit hit = ray_hit(f, c.instance, c.primitive, c.barycentrics, origin, direction, c.t);
             if ((candidate_row(f, c.instance, c.primitive).flags & MATERIAL_FLAG_LAMP) != 0)
                 hit.emissive = float3(0.0);
+            hit.emissive *= f[0].ray_glow;
             b.position = hit.position;
             b.albedo = hit.albedo;
             b.normal = pack_unit(hit.n);

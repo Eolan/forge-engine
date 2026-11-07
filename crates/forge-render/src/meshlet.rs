@@ -787,6 +787,9 @@ struct GpuFrame {
     /// [`crate::lamps::NearLamps`]): the `NearLamps` record at [`NEAR_LAMPS_OFFSET`] in the lamps'
     /// buffer; 0: none.
     near_lamps: u64,
+    /// What a diffuse ray meets of a glow, times this ([`MeshletRenderer::ray_glow`]).
+    ray_glow: f32,
+    ray_glow_pad: u32,
 }
 
 /// Where a frame slot's light lists start in its lamps' buffer, bytes: after the lamps.
@@ -4463,6 +4466,10 @@ pub struct MeshletRenderer {
     pub sun_dir: Vec3,
     /// Illuminance of the sun at the scene, in lux (the rocks return albedo × E / π).
     pub sun_illuminance: f32,
+    /// What the diffuse rays (the bounce, the probes, SHaRC, NRC) meet of a glow, times this; a
+    /// mirror's ray and the eye see it as it is. 1 by default, the same light. More: an authored
+    /// scene whose neons light their rooms more than Forge's rays find of them (`Look::ray_glow`).
+    pub ray_glow: f32,
     /// The sunlight's colour at the scene: (1, 0.96, 0.9) by default (the ballad's, in space);
     /// on a planet, the sun through the air.
     pub sun_color: Vec3,
@@ -5085,6 +5092,7 @@ impl MeshletRenderer {
             visible_max,
             sun_dir: Vec3::new(0.4, 1.0, 0.3).normalize(),
             sun_illuminance: crate::starfield::SUN_ILLUMINANCE_1AU,
+            ray_glow: 1.0,
             sun_color: Vec3::new(1.0, 0.96, 0.9),
             sun_angular_radius: 0.0,
             lamp_restir_from: None,
@@ -5566,6 +5574,8 @@ impl MeshletRenderer {
             visible_capacity: self.visible_target,
             exposure: params.exposure,
             sun_illuminance: self.sun_illuminance,
+            ray_glow: self.ray_glow,
+            ray_glow_pad: 0,
             sun_angular_radius: self.sun_angular_radius,
             clusters: scene.clusters[slot.index].address(),
             draws: 0,

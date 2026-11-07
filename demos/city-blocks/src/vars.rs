@@ -248,16 +248,17 @@ impl Gallery {
             gi_probe_ahead: s.add(rs::gi_probe_ahead(f64::from(crate::PROBE_AHEAD))),
             ao_ignore_nearer: s.add(rs::ao_ignore_nearer(0.0)),
             ao_contact: s.add(rs::ao_contact(f64::from(crate::AO_CONTACT))),
-            exposure_brighten: s.add_from_f32(
-                rs::exposure_speed_brighten(0.8),
-                0.8,
-                self.auto_exposure.speed_brighten,
-            ),
-            exposure_darken: s.add_from_f32(
-                rs::exposure_speed_darken(1.5),
-                1.5,
-                self.auto_exposure.speed_darken,
-            ),
+            // The scene's own (its look's) as the settings' defaults, written as in decimal.
+            exposure_brighten: {
+                let speed = self.auto_exposure.speed_brighten;
+                let default = speed.to_string().parse().unwrap_or(f64::from(speed));
+                s.add_from_f32(rs::exposure_speed_brighten(default), default, speed)
+            },
+            exposure_darken: {
+                let speed = self.auto_exposure.speed_darken;
+                let default = speed.to_string().parse().unwrap_or(f64::from(speed));
+                s.add_from_f32(rs::exposure_speed_darken(default), default, speed)
+            },
             exposure_night_floor: s.add_from_f32(
                 rs::exposure_night_floor(f64::from(night_floor)),
                 f64::from(night_floor),

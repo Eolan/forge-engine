@@ -112,6 +112,12 @@ pub struct Look {
     /// With `metered`: by day, outdoors, how far the exposure follows a scene darker than a
     /// sunlit street (`AutoExposure::shade_adapt`, `r.exposure.shade_adapt`); none, all the way.
     pub shade_adapt: Option<f32>,
+    /// With `metered`: how fast the exposure darkens and brightens the image, per second
+    /// (`AutoExposure::speed_darken`, `speed_brighten`); none, their defaults.
+    pub exposure_speeds: Option<(f32, f32)>,
+    /// What the diffuse rays meet of a glow, times this (`MeshletRenderer::ray_glow`); none, as it is. A fit,
+    /// for an authored scene lit by its neons.
+    pub ray_glow: Option<f32>,
     /// An environment map as the sky (D-084), for a scene authored under one: no air, no
     /// clouds, no night; the sun's direction from `sun`.
     pub environment: Option<Environment>,
@@ -177,6 +183,8 @@ impl Default for Look {
             exposure_range: None,
             local_exposure: false,
             shade_adapt: None,
+            exposure_speeds: None,
+            ray_glow: None,
             environment: None,
             tonemap: None,
             grading: None,

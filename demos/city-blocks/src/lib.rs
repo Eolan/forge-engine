@@ -1333,6 +1333,9 @@ impl Gallery {
             None => {}
         }
         // A scene's own sun level, its lamps set against it.
+        if let Some(glow) = look.ray_glow.filter(|g| g.is_finite() && *g >= 0.0) {
+            renderer.ray_glow = glow;
+        }
         match look.sun_illuminance {
             Some(lux) if lux.is_finite() && lux > 0.0 => renderer.sun_illuminance = lux,
             Some(lux) => tracing::warn!(
@@ -1458,6 +1461,10 @@ impl Gallery {
         // The shade kept darker by day, outdoors, where the look asks (D-093).
         if let Some(adapt) = look.shade_adapt {
             auto_exposure.shade_adapt = adapt;
+        }
+        if let Some((darken, brighten)) = look.exposure_speeds {
+            auto_exposure.speed_darken = darken;
+            auto_exposure.speed_brighten = brighten;
         }
         // The scene's liquid in its glass tank (#156).
         let liquid_setup = scenario.as_ref().and_then(|s| s.liquid());
