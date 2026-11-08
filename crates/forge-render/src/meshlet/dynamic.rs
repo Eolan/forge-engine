@@ -829,9 +829,13 @@ impl SceneEditor {
                 ([to.x, to.y, to.z, e.distance.max(1e-3)], e.band.max(1e-3))
             })
         };
+        let going = goes.is_some();
         let (comes, comes_band) = side(comes);
         let (goes, goes_band) = side(goes);
         record.flags |= INSTANCE_FADES;
+        if going {
+            record.flags |= INSTANCE_GOES;
+        }
         self.pending_fades.push((
             instance,
             GpuInstanceFade {

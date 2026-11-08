@@ -12473,7 +12473,9 @@ shaded tenth of the picture, 0.2 or less at the two street-level views. The geom
   pixels of a dissolve had nothing behind them).
 - **The band:** 10 % of the swap distance, between 8 and 40 m, and never wider than the distance, so that a piece with a very short range is still whole
   at its point.
-- **Rays are not dithered:** both sides stay in the structure during the band.
+- **Rays are not dithered, and the two sides must not shade each other:** a stand-in leaves the shadow rays while any of its members is in the
+  scene, and its own shadow rays start 4 m out (`INSTANCE_GOES`), clear of the pieces replacing it. Without that, sections of a tower went dark as they
+  crossed (the owner's flight, 2026-11-08). The members cast from the moment they are in.
 
 Measured along the walk at 2560 x 1440 under DLSS Quality, textures a level down, against the same build with hard cuts:
 

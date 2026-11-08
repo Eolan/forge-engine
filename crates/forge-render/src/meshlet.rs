@@ -143,6 +143,9 @@ const INSTANCE_VACANT: u32 = 2;
 /// `Instance::flags`: a dynamic scene's instance that dissolves in and out by distance (D-106,
 /// [`SceneEditor::set_instance_fade`], `INSTANCE_FADES` in the shader).
 const INSTANCE_FADES: u32 = 128;
+/// `Instance::flags`: an instance with a side it goes across (D-106, a stand-in): its shadow rays
+/// start clear of the pieces replacing it (`INSTANCE_GOES` in the shader).
+const INSTANCE_GOES: u32 = 256;
 
 /// What sees an instance (#301): the picture and each world of rays. A stand-in the probes' rays
 /// meet in place of leaf cards is [`Visibility::PROBES`], the cards it stands for

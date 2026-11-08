@@ -186,6 +186,8 @@ static const uint INSTANCE_NO_SHADOW_RAYS = 8; // Instance::flags: not met by th
 static const uint INSTANCE_NO_PROBE_RAYS = 16; // Instance::flags: not met by the probes' rays (#301)
 static const uint INSTANCE_NO_MIRROR_RAYS = 32; // Instance::flags: not met by the mirror rays (#301)
 static const uint INSTANCE_FADES = 128;        // Instance::flags: dissolves in and out by distance (D-106, `Frame::fades`)
+static const uint INSTANCE_GOES = 256;         // Instance::flags: a stand-in that goes as pieces come (D-106): its shadow rays start clear of them
+static const float STAND_IN_SHADOW_START = 4.0; // metres, for INSTANCE_GOES; only ever seen from afar
 static const uint INSTANCE_NO_FAR_SHADOW_RAYS = 64; // Instance::flags: not met by the shadow rays from far points (D-075 step 3, `shadow_world`)
 // The TLAS records' mask bits, one a world of rays (#301): an instance a kind of ray does not meet
 // leaves its bit out, and a pass's rays carry their own (`g_ray_mask`).
@@ -6644,6 +6646,10 @@ float2 sun_disc_point(uint2 pixel, uint frame)
 // itself in a dark blot); the levels near the camera, at no error, keep the cut's start.
 float shadow_bias(Frame* f, Instance inst, Meshlet m)
 {
+    // A stand-in (D-106): the pieces replacing it stand within a few metres of its surface and are
+    // in the rays' world across its fade, where they would shade it.
+    if ((inst.flags & INSTANCE_GOES) != 0)
+        return STAND_IN_SHADOW_START;
     RtScene* rs = f[0].rt_scene;
     if (rs == nullptr)
         return SHADOW_BIAS;
