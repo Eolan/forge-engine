@@ -5864,7 +5864,9 @@ impl CityMaterials {
         }
         let mut table = MaterialTable::new();
         let mut add = |name: &str, mut layer: RenderLayer| {
-            if !layer.hex_tiling {
+            // Not through hex tiles, and not on a row that leaves its normal map out to stay
+            // smooth (the dark glass, a mirror over concrete's colour).
+            if !layer.hex_tiling && layer.normal_texture.is_some() {
                 layer.parallax = relief
                     .iter()
                     .find(|(albedo, _)| Some(*albedo) == layer.albedo_texture)

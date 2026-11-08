@@ -12654,7 +12654,13 @@ built.
   (its floor loses that share of the indirect light).
 - **Decals (D-074):** read at the moved point, so a stain lies in the groove it crosses.
 - **Lamps:** the strongest of a pixel's place takes the relief's shadow; a march per lamp would
-  cost more than it shows. ReSTIR's lamps do not.
+  cost more than it shows. Between two equal lamps that shadow changes at a line. ReSTIR's lamps
+  take neither the relief's shadow nor the micro-shadows.
+- **Projected rows:** the march reads one projection, so the relief goes flat where projections
+  blend. It would jump where the axis changes.
+- **Texture streaming (D-105):** the height map is a streamed field with its want recorded, but
+  the fade reads the bound image's size: a trimmed map would fade by its trimmed top and pop as it
+  is remade. Nothing streams one today; a loader that does must first give the row the full size.
 
 **The relief's shadow.** An occlusion march from the hit up the ray towards the sun and towards the
 strongest lamp: fixed steps (`r.pom.shadow_steps`, 8), no noise, so nothing to denoise. The light is
@@ -12665,9 +12671,9 @@ cosine hold.
 
 **Micro-shadows.**
 - **From an occlusion map, on direct light** (`r.micro.ao`, off): after Uncharted 4's
-  `saturate(|N·L| + 2 AO² − 1)`, the sun's and every lamp's, from the material's own occlusion and
-  never GTAO's: the rays have seen what GTAO sees. Not on a row whose relief marched: the same
-  crevices would darken twice.
+  `saturate(|N·L| + 2 AO² − 1)`, the sun's and the lamps', from the material's own occlusion and
+  never GTAO's: the rays have seen what GTAO sees. Let go on a row whose relief marched, in step
+  with its fade: the same crevices would darken twice.
 - **From a normal map** (`r.micro.bump`, off): Chiang, Li and Burley's terminator term, so a bump
   stops catching a light its surface turns from. 1 where the two normals agree.
 - **Against GTAO, on indirect light** (`r.ao.material`, multiply as before): `min` does not darken
