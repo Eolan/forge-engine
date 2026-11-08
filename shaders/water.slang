@@ -427,6 +427,13 @@ float2 shore_at(WaterSurface* w, float2 flat)
     return sample_image_level(w[0].shore, SAMPLER_LINEAR_CLAMP, uv, 0.0).xy;
 }
 
+// Whether the sea stops at `flat` (camera-relative world x, z): one kept to its own water
+// (`WaterShore::dry_land`) has none where the floor stands at or over its level.
+bool sea_is_dry(WaterSurface* w, float2 flat)
+{
+    return w[0].shore != NO_SHORE && w[0].shore_frame.w > 0.5 && shore_at(w, flat).x >= 0.0;
+}
+
 // How much of cascade `v`'s waves stand in `depth` metres of water: 1 at the spectrum's own
 // depth and deeper, 0 on land (`tma` in shore.slang).
 float shore_damping(WaterCascadeView v, float depth)
@@ -865,6 +872,8 @@ SeaSlopes sea_slopes(WaterSurface* w, float2 flat, ShorePoint shore)
 SurfaceTargets surface_frag_main(SurfaceOut input)
 {
     WaterSurface* w = surface_push.surface;
+    if (sea_is_dry(w, input.flat))
+        discard;
     SurfaceTargets o = sea_from_above(w, input);
     o.motion = motion_of(w, input.position, o);
     return o;
@@ -877,6 +886,8 @@ SurfaceTargets surface_frag_main(SurfaceOut input)
 SurfaceTargets surface_under_frag_main(SurfaceOut input)
 {
     WaterSurface* w = surface_push.surface;
+    if (sea_is_dry(w, input.flat))
+        discard;
     SurfaceTargets o = sea_from_above(w, input);
     WaterAtCamera at = w[0].at_camera[0];
     if (under_by(at, near_point(w, input.position.xy)) > 0.0)
@@ -2187,6 +2198,9 @@ void at_camera_main(uint k : SV_GroupIndex)
     at.plane = float4(h - w[0].camera.y, slope, 0.0);
     at.absorption = w[0].absorption;
     at.scatter = w[0].scatter;
+    // Over dry land the camera is under no sea, however low it stands.
+    if (sea_is_dry(w, float2(0.0, 0.0)))
+        at.plane = float4(-1.0e6, 0.0, 0.0, 0.0);
     // In a lake or a river (the CPU knows their levels and where they lie), its level water.
     float4 fresh = w[0].fresh;
     if (fresh.y > 0.0)

@@ -1904,6 +1904,7 @@ impl Gallery {
                     mouths: &mouths,
                     stones: &stones,
                     lakes: &lakes,
+                    dry_land: false,
                 }),
             )?;
             tracing::info!(

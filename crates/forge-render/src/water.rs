@@ -1033,6 +1033,10 @@ pub struct WaterShore<'a> {
     pub stones: &'a [WaterStone],
     /// The lakes.
     pub lakes: &'a [WaterLake],
+    /// The sea stops where `floor` stands at or over its level, and a camera there is under no
+    /// sea however low it stands: for a world whose ground doesn't cover all that isn't sea
+    /// (dry basins below sea level). Without it the sea is drawn everywhere, the ground over it.
+    pub dry_land: bool,
 }
 
 /// Mirrors `SurfacePush` and `CopyPush` in `water.slang`.
@@ -1338,7 +1342,8 @@ pub struct WaterSurface {
 struct ShoreFields {
     /// `RG16F`: the floor's height, the coast distance.
     image: GraphImage,
-    /// The first sample's x and z, 1 / spacing, 0.
+    /// The first sample's x and z, 1 / spacing, 1 if the sea stops at the land
+    /// ([`WaterShore::dry_land`]) else 0.
     frame: [f32; 4],
     texels: u32,
     /// The trains' tables one after the other, `bins` entries each (none without trains).
@@ -1828,7 +1833,12 @@ impl WaterSurface {
                     .transpose()?;
                 Ok(ShoreFields {
                     image,
-                    frame: [s.origin[0], s.origin[1], 1.0 / s.spacing, 0.0],
+                    frame: [
+                        s.origin[0],
+                        s.origin[1],
+                        1.0 / s.spacing,
+                        if s.dry_land { 1.0 } else { 0.0 },
+                    ],
                     texels: s.texels,
                     tables,
                     trains,
