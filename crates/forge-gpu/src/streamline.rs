@@ -344,6 +344,19 @@ impl DlssOptions {
     /// Options for `mode` (an `sl::DLSSMode` value) at an output of `output` pixels, the input
     /// colour pre-exposed by `pre_exposure`.
     pub(crate) fn new(mode: u32, output: [u32; 2], pre_exposure: f32) -> Self {
+        // `FORGE_DLSS_PRESET=J` (a trial): that model, J to M, in every mode; else the SDK's own
+        // for each mode (the other letters are removed, deprecated or fall back to the default).
+        static PRESET: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
+        let preset = *PRESET.get_or_init(|| match std::env::var("FORGE_DLSS_PRESET") {
+            Err(_) => 0,
+            Ok(v) => match v.to_ascii_uppercase().as_bytes() {
+                [letter @ b'J'..=b'M'] => u32::from(letter - b'A') + 1,
+                _ => {
+                    tracing::warn!("FORGE_DLSS_PRESET: {v} is not J, K, L or M, ignored");
+                    0
+                }
+            },
+        });
         Self {
             base: BaseStructure::new(DLSS_OPTIONS, 3),
             mode,
@@ -355,12 +368,12 @@ impl DlssOptions {
             color_buffers_hdr: TRUE,
             indicator_invert_axis_x: FALSE,
             indicator_invert_axis_y: FALSE,
-            dlaa_preset: 0,
-            quality_preset: 0,
-            balanced_preset: 0,
-            performance_preset: 0,
-            ultra_performance_preset: 0,
-            ultra_quality_preset: 0,
+            dlaa_preset: preset,
+            quality_preset: preset,
+            balanced_preset: preset,
+            performance_preset: preset,
+            ultra_performance_preset: preset,
+            ultra_quality_preset: preset,
             // The exposure is given as a 1 × 1 texture (the scene is pre-exposed: 1).
             use_auto_exposure: FALSE,
             alpha_upscaling_enabled: FALSE,
