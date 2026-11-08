@@ -530,6 +530,13 @@ Mediterranean ranges walk 4–7 km; swifts fly at 10 m/s and twice that in their
 No patent found on flocking or on fleeing at a distance; the fauna runs region by region, as the
 flora.
 
+## A tier without rays
+
+[`research/raster-tier.md`](research/raster-tier.md): cached, snapped shadow rings for the sun ahead of
+virtual shadow maps, a contact march, a lamp atlas, screen-space reflections over cubes, and relit
+probes with a screen-space near term. Screen space carries the last few metres, never the base term.
+D-108.
+
 ## Still to research
 
 - Tools and editor: creation graphs and the editor itself. The data model and hot reload are

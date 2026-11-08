@@ -12608,6 +12608,107 @@ assumption fails, and it failed exactly where the owner saw it. Found by turning
 2. The area first: the district's present reach, about ±1,100 m. The whole city once step 2 is measured.
 3. The fade: after walking the hard swap, if it shows pops.
 
+## D-108 — A tier without rays: shadow rings on the clusters, a lamp atlas, screen-space reflections, and D-097's relit probes 🟡 (proposed 2026-11-08 on the owner's "start phase 2"; reopens D-008; D-094, D-097; designed without running the engine: every cost here is an estimate)
+
+**Why, and what it reopens.** D-008 kept its raster tier (T0) "only for tools and servers", with ray
+tracing required for players, and never built it. D-094's amendment has since asked for "a rasterised
+mode (no traced light: its lighting precomputed...)" held to the shipped game's raster row, and D-097
+accepted the relit probes it needs. **Proposed: T0 becomes a player's tier,** a preset on any card and
+the only tier on one without ray queries. With rays off today (`FORGE_NO_RAY_QUERY=1`) the sun and the
+lamps cast no shadow, the indirect light is the sky's times GTAO, and nothing but the sky is reflected
+(`reports/2026-11-08-raster/no-rays-today.png`, which stays local).
+
+**The shape.** One renderer, each effect its own switch and the preset their sum. Nothing below casts
+a ray at run time.
+
+| Effect | With rays, today | In T0 |
+|---|---|---|
+| Sun's shadow | a ray a pixel, SIGMA | cached shadow rings |
+| Fine contact | the same rays | a short screen-space march |
+| Lamps' shadows | rays, the penumbra filter | a shadow atlas |
+| Mirrors, glossy | mirror rays | screen-space reflections, then cubes, then the sky |
+| Indirect light | ray-updated probes, a traced bounce | D-097's relit probes, screen-space GI near |
+| Fog's sun, particles | a ray | the rings |
+| Ice, jelly, clear glass rays | rays | their plain looks: no ray, no transmission |
+
+**The order, changed from the brief's, with reasons.** (1) Sun rings first: everything else is judged
+under a sun with shadows. (2) Contact shadows, then the lamp atlas: contact is small and hides most of
+what the rings miss up close. (3) Reflections. (4) Indirect light: **D-097's relight where a world can
+be baked, instead of a new SDF probe updater**, which it already replaces for authored worlds. (5) The
+whole path against the traced image, with cost tables. Each step has its own addendum here before its
+code, its own check against the traced reference, and its own branch.
+
+**Step 1, the sun: cached rings, not virtual shadow maps.**
+- **Rings:** five concentric square shadow maps of 2048 × 2048, `D32_SFLOAT`, four times wider each:
+  16, 64, 256, 1,024 and 4,096 m across, so 8 mm to 2 m a texel. About 80 MB, twice that with the
+  static layer. To be tuned.
+- **Caching:** a ring moves in whole tiles along the light's plane with wrapped addresses, and only
+  the strip it uncovers is drawn. The static casters keep a layer of their own; the movers are drawn
+  over a copy of it. When the sun moves past a small angle, the rings are redrawn one a frame, far
+  ones less often. A streamed cell's arrival (D-106) redraws what it covers, within a budget a frame.
+- **Drawing:** the renderer draws one view per instance today (the impostors' bake keeps a second
+  renderer). The instance and cluster culls gain a frame block per ring, with the LOD cut measured in
+  that ring's texels and a depth-only mesh pipeline into an array layer; the fallback path likewise.
+  A ring culls by the light's frustum, the cones and its own previous pyramid. Cut-out rows go through
+  the cut-outs' raster.
+- **Depth range:** the camera depth's minimum and maximum, from the previous frame's pyramid with no
+  readback, quantised so the rings do not swim.
+- **Filter and bias:** PCF over a disc, its rotation per pixel as `sun_disc_point`'s, the upscaler
+  averaging it; blended across ring borders with the kernel constant in world space; normal offset and
+  a receiver-plane bias at sampling. Contact-hardening edges later.
+- **In the resolve:** the rings fill `s.shadow` where the rays do now, in the entries without rays and
+  behind `r.shadows.mode` (rays, rings) on a card with them, so both can be compared on one machine.
+- **Why not virtual shadow maps first:** the one open measurement (0.39 ms cached, 2.37 ms uncached, an
+  RTX 3070 on the Bistro) is no better than cached rings are expected to be, moving casters and a
+  turning sun cost both, and the page machinery is much the larger build. Their gain is near one
+  texel a pixel in dense streets. To reconsider if a walk shows the rings failing after step 2.
+
+**Step 2, contact and lamps.** A contact march of a few steps in screen space along the sun and the
+strongest lamp, written here. The lamps: an atlas in `D32_SFLOAT` with slots sized by each lamp's
+screen size, static casters cached and movers over a copy, a budget of slots a frame, PCF, and the
+present penumbra filter kept for its denoising where it fits.
+
+**Step 3, reflections.** Screen-space tracing on the depth pyramid after the resolve, with
+FidelityFX's SSSR (MIT) as the starting point and a fade at the screen's edges and on back faces.
+Misses fall to box-projected cubes, then the sky. D-097's item 4, cubes relit from stored normals and
+depth, comes once the static ones prove stale.
+
+**Step 4, indirect light.** **Authored worlds:** D-097's bricks, baked offline by Forge's path
+tracer, relit with no ray; its step 1 still needs a first trace, so its format is the work. **Near
+detail:** a visibility-bitmask screen-space GI at half resolution over the probes, faded by radius so
+it cannot count the same light twice. It carries the last few metres and never the base term: its
+light vanishes when the source leaves the screen. **Procedural worlds, which cannot bake:** the sky,
+the sun and that near term first, measured against the traced image. A distance field built in compute
+from the cluster proxies, feeding sparse probes, only if that measurement asks for it.
+
+**Step 5.** `FORGE_NO_RAY_QUERY=1` complete, against the traced reference at a fixed exposure, per view
+and per time of day, with the tables of cost and error (`tools/gi-compare.sh`'s method).
+
+**Cost (estimates, at DLSS Quality on the RTX 5070 Ti; nothing measured).**
+
+| Group | Traced, now (D-094, the private district) | T0 |
+|---|---|---|
+| Sun and contact | within the 2.2 below | 0.9 (1.7 when the rings all redraw) |
+| Lamps | 4.6 | 0.5 |
+| Indirect | 3.4 + 3.0 (async) | 0.8 |
+| Reflections | within shading | 0.5 |
+| Shading, geometry, DLSS | 3.1 + 1.2 + 0.8 | 5.1 |
+| Fog, sky, particles, AO, post | 2.2 | about 2.0 |
+| **The frame** | **17.1** | **about 10** |
+
+**T0 alone does not reach D-094's raster floor** (6.48 ms). The rest of the frame, as it stands, leaves
+about 3.3 ms to find in shading, post and geometry: D-094's own levers, not this design.
+
+**Cross-vendor.** Depth arrays, compute culls and mesh shaders with their fallback path, no wave size
+assumed. Every pass a graph pass, in the profiler and `docs/PROFILE.md`, no developer keys.
+
+**Each step's check.** Against the traced image of the same view at a fixed exposure (error per tile
+in stops, stills side by side), the moving-camera shimmer of D-107, GPU timings by alternating runs,
+`FORGE_NO_RAY_QUERY=1`, and 0 pixels with the switch off.
+
+**For the owner to decide:** T0 as a player's tier (D-008); this order; rings before virtual maps;
+D-097 in place of the SDF updater for authored worlds; and step 1, its addendum being the section above.
+
 ## D-109 — Clear glass in a streamed world, near the camera only 🟡 (proposed 2026-11-08, waiting for the owner)
 
 **The problem.** In the private district the glass chunks are left out since 2026-11-05: drawn opaque they were near-black mirrors. So a façade's windows read as missing (the owner, 2026-11-08). The
