@@ -815,6 +815,10 @@ pub struct Args {
     /// (plain colours), to compare.
     #[arg(long, value_enum, default_value_t = TextureMode::Full)]
     textures: TextureMode,
+    /// The rock, concrete and brick rows take their relief from their height maps (D-107; `r.pom`
+    /// turns it off at run time): no asset carries one yet.
+    #[arg(long)]
+    pom_sets: bool,
     /// Let the tank's water bend the scene as drawn, aliased, rather than anti-aliased by an FSR
     /// of its own (#156: the A/B of that anti-aliasing).
     #[arg(long)]
@@ -5694,8 +5698,36 @@ impl CityMaterials {
             "city textures"
         );
 
+        // Their relief (D-107, `--pom-sets`), the height maps their normal maps were made from.
+        let mut relief = Vec::new();
+        if POM_SETS.get().copied().unwrap_or(false) {
+            for (set, map, depth) in [
+                (rock, textures::rock_height(11, 512), 0.03),
+                (concrete, textures::concrete_height(12, 512), 0.004),
+                (brick, textures::brick_height(13, 512), 0.018),
+            ] {
+                let texture = textures.add(&map)?;
+                relief.push((
+                    set.0,
+                    forge_core::material::Parallax {
+                        texture,
+                        depth,
+                        top: 1.0,
+                        cavity: 0.5,
+                    },
+                ));
+            }
+        }
         let mut table = MaterialTable::new();
-        let mut add = |name: &str, layer: RenderLayer| table.add(Material::new(name, layer));
+        let mut add = |name: &str, mut layer: RenderLayer| {
+            if !layer.hex_tiling {
+                layer.parallax = relief
+                    .iter()
+                    .find(|(albedo, _)| Some(*albedo) == layer.albedo_texture)
+                    .map(|&(_, parallax)| parallax);
+            }
+            table.add(Material::new(name, layer))
+        };
         // A building's window panes are its section 1 (`forge_geom::city::GLASS`): each facade row
         // is followed by the row its windows take.
         let windows = RenderLayer {
@@ -6838,6 +6870,8 @@ enum TextureMode {
 
 /// Set once from `--textures` before the materials are made.
 static TEXTURES: std::sync::OnceLock<TextureMode> = std::sync::OnceLock::new();
+/// Set once from `--pom-sets` before the materials are made.
+static POM_SETS: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
 
 /// The island's rivers as the water draws them ([`island_ribbons`]), in the sea's frame.
 struct IslandRivers {
@@ -8665,6 +8699,9 @@ pub fn run_making(
     TEXTURES
         .set(args.textures)
         .expect("the textures' mode, set once");
+    POM_SETS
+        .set(args.pom_sets)
+        .expect("the relief's sets, set once");
     // The generated textures kept between starts, with the worlds' products (#274).
     forge_render::textures::keep_in(forge_core::derived::DerivedCache::new(
         forge_core::derived::cache_dir(forge_core::derived::CacheKind::World),
