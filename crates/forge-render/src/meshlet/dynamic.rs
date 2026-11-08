@@ -151,16 +151,40 @@ struct Room {
     pages: Ranges,
     ray_vertices: Ranges,
     ray_triangles: Ranges,
+    /// The root pages the page pool can still pin. A mesh is refused here, in the editor, when its
+    /// roots don't fit: past this point an edit has been promised to whoever built it, and the
+    /// streaming that fails on it leaves the editor's view of the scene wrong.
+    root_room: u32,
+}
+
+/// The share of a streamed scene's page pool its meshes' roots may pin, numerator and
+/// denominator: the rest keeps some room for the pages that refine them. Close to the whole pool:
+/// a large streamed world's roots alone come near it, and refusing them costs more than the
+/// refinement they crowd out.
+const ROOT_POOL_SHARE: (u32, u32) = (31, 32);
+
+/// The root pages a dynamic scene's meshes may still pin in a pool of `pool_pages` already
+/// holding `pinned` pinned pages: up to the share, or what the pool has left for a scene built
+/// past the share.
+pub(super) fn root_room(pool_pages: u32, pinned: usize) -> u32 {
+    let share = u64::from(pool_pages) * u64::from(ROOT_POOL_SHARE.0) / u64::from(ROOT_POOL_SHARE.1);
+    let limit = if pinned as u64 >= share {
+        u64::from(pool_pages)
+    } else {
+        share
+    };
+    limit.saturating_sub(pinned as u64) as u32
 }
 
 /// Where a mesh lies in the tables: (first, count) of its cluster records, its pages, its
-/// rays' vertices and triangles.
+/// rays' vertices and triangles; and the root pages it pins.
 #[derive(Clone, Copy, Debug, Default)]
 struct MeshRanges {
     meshlets: (u32, u32),
     pages: (u32, u32),
     ray_vertices: (u32, u32),
     ray_triangles: (u32, u32),
+    roots: u32,
 }
 
 impl Room {
@@ -175,11 +199,13 @@ impl Room {
         }
     }
 
-    /// A mesh slot and ranges of `sizes` entries of each of [`Room::mesh_table`]'s tables; the
-    /// name of the first table without room otherwise, nothing taken.
+    /// A mesh slot and ranges of `sizes` entries of each of [`Room::mesh_table`]'s tables, and
+    /// room for `roots` pinned root pages; the name of the first table without room otherwise,
+    /// nothing taken.
     fn take_mesh(
         &mut self,
         sizes: [u32; 4],
+        roots: u32,
     ) -> std::result::Result<(u32, MeshRanges), &'static str> {
         const NAMES: [&str; 4] = [
             "cluster records",
@@ -187,6 +213,9 @@ impl Room {
             "rays' vertices",
             "rays' triangles",
         ];
+        if self.root_room < roots {
+            return Err("root pages");
+        }
         let Some(slot) = self.meshes.take(1) else {
             return Err("meshes");
         };
@@ -203,6 +232,7 @@ impl Room {
                 }
             }
         }
+        self.root_room -= roots;
         Ok((
             slot,
             MeshRanges {
@@ -210,11 +240,12 @@ impl Room {
                 pages: (firsts[1], sizes[1]),
                 ray_vertices: (firsts[2], sizes[2]),
                 ray_triangles: (firsts[3], sizes[3]),
+                roots,
             },
         ))
     }
 
-    /// Gives back mesh slot `slot`'s ranges.
+    /// Gives back mesh slot `slot`'s ranges and its root pages' room.
     fn give_mesh(&mut self, slot: u32, r: &MeshRanges) {
         self.meshes.give(slot, 1);
         self.meshlets.give(r.meshlets.0, r.meshlets.1);
@@ -222,6 +253,7 @@ impl Room {
         self.ray_vertices.give(r.ray_vertices.0, r.ray_vertices.1);
         self.ray_triangles
             .give(r.ray_triangles.0, r.ray_triangles.1);
+        self.root_room = self.root_room.saturating_add(r.roots);
     }
 }
 
@@ -334,6 +366,12 @@ fn instance_counts(mesh: &LiveMesh) -> [i64; 4] {
 /// built, where each lies.
 pub(super) struct DynamicSeed<'a> {
     pub capacity: DynamicCapacity,
+    /// The root pages the page pool can still pin ([`root_room`]); `u32::MAX` when the scene's
+    /// pages are all resident.
+    pub root_room: u32,
+    /// The pages pinned at the build, whatever their order: a removed mesh gives back the room
+    /// of those among its own.
+    pub pinned: &'a [u32],
     pub fades: bool,
     pub meshes: &'a [GpuMesh],
     pub mesh_finest: &'a [u32],
@@ -378,7 +416,10 @@ impl SceneDynamic {
             pages: Ranges::new(c.pages, seed.page_count),
             ray_vertices: Ranges::new(c.ray_vertices, ray_used.0),
             ray_triangles: Ranges::new(c.ray_triangles, ray_used.1),
+            root_room: seed.root_room,
         };
+        let mut pinned = seed.pinned.to_vec();
+        pinned.sort_unstable();
         let meshes = seed
             .meshes
             .iter()
@@ -399,6 +440,9 @@ impl SceneDynamic {
                         pages: (first, end - first),
                         ray_vertices: (rays.0, rays.1),
                         ray_triangles: (rays.2, rays.3),
+                        roots: (pinned.partition_point(|&p| p < end)
+                            - pinned.partition_point(|&p| p < first))
+                            as u32,
                     },
                 })
             })
@@ -654,6 +698,10 @@ impl SceneEditor {
     /// Adds `mesh`, its rays cut as `rays` says: its records and its cut go into free ranges of
     /// the scene's tables. Fails when a table has no room for it.
     pub fn add_mesh(&mut self, mesh: &MeshletMesh, rays: MeshRays) -> Result<MeshId> {
+        // Before its rays' cut, the slow part: a world short of room asks again and again.
+        if self.room.lock().expect("the room").root_room < mesh.root_pages {
+            return no_room("root pages");
+        }
         // Its pages as a store of their own, numbered from 0, for its cut.
         let shared = (mesh.page_file.is_none() || !mesh.pages.is_empty())
             .then(|| Arc::new(mesh.pages.clone()));
@@ -684,7 +732,11 @@ impl SceneEditor {
             vertices,
             triangles,
         ];
-        let taken = self.room.lock().expect("the room").take_mesh(sizes);
+        let taken = self
+            .room
+            .lock()
+            .expect("the room")
+            .take_mesh(sizes, mesh.root_pages);
         let (slot, ranges) = match taken {
             Ok(taken) => taken,
             Err(what) => return no_room(what),
@@ -1435,8 +1487,9 @@ impl MeshletScene {
     /// Takes in an edit its editor finished (#220): its pages join the residency now, and the
     /// next frame begun ([`MeshletRenderer::begin_frame`]) publishes it: its copies, its
     /// instances and its top-level structure. Fails, changing nothing, when the pool cannot
-    /// hold the new meshes' roots: the editor's view of the scene is then wrong, and the scene
-    /// should be built anew.
+    /// hold the new meshes' roots, which [`SceneEditor::add_mesh`] prevents by refusing a mesh
+    /// whose roots don't fit: if it ever fails the editor's view of the scene is wrong, and the
+    /// scene should be built anew.
     pub fn apply(&mut self, edit: SceneEdit) -> Result<()> {
         let (Some(dynamic), Some(streamer)) = (self.dynamic.as_mut(), self.streamer.as_mut())
         else {
@@ -1650,18 +1703,34 @@ mod tests {
             pages: Ranges::new(10, 0),
             ray_vertices: Ranges::new(100, 0),
             ray_triangles: Ranges::new(10, 0),
+            root_room: 5,
         };
-        let (slot, ranges) = room.take_mesh([40, 4, 30, 8]).unwrap();
+        let (slot, ranges) = room.take_mesh([40, 4, 30, 8], 3).unwrap();
         assert_eq!((slot, ranges.pages), (0, (0, 4)));
-        // Too many triangles: the slot and the ranges taken before go back.
+        assert_eq!(room.root_room, 2);
+        // Too many triangles: the slot and the ranges taken before go back, no roots are taken.
         assert_eq!(
-            room.take_mesh([40, 4, 30, 8]).unwrap_err(),
+            room.take_mesh([40, 4, 30, 8], 1).unwrap_err(),
             "rays' triangles"
         );
         assert_eq!(room.meshes.free, vec![(1, 3)]);
         assert_eq!(room.pages.free, vec![(4, 6)]);
+        assert_eq!(room.root_room, 2);
+        // Too many roots: refused before anything is taken.
+        assert_eq!(room.take_mesh([1, 1, 0, 0], 3).unwrap_err(), "root pages");
+        assert_eq!(room.meshes.free, vec![(1, 3)]);
         room.give_mesh(slot, &ranges);
         assert_eq!(room.meshlets.free, vec![(0, 100)]);
+        assert_eq!(room.root_room, 5);
+    }
+
+    #[test]
+    fn root_pages_keep_a_share_of_the_pool_for_the_rest() {
+        assert_eq!(root_room(16384, 0), 15872);
+        assert_eq!(root_room(16384, 100), 15772);
+        // Built past the share: what the pool has left, as before the share.
+        assert_eq!(root_room(1000, 980), 20);
+        assert_eq!(root_room(800, 900), 0, "more pinned than the pool");
     }
 
     #[test]

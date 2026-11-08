@@ -12588,6 +12588,10 @@ assumption fails, and it failed exactly where the owner saw it. Found by turning
 - **Measured, private district:** a roof in shade 14 times brighter, the darkest ground patch 7 times; a bar interior changes in 0.06 % of its pixels by over 12 codes; the walk's p50 19.9 ms, p99 26.1 ms.
 - **Left:** the probes still count back faces as being inside something, and the surface cache, SHaRC's and NRC's later bounces and the path reference still read a back as black.
 
+**Amended 2026-11-09: a world whose roots don't fit the page pool.** At twice the ranges the pool's 16,384 pages filled with the live meshes' root pages. The edit failed after its editor had promised it, the streamer went on, and the next edit crashed on a mesh that was never added (at 1,000 m of road, a lost device). `SceneEditor::add_mesh` now refuses a mesh whose roots don't fit, before its slow ray cut, up to 31/32 of the pool (a scene built past that share keeps what the pool has left). A refused piece is left out and asked for again; the world goes on.
+- **Measured** along the walk, 5,000 frames, private district: default ranges, no piece refused, p50 19.8 ms and p99 26.2 (before: 20.0 and 25.5). Twice the ranges: the walk finishes, p50 19.9 and p99 43.6, where it crashed on its first frames.
+- **Left:** a refused piece's stand-in may already have gone, so it shows a hole until room comes back. The first try reserved an eighth of the pool for refinement, and it refused pieces at the default ranges: this world's roots alone come near the whole pool.
+
 **Costs and risks:**
 
 - **Pops:** the swap is a hard cut until step 5, and the owner sees those at once.

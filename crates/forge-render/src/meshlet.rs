@@ -2711,6 +2711,8 @@ impl MeshletSceneBuilder {
         };
         // Also the fallback path's index buffer (8-bit indices, one cluster per draw).
         let pool_usage = usage | vk::BufferUsageFlags::INDEX_BUFFER;
+        let mut root_room = u32::MAX;
+        let mut pinned_roots = Vec::new();
         let (pool, page_table, streamer, page_slot) = match residency {
             Residency::All => {
                 let bytes = self.store.read_pages(0..page_count)?;
@@ -2780,6 +2782,8 @@ impl MeshletSceneBuilder {
                 )?;
                 let store = std::mem::take(&mut self.store);
                 let streamer = PageStreamer::new(device, config, store, &self.meshlets, &pinned)?;
+                root_room = dynamic::root_room(config.pool_pages, pinned.len());
+                pinned_roots.clone_from(&pinned);
                 tracing::info!(
                     pages = page_count,
                     pool_pages = config.pool_pages,
@@ -2846,6 +2850,8 @@ impl MeshletSceneBuilder {
         let dynamic = self.dynamic.map(|capacity| {
             Box::new(dynamic::SceneDynamic::new(dynamic::DynamicSeed {
                 capacity,
+                root_room,
+                pinned: &pinned_roots,
                 fades: self.instance_fades,
                 meshes: &self.meshes,
                 mesh_finest: &self.mesh_finest,
