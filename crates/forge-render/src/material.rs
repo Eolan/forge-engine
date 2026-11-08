@@ -219,7 +219,7 @@ pub fn layer_mask_textures_bc5(
 /// No texture (`TEXTURE_NONE` in `meshlet.slang`).
 pub const TEXTURE_NONE: u32 = u32::MAX;
 
-/// Mirrors `Material` in `meshlet.slang` (240 bytes).
+/// Mirrors `Material` in `meshlet.slang` (256 bytes).
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Pod, Zeroable)]
 pub struct GpuMaterial {

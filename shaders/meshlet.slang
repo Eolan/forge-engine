@@ -4301,7 +4301,7 @@ void lamps_at<let SHADOWS : int>(Frame* f, ProbeField* probes, float3 world, uin
     {
         bool skip_outside = restir != 0xFFFFu;
         LampPlace place = lamp_place(f, probes, world, n, view, channels);
-        relief_main_lamp(f, place, world, n);
+        relief_main_lamp(f, place, world, n, skip_outside);
         if (share != 0xFFFFu)
         {
             for (uint r = 0u; r < 3u; r++)
@@ -4437,7 +4437,9 @@ void lamp_add<let SHADOWS : int>(Frame* f, Lamp lamp, uint i, float scale, float
     float3 dir = d / max(dist, 1e-6);
     float ndl = dot(n, dir);
     float radius = lamp.position_radius.w;
-    scale *= surface_micro_shadow(f, n, shading_n, dir, g_surface_ao);
+    // A flat piece's or a tube's `dir` is to its middle, which may lie behind a surface the rest of
+    // it lights: no terminator of its mapped normal's from that direction.
+    scale *= surface_micro_shadow(f, n, lamp_flat(lamp) || lamp_tube(lamp) ? n : shading_n, dir, g_surface_ao);
     if (SHADOWS != 0 && f[0].tlas != 0)
     {
         // A point of the sphere's disc facing the surface (a flat piece's rectangle,
@@ -5285,6 +5287,10 @@ static const uint OPTION_RELIEF = 2u;     // `r.pom`
 static const uint OPTION_MICRO_BUMP = 4u; // `r.micro.bump`
 static const uint OPTION_AO_MIN = 8u;     // `r.ao.material`: an occlusion map and GTAO by their minimum
 
+// A projected row's relief: none at this weight of the projection it marches, whole at this much more.
+static const float RELIEF_PROJECTION_FROM = 0.6;
+static const float RELIEF_PROJECTION_OVER = 0.3;
+
 // Where a pixel's relief lies, for its lights.
 struct ReliefFrame
 {
@@ -5317,11 +5323,14 @@ float occlusion_joined(Frame* f, float ao, float occlusion)
     return (f[0].options & OPTION_AO_MIN) != 0u ? min(ao, occlusion) : ao * occlusion;
 }
 
-// The occlusion that casts micro-shadows on direct light: a row's `ao`, or none where its relief's
-// own march shadows the same crevices (darkened twice otherwise).
+// The occlusion that casts micro-shadows on direct light: a row's `ao`, let go as far as its relief's
+// own march shadows the same crevices (darkened twice otherwise), so that it comes back as the
+// relief fades out, with no ring where the march stops.
 float micro_occlusion(Frame* f, float ao)
 {
-    return g_relief_on && ((f[0].relief_steps >> 8) & 0xFFu) != 0u ? 1.0 : ao;
+    if (!g_relief_on || ((f[0].relief_steps >> 8) & 0xFFu) == 0u)
+        return ao;
+    return ao + (1.0 - ao) * g_relief_frame.fade;
 }
 
 // The share of a direct light from `light` a surface keeps of its micro-shadows: `ao`, its
@@ -5366,6 +5375,9 @@ Surface relief_surface(Frame* f, Material mat, Surface s)
     float2 gy;
     float2 map_u = float2(1.0, 0.0);
     float2 map_v = float2(0.0, 1.0);
+    // A projected row's relief goes flat where its projections blend: it marches one, and the march
+    // would jump where the axis it faces most changes.
+    float projection = 1.0;
     if (uv)
     {
         // The gradients of the mesh's u and v along the surface: Schüler's cotangent frame
@@ -5389,6 +5401,8 @@ Surface relief_surface(Frame* f, Material mat, Surface s)
         float3 p = (world ? s.world : s.object_position) * scale;
         float3 dpx = s.dpdx * scale;
         float3 dpy = s.dpdy * scale;
+        float3 w = triplanar_weights(N);
+        projection = saturate((max(w.x, max(w.y, w.z)) - RELIEF_PROJECTION_FROM) / RELIEF_PROJECTION_OVER);
         float3 a = abs(N);
         if (a.x >= a.y && a.x >= a.z)
         {
@@ -5420,13 +5434,20 @@ Surface relief_surface(Frame* f, Material mat, Surface s)
     uint levels;
     g_sampled_images[NonUniformResourceIndex(mat.height_texture)].GetDimensions(0, width, height, levels);
     float2 size = float2(float(width), float(height));
-    // The texels under the pixel along its two axes: its minor axis the level the march reads (the
-    // march itself samples along the major one, the view's), their mean what the relief fades by.
-    float tx = length(gx * size);
-    float ty = length(gy * size);
-    float major = log2(max(max(tx, ty), 1e-6));
-    float minor = log2(max(min(tx, ty), 1e-6));
-    float fade = relief_fade(0.5 * (major + minor), f[0].relief_fade);
+    // The texels under the pixel along the two axes of its footprint's ellipse: the minor axis the
+    // level the march reads (the march itself samples along the major one, the view's), their mean
+    // what the relief fades by. By the ellipse, not the screen's axes: a footprint lying across them
+    // read levels too coarse.
+    float2 ax = gx * size;
+    float2 ay = gy * size;
+    float tx = length(ax);
+    float ty = length(ay);
+    float sum = dot(ax, ax) + dot(ay, ay);
+    float area = abs(ax.x * ay.y - ax.y * ay.x);
+    float major2 = 0.5 * (sum + sqrt(max(sum * sum - 4.0 * area * area, 0.0)));
+    float major = 0.5 * log2(max(major2, 1e-12));
+    float minor = 0.5 * log2(max(area * area / max(major2, 1e-12), 1e-12));
+    float fade = relief_fade(0.5 * (major + minor), f[0].relief_fade) * projection;
     float depth = mat.parallax_depth * f[0].relief_scale * fade;
     if (depth <= 0.0)
         return s;
@@ -5495,7 +5516,7 @@ float relief_share(Frame* f, float3 to_light, float tan_cone)
 
 // The strongest of a place's lamps at this pixel takes its relief's shadow (`relief_lamp_scale`): a
 // march per lamp, for the one that shows. Nothing without a marched relief.
-void relief_main_lamp(Frame* f, LampPlace place, float3 world, float3 n)
+void relief_main_lamp(Frame* f, LampPlace place, float3 world, float3 n, bool skip_outside)
 {
     g_relief_lamp = 0xFFFFFFFFu;
     if (!g_relief_on || ((f[0].relief_steps >> 8) & 0xFFu) == 0u)
@@ -5507,7 +5528,7 @@ void relief_main_lamp(Frame* f, LampPlace place, float3 world, float3 n)
         for (uint e = place.runs.run[r].x; e < place.runs.run[r].y; e++)
         {
             uint i = lamp_at(f, place.runs, e);
-            if (!lamp_counted(f, place.runs, r, i))
+            if (!lamp_counted(f, place.runs, r, i) || lamp_by_restir(f, i, skip_outside))
                 continue;
             float w = lamp_weight_in(f[0].lamps[i], world, n, place.region, place.other, place.channels);
             if (w > best_weight)
@@ -5925,7 +5946,7 @@ LightInputs multilayer_light(Frame* f, Material mat, Surface s)
         li.variance = lerp(li.variance, l.variance, w);
         li.bumps = lerp(li.bumps, l.bumps, w);
         li.laid = lerp(li.laid, l.laid, w);
-        li.material_ao = lerp(li.material_ao, l.material_ao, w);
+        li.material_ao += (l.material_ao - li.material_ao) * w;
     }
     return li;
 }
@@ -10490,6 +10511,7 @@ void need_row(uint* need, Material mat, float2 dx, float2 dy)
     need_level(need, mat.metal_rough_texture, gx, gy);
     need_level(need, mat.occlusion_texture, gx, gy);
     need_level(need, mat.emissive_texture, gx, gy);
+    need_level(need, mat.height_texture, gx, gy);
 }
 
 [shader("compute")]
@@ -10513,6 +10535,7 @@ void texture_need_main(uint3 id : SV_DispatchThreadID)
         float span = max(length(s.dpdx), length(s.dpdy)) * mat.inv_texture_scale;
         need_level(need, mat.albedo_texture, float2(span, 0.0), float2(0.0, span));
         need_level(need, mat.normal_texture, float2(span, 0.0), float2(0.0, span));
+        need_level(need, mat.height_texture, float2(span, 0.0), float2(0.0, span));
         return;
     }
     if ((mat.flags & MATERIAL_FLAG_ROOM_ATLAS) != 0u)
