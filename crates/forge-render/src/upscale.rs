@@ -23,6 +23,15 @@ use crate::taa::{HDR_FORMAT, TaaFrame};
 /// The exposure DLSS sees the scene at: pre-exposure is handed over relative to it.
 const REFERENCE_EV100: f32 = 15.0;
 
+/// The pre-exposure handed to DLSS once the exposure has settled, stops relative to
+/// [`REFERENCE_EV100`]'s, at least and at most. Never above 0: a scene exposed under EV 15 reaches
+/// DLSS as it is shown. At the old 4 stops, an indoor scene came to it 16 times dimmer than shown,
+/// and DLSS kept what a near object had just uncovered: echoes of a bottle's neck, a frame apart,
+/// stayed on the dark room behind it as the camera passed (2026-11-08). The price: a settled scene
+/// under EV 15 starts at 0, so an exposure falling more than 6 stops runs out of [`FOLLOW_RANGE`]
+/// (from 4 stops it had 10), and DLSS does not see the rest of the fall.
+const STEADY_STOPS: (f32, f32) = (-4.0, 0.0);
+
 /// The pre-exposure handed to DLSS while it follows an adapting exposure, stops relative to
 /// [`REFERENCE_EV100`]'s, at least and at most: the colour DLSS divides by it stays where fp16
 /// keeps it (#164 posterized the night's darks at 17 stops; at 8 their steps are under 2 %, and
@@ -70,17 +79,17 @@ pub struct DlssUpscaler {
 }
 
 /// The pre-exposure for an exposure `ratio` to [`REFERENCE_EV100`]'s, given how far it still
-/// `follow`s the adaptation from the steady value (the ratio within 16, as #164 set it).
+/// `follow`s the adaptation from the steady value (the ratio within [`STEADY_STOPS`]).
 /// Handed the steady value alone, DLSS never saw the exposure change while it was clamped (a
-/// night's street and the lit room behind a window both lie past 4 stops): its history no
+/// night's street and the lit room behind a window both lie past the clamp): its history no
 /// longer matched the frame as the eye adapted, and it showed its jitter pattern as a fine
 /// cross-hatch over the walls for a second or two (the owner, 2026-10-24: "a pattern stays
 /// visible after going through the window").
 fn pre_exposure(ratio: f32, follow: f32) -> f32 {
     if follow == 0.0 {
-        ratio.clamp(1.0 / 16.0, 16.0)
+        ratio.clamp(2f32.powf(STEADY_STOPS.0), 2f32.powf(STEADY_STOPS.1))
     } else {
-        2f32.powf(ratio.log2().clamp(-4.0, 4.0) + follow)
+        2f32.powf(ratio.log2().clamp(STEADY_STOPS.0, STEADY_STOPS.1) + follow)
     }
 }
 
@@ -92,7 +101,10 @@ fn next_follow(follow: f32, last: f32, stops: f32, ease: f32) -> f32 {
     if (stops - last).abs() > CUT_STOPS {
         return 0.0;
     }
-    let (before, after) = (last.clamp(-4.0, 4.0), stops.clamp(-4.0, 4.0));
+    let (before, after) = (
+        last.clamp(STEADY_STOPS.0, STEADY_STOPS.1),
+        stops.clamp(STEADY_STOPS.0, STEADY_STOPS.1),
+    );
     // What the clamp hid of the change: the exposure's move less the steady value's.
     let hidden = (stops - last) - (after - before);
     let f = (follow + hidden).clamp(FOLLOW_RANGE.0 - after, FOLLOW_RANGE.1 - after);
@@ -218,10 +230,10 @@ impl DlssUpscaler {
             // Relative to a fixed EV100: DLSS divides the colour by it on the way in and
             // multiplies it back on the way out (checked: the output keeps the input's level), so
             // its history stays in one space while the exposure adapts, as the TAA's rescale does.
-            // Within 4 stops of it only (#164): a night under the Moon is 17 stops from EV 15,
-            // and the colour divided by 2^17 fell under fp16's normal range inside DLSS, which
-            // posterized it and smeared the stars. Past that, the adaptation's changes are
-            // followed for a while (`pre_exposure`), then eased back.
+            // Settled, within `STEADY_STOPS` of it only (#164): a night under the Moon is 17 stops
+            // from EV 15, and the colour divided by 2^17 fell under fp16's normal range inside
+            // DLSS, which posterized it and smeared the stars. Past that, the adaptation's
+            // changes are followed for a while (`pre_exposure`), then eased back.
             pre,
         )?;
         let output = graph.import(&this.output);
@@ -294,15 +306,15 @@ fn create_output(device: &Arc<Device>, extent: vk::Extent2D) -> Result<GraphImag
 mod tests {
     use super::*;
 
-    /// Through a window at night the exposure falls 6 stops while both ends lie past the
+    /// Through a window at night the exposure falls 5.5 stops while both ends lie past the
     /// steady value's clamp: the pre-exposure follows the change frame by frame, then eases
     /// back to the steady value.
     #[test]
     fn the_pre_exposure_follows_an_adaptation_past_the_clamp_then_eases_back() {
         let (mut follow, mut last) = (0.0, 16.9_f32);
         let mut pre_last = pre_exposure(2f32.powf(last), follow);
-        assert_eq!(pre_last, 16.0);
-        for _ in 0..100 {
+        assert_eq!(pre_last, 1.0);
+        for _ in 0..90 {
             let stops = last - 0.061;
             follow = next_follow(follow, last, stops, 0.0);
             let pre = pre_exposure(2f32.powf(stops), follow);
@@ -313,7 +325,18 @@ mod tests {
             follow = next_follow(follow, last, last, EASE_STOPS);
         }
         assert_eq!(follow, 0.0);
-        assert_eq!(pre_exposure(2f32.powf(last), follow), 16.0);
+        assert_eq!(pre_exposure(2f32.powf(last), follow), 1.0);
+    }
+
+    /// Settled, a scene exposed under the reference reaches DLSS as it is shown, not dimmer (the
+    /// echoes behind a bottle in a dark room); one exposed above it stays within the clamp.
+    #[test]
+    fn a_settled_scene_is_never_handed_over_dimmer_than_it_is_shown() {
+        for stops in [0.0, 0.5, 3.0, 12.0, 16.9_f32] {
+            assert_eq!(pre_exposure(2f32.powf(stops), 0.0), 1.0);
+        }
+        assert_eq!(pre_exposure(0.25, 0.0), 0.25);
+        assert_eq!(pre_exposure(2f32.powf(-9.0), 0.0), 1.0 / 16.0);
     }
 
     /// The first frames' jump to the metered exposure is no adaptation; and within the clamp
@@ -321,9 +344,9 @@ mod tests {
     #[test]
     fn a_jump_or_a_change_within_the_clamp_leaves_the_steady_value() {
         assert_eq!(next_follow(0.0, 1.0, 16.9, EASE_STOPS), 0.0);
-        assert_eq!(next_follow(0.0, 1.0, 1.5, EASE_STOPS), 0.0);
+        assert_eq!(next_follow(0.0, -1.0, -1.5, EASE_STOPS), 0.0);
         // And the pre-exposure never leaves where fp16 keeps the colour.
-        let f = next_follow(0.0, 4.0, 5.9, 0.0);
-        assert!(4.0 + f <= FOLLOW_RANGE.1);
+        assert_eq!(next_follow(7.9, 4.0, 5.9, 0.0), FOLLOW_RANGE.1);
+        assert_eq!(next_follow(-5.9, 5.9, 4.0, 0.0), FOLLOW_RANGE.0);
     }
 }

@@ -1067,7 +1067,8 @@ Ultra Performance at run time (`--upscaler` at start), and the profiler zones ar
 
 DLSS reads the same inputs as the TAA resolve: the jittered pre-exposed HDR colour, the
 reversed-Z depth, the motion vectors (UV offsets, unjittered) and a 1 × 1 exposure of 1.
-Pre-exposure is passed relative to EV100 15; DLSS's output kept the input's level. The
+Pre-exposure is passed relative to EV100 15 (settled, at most 1 since D-070's amendment of 2026-11-08);
+DLSS's output kept the input's level. The
 scene is drawn at DLSS's input size, with a jitter sequence of 8 × (output / render)² phases
 and **the LOD error measured in output pixels**, so the geometry stays as detailed as the
 screen (in render pixels the Quality and Performance modes drew visibly faceted rocks).
@@ -3239,11 +3240,25 @@ on the village's water when strafing, gone with `r.reflections.rays 0`):
 - **Tried and left out:** a reactive mask from the reflection's share of the pixel. FSR 3.1 reads
   it; DLSS (its default preset) ignores the bias hint, the frames to the pixel the same, as with
   the spray's and the particles' masks (the audit's step 1).
+- **A curved mirror (2026-11-08, the owner: "a trail from the bottles when the camera is
+  moving").** The virtual point stood as far behind the surface as the ray had gone, which only
+  a flat mirror does. A convex one images what it reflects close behind itself: by the mirror
+  equation 1/image = 1/distance + 2 × curvature, the sky at half the radius. In the private
+  district a bottle (a smooth metal row a metre from the camera, passing at about 35 pixels a
+  frame) took the motion of rooms metres away, and the upscalers tore it and left it behind.
+  `mirror_image_distance` now gives that distance, the curvature being the largest turn of the
+  normal along the triangle's edges (`triangle_curvature`), for the motion vector and the
+  history alike. A triangle whose corners' normals agree (curvature 0) keeps the old
+  arithmetic, so still water and panes do not move: with the anti-aliasing off, the private
+  district's frame changed only on curved shiny objects. A concave mirror is taken as a convex
+  one of the same curvature, an approximation. The other half of that trail was DLSS's
+  pre-exposure (D-070's amendment of the same day).
 - **Patents** (`docs/research/glass-credibility.md`, "Patents"): Autodesk's US 9,355,475 (to
   ~2035) claims a surface motion vector, a second one for the reflected object and a projection
   onto the surface's previous position; this moves one virtual point by the camera's motion over
   a still surface, leaving movers out. NVIDIA's US 11,836,844 is about refractive interfaces.
-  The owner chose to build it after reading the summary.
+  The owner chose to build it after reading the summary. The curved case only shortens that one
+  point's distance: the reading stands.
 
 ## D-051 — Jelly: a body seen through by rays ✅ (2026-10-08, the owner's ask on #180)
 
@@ -6972,6 +6987,30 @@ sharpening, and the lamp filter's flicker under TAA. The last two run-to-run fla
   - the image looks the same as the 5070 Ti's. It is 5.1 % of pixels and ꟻLIP 0.0149 from it,
     on the windows' edges, the rocks and the clouds' rims: texture filtering and ray-traced
     light, which differ between vendors, not FSR's passes (an AA-off pair would confirm it).
+
+**Amended 2026-11-08 (the owner: "a trail from the bottles when the camera is moving"):** once
+the exposure has settled, DLSS's pre-exposure is at most 1 (`STEADY_STOPS`, −4 to 0 stops from
+EV 15; the ceiling was +4).
+- **Why:** the private district's bar is exposed at about EV 2.8, past that ceiling, so DLSS got
+  the frame 16 times dimmer than it is shown. It then kept what a near object had just
+  uncovered: echoes of a bottle's neck, one a frame behind the other, on the dark room behind
+  it. At 1 they are gone; FSR shows none either once the bottle's motion is right. The bottle's
+  own tearing was D-050's virtual point (that entry's amendment of the same day).
+- **Still camera, DLSS Quality, old against new** (pixels changing by more than 30 codes between
+  two frames of 3.69 M): the bar 87 → 54, a street 7,054 → 7,027; by more than 2 codes, 14.62 →
+  14.68 % and 3.23 → 3.24 %. No new flicker.
+- **What stays, and its limits:** an adapting exposure is still followed, then eased back at
+  0.004 stops a frame, and a scene under EV 15 now relies on that for every change (before,
+  under EV 11).
+  - **A fall of more than 6 stops** runs out of `FOLLOW_RANGE`, which starts at 0 now and had 10
+    stops of room from the old 4: from a dark room straight into full day, DLSS does not see the
+    rest of the fall, the fault of 2026-10-24 (a cross-hatch for a second or two). The private
+    district's exposures span 6.4 stops, so 0.4 of it there.
+  - **Coming into the dark**, the pre-exposure rises above 1 with the adaptation (as far as 2⁸)
+    and eases back: 1,500 frames for 6 stops, 25 s at 60 fps. Until it is back near 1, the
+    echoes can show again, as they always did there.
+- **Images:** every DLSS capture exposed under EV 15 moves a little, since DLSS sees a brighter
+  input.
 
 **Next:** FSR 4, once there is an RDNA 4 card to test on and its SDK has a Vulkan path.
 

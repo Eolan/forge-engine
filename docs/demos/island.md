@@ -3567,6 +3567,6 @@ night was posterized into flat bands, with the stars smeared into dashes. DLSS t
 pre-exposure, which `DlssUpscaler` handed over relative to EV 15 so that its history stays in one
 space while the exposure adapts. DLSS divides the colour by it on the way in: under the Moon (EV
 −2) that is 2¹⁷, which put the colour under fp16's normal range. The factor is now held within 4
-stops of EV 15; past that, DLSS's history follows the slow adaptation as it is. The captures run
+stops of EV 15 (settled, at most 1 since D-070's amendment of 2026-11-08); past that, DLSS's history follows the slow adaptation as it is. The captures run
 TAA, which rescales its own history, so none of them showed it. `--dlaa` reproduces the
 interactive path in a script, and `--step-hz N` (with `--fixed-step`) a fast frame rate.

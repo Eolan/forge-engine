@@ -1019,7 +1019,9 @@ as the default. What the port taught:
   the input size: not the 0.33 ms ballad, but the million-instance city at 1440p.
 - **Pre-exposure.** Passing the frame's pre-exposure (relative to a fixed EV100) kept the
   output at the input's level. DLSS undoes it on the way out, so its history can follow the
-  automatic exposure the way the TAA's rescaled history does.
+  automatic exposure the way the TAA's rescaled history does. Settled, it now stays at 1 or
+  under (D-070's amendment, 2026-11-08): handed a dark room 16 times dimmer than shown, DLSS
+  kept what a near object had just uncovered.
 
 ## Implementation notes from Forge: sky light and GTAO (2026-09-25, issues #47, #48)
 
