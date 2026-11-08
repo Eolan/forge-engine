@@ -12603,3 +12603,26 @@ assumption fails, and it failed exactly where the owner saw it. Found by turning
 1. This design, starting with step 1.
 2. The area first: the district's present reach, about ±1,100 m. The whole city once step 2 is measured.
 3. The fade: after walking the hard swap, if it shows pops.
+
+## D-109 — Clear glass in a streamed world, near the camera only 🟡 (proposed 2026-11-08, waiting for the owner)
+
+**The problem.** In the private district the glass chunks are left out since 2026-11-05: drawn opaque they were near-black mirrors. So a façade's windows read as missing (the owner, 2026-11-08). The
+engine's clear panes (D-065, part 4) were tried once on the small district: 2.56 million triangles, 360 MB, `glass/draw` 0.49 ms, and a window onto a lit hall went white, its mirror term taking the sky
+where the hall's walls stand.
+
+**Options.**
+
+| | Near | Far | Memory | Risk |
+|---|---|---|---|---|
+| A. Clear panes near the camera, an opaque tinted layer beyond | real panes within a radius | the window drawn as a dark, smooth surface lit by the probes | a capped pane table, about 15 MB at 100,000 triangles | the swap between the two shows |
+| B. The opaque layer everywhere | no see-through | same | none | shop fronts and doors you stand at are not clear |
+| C. Leave the glass out | holes | holes | none | what the owner reported |
+
+**Recommended: A.** Glass matters at the distance you can see through it; beyond that a window is a dark reflective rectangle, which the source's own far stand-ins already are.
+
+- **Panes by area:** the pane table holds the glass chunks of pieces within 60 m of the camera, refreshed as `RangedSet`'s pieces come and go, capped in triangles (the nearest first). The other glass chunks draw as the opaque layer.
+- **The swap:** the per-pixel ring of D-106, at the pane radius.
+- **Reflections indoors:** a pane inside a room takes the room's probes for its mirror term, not the sky (the white window of the trial): the rooms are known (D-078).
+- **Cost to measure before keeping it:** `glass/draw` under 0.3 ms on the walk; memory under 50 MB.
+
+**Not decided:** the radius, and whether the far layer takes the fake rooms of `window` materials where a chunk has an atlas.
