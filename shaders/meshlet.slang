@@ -8723,6 +8723,11 @@ void reflections_main(uint3 group : SV_GroupID, uint3 thread : SV_GroupThreadID)
     float4* sky = resolve_push.sky;
     float distance;
     bool mover;
+    float curvature = triangle_curvature(
+        mul(frame, v0.position), mul(frame, v1.position), mul(frame, v2.position),
+        normalize(mul(normal_frame, decode_normal(v0.normal))),
+        normalize(mul(normal_frame, decode_normal(v1.normal))),
+        normalize(mul(normal_frame, decode_normal(v2.normal))));
     // The pixel's cone (`ladder_size`'s pixels per radian) from the camera to the surface and on,
     // and the row's lobe, its GGX width (roughness squared) each side: a glossy floor's hits read
     // as finely as a mirror's would bring back #306's hatch of streaks.
@@ -8733,7 +8738,8 @@ void reflections_main(uint3 group : SV_GroupID, uint3 thread : SV_GroupThreadID)
     ReflectionHistory* history = resolve_push.reflection_history;
     // The pixel's motion vector moved towards its reflection's virtual point (`r.reflections.motion`,
     // the motion vectors' index in the ambient occlusion's slot, which this pass never reads): on
-    // the view ray as far as the surface plus the ray's length, the sky's at infinity on a miss, by
+    // the view ray as far as the surface plus the reflection's image distance
+    // (`mirror_image_distance`: a flat mirror's is the ray's length, or infinity on a miss), by
     // the reflection's weight. DLSS followed the water and dragged its reflections at the
     // surface's speed: the trees' and the clouds' reflections trailed as the camera moved sideways
     // (the owner, 2026-10-28). A mover's reflection keeps the surface's, and so does a reflection
@@ -8743,7 +8749,8 @@ void reflections_main(uint3 group : SV_GroupID, uint3 thread : SV_GroupThreadID)
         && (record.x & ~INSTANCE_HIDDEN_BIT) - history[0].first_mover >= history[0].mover_count)
     {
         float3 surface = mul(frame, object_position) + relative;
-        float stretch = hit.w > 0.0 ? 1.0 + distance / max(length(surface), 1e-3) : 1e5;
+        float image = mirror_image_distance(hit.w > 0.0 ? distance : -1.0, curvature);
+        float stretch = image >= 0.0 ? 1.0 + image / max(length(surface), 1e-3) : 1e5;
         float4 virtual_point = mul(f[0].view_proj, float4(surface * stretch, 1.0));
         float2 uv = (float2(pixel) + 0.5 - history[0].jitter) / size;
         float w;
@@ -8765,7 +8772,7 @@ void reflections_main(uint3 group : SV_GroupID, uint3 thread : SV_GroupThreadID)
     float3 mirror = sky_view_luminance(uint(up_table.w + 0.5), up_table.xyz, sky[SH_COEFFICIENTS + 1].xyz, request.xyz) * 3.14159265;
     float3 reflected = hit.w > 0.0 ? hit.xyz : mirror + seen_clouds(f, sky, request.xyz, size);
     if (history != nullptr)
-        reflected = steadied_reflection(history, f, pixel, size, mul(frame, object_position) + relative, record.x, reflected, hit.w > 0.0 ? distance : -1.0, mover);
+        reflected = steadied_reflection(history, f, pixel, size, mul(frame, object_position) + relative, record.x, reflected, mirror_image_distance(hit.w > 0.0 ? distance : -1.0, curvature), mover);
     // At the request's weight and colour (`g_reflection_tint`, the image's lower half).
     float3 tint = g_storage_images_rgba16f[NonUniformResourceIndex(resolve_push.request_image)][pixel + uint2(0u, resolve_push.height)].rgb;
     float3 added = request.w * tint * reflected;
@@ -8773,6 +8780,31 @@ void reflections_main(uint3 group : SV_GroupID, uint3 thread : SV_GroupThreadID)
         return;
     RWTexture2D<float4> color = g_storage_images_rgba16f[NonUniformResourceIndex(resolve_push.color_image)];
     color[pixel] = float4(color[pixel].rgb + added * (f[0].sun_illuminance * f[0].exposure / 3.14159265), 1.0);
+}
+
+// How sharply a triangle's surface curves, per metre: the largest turn of the normal along its
+// edges, from its corners' places and unit normals. 0 for a flat one.
+float triangle_curvature(float3 p0, float3 p1, float3 p2, float3 n0, float3 n1, float3 n2)
+{
+    float a = length(n0 - n1) / max(length(p0 - p1), 1e-4);
+    float b = length(n1 - n2) / max(length(p1 - p2), 1e-4);
+    float c = length(n2 - n0) / max(length(p2 - p0), 1e-4);
+    return max(a, max(b, c));
+}
+
+// How far behind a mirror stands the image of what it reflects from `distance` away (negative: the
+// sky). A flat mirror's stands as far behind it as the point is in front. A curved one's stands
+// nearer, by the mirror equation 1/image = 1/distance + 2 curvature, and the sky's at half the
+// radius (a concave mirror is taken as a convex one, an approximation: a sharply curved one's
+// image keeps to the surface, whose motion is the safe one; a gently dished one's stands nearer
+// than it really does). The image of a room in a bottle lies a centimetre or two behind the
+// glass: following a flat mirror's point instead, the bottle's own motion vectors were replaced by
+// those of something metres away, and the upscalers smeared it as the camera passed (2026-11-08).
+float mirror_image_distance(float distance, float curvature)
+{
+    if (curvature <= 0.0)
+        return distance;
+    return distance >= 0.0 ? distance / (1.0 + 2.0 * curvature * distance) : 0.5 / curvature;
 }
 
 // A pixel of a glass tile that asks no ray this frame (a mullion, the sky beside the pane; with
@@ -8815,7 +8847,8 @@ float2 previous_uv_of(ReflectionHistory* h, float3 at, out float w)
 // somewhere else in the reflected scene with every jitter of TAA, and TAA, which follows the
 // glass and not its reflection, cannot settle it. The history follows the reflection: a flat mirror shows what the ray met as a *virtual*
 // point behind it, on the pixel's view ray, as far from the eye as the surface plus the ray's
-// length (`distance`; negative on a miss: the sky, at infinity). That point is reprojected with
+// length (`distance`: a curved mirror's nearer image distance, `mirror_image_distance`; negative
+// on a flat mirror's miss: the sky, at infinity). That point is reprojected with
 // the camera's motion, as TAA reprojects a surface. `position` is the surface's,
 // camera-relative. A history texel counts while the virtual point it showed would have moved
 // to within a pixel of this one's. A mover's reflection (`mover`), and a reflection in a

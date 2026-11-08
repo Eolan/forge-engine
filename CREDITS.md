@@ -249,7 +249,9 @@ files (`docs/research/`) and the decisions (`docs/DECISIONS.md`).
   a flat mirror's reflection reprojected through its *virtual* point, the hit seen behind the
   mirror on the view ray. Forge writes it from the description in NVIDIA's NRD README ("Primary
   Surface Replacement", v4.17.3) and the idea of AMD's FidelityFX reflection denoiser
-  (`FFX_DNSR_Reflections_GetHitPositionReprojection`, MIT); neither's code is used.
+  (`FFX_DNSR_Reflections_GetHitPositionReprojection`, MIT); neither's code is used. On a curved
+  mirror the point's distance follows the mirror equation (`mirror_image_distance`), a textbook
+  result that NRD's RELAX also applies to its specular; written from the equation.
 - **Translucent ice.** Colin Barré-Brisebois, Marc Bouchard, "Approximating Translucency for a
   Fast, Cheap and Convincing Subsurface Scattering Look", GDC 2011: thickness-driven
   translucency, here measured by rays.
