@@ -1567,6 +1567,9 @@ impl Gallery {
         let mut sand = None;
         let (scene, placed) = if let Some(scenario) = scenario {
             let (scene, built) = scenario.build(ctx, &args, cooked)?;
+            if scene.streams_textures() {
+                renderer.enable_texture_feedback(&ctx.device, &ctx.shaders)?;
+            }
             log_rays(&scene);
             running = Some(built);
             (scene, Vec::new())

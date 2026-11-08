@@ -10,13 +10,27 @@
 //!   the largest gap first, each as far as the pool allows. One plan uploads at most the bytes
 //!   it is given: a texture is remade whole ([`crate::material::TextureSet::remake`]), so a change
 //!   costs its new levels' bytes.
-//! - **Eviction by last use:** when a texture can't grow within the pool, textures wanted
-//!   strictly longer ago drop to their tails, the oldest first, if that makes room; textures
-//!   wanted in the same frame never evict each other (no thrashing).
+//! - **Eviction by last use:** when a texture can't grow within the pool, textures wanted at
+//!   least [`EVICT_MARGIN_SECONDS`] longer ago drop to their tails, the oldest first, if that
+//!   makes room. The feedback looks at one pixel in 64 a frame, so two textures on screen together
+//!   are rarely wanted in the same frame: without the margin they would evict each other in turn.
 //!
 //! The levels here count in the texture's full chain: level 0 is its finest. The feedback counts
 //! from the image's current top, finer than it as negative levels, so a remade texture's wanted
 //! level is the one recorded plus its top ([`LevelPlanner::wanted_in_image`]).
+
+use std::collections::VecDeque;
+use std::sync::Arc;
+use std::sync::mpsc::{Receiver, Sender, TryRecvError, channel};
+use std::thread::JoinHandle;
+use std::time::Instant;
+
+use forge_core::material::TextureId;
+use forge_gpu::{Device, FRAMES_IN_FLIGHT, GpuError, Image, Result};
+
+use crate::dds::CompressedTexture;
+use crate::material::{RetiredTexture, TextureSet};
+use crate::meshlet::{MeshletScene, NEED_BIAS, NO_WANT};
 
 /// The texels on a side under which a texture's levels stay resident (D-105's second point; 64
 /// to be measured).
@@ -24,6 +38,10 @@ pub const TAIL_TEXELS: u32 = 128;
 
 /// The window over which a texture's wanted levels count, seconds (#385's measure).
 pub const WINDOW_SECONDS: f64 = 2.0;
+
+/// How much longer ago a texture must have been wanted than the one growing, to give its levels
+/// up to it, seconds.
+pub const EVICT_MARGIN_SECONDS: f64 = 0.5;
 
 /// A texture the planner streams: its levels' bytes and sides.
 #[derive(Clone, Debug)]
@@ -69,16 +87,23 @@ struct Tracked {
     finest: Option<(usize, f64)>,
     /// The level wanted last, and when.
     latest: Option<(usize, f64)>,
+    /// It keeps the levels it has grown to ([`LevelPlanner::keep_levels`]).
+    keeps: bool,
 }
 
 impl Tracked {
     /// Its target at `now`: the finest level wanted within the window, else the level wanted
-    /// last if within it, else its tail.
+    /// last if within it, else its tail; never coarser than its top if it keeps its levels.
     fn target(&self, now: f64, window: f64) -> usize {
         let within = |w: Option<(usize, f64)>| w.filter(|&(_, at)| now - at <= window);
-        within(self.finest)
+        let target = within(self.finest)
             .or(within(self.latest))
-            .map_or(self.tail, |(level, _)| level.min(self.tail))
+            .map_or(self.tail, |(level, _)| level.min(self.tail));
+        if self.keeps {
+            target.min(self.top)
+        } else {
+            target
+        }
     }
 
     fn last_use(&self) -> f64 {
@@ -93,6 +118,8 @@ pub struct LevelPlanner {
     textures: Vec<Tracked>,
     /// The bytes resident over every texture.
     held: u64,
+    /// The most textures one plan changes.
+    most_changes: usize,
 }
 
 impl LevelPlanner {
@@ -104,7 +131,13 @@ impl LevelPlanner {
             window,
             textures: Vec::new(),
             held: 0,
+            most_changes: usize::MAX,
         }
+    }
+
+    /// At most `most` textures change in one plan, besides the bytes it is given.
+    pub fn set_most_changes(&mut self, most: usize) {
+        self.most_changes = most;
     }
 
     /// Adds `texture`, resident from its tail: its number.
@@ -117,8 +150,17 @@ impl LevelPlanner {
             top: tail,
             finest: None,
             latest: None,
+            keeps: false,
         });
         self.textures.len() - 1
+    }
+
+    /// Texture `texture` only ever grows: it keeps the levels it has grown to, and no other's
+    /// growth takes them.
+    pub fn keep_levels(&mut self, texture: usize) {
+        if let Some(t) = self.textures.get_mut(texture) {
+            t.keeps = true;
+        }
     }
 
     /// Texture `texture`'s samples wanted its full chain's `level` at `now` (seconds). A want as
@@ -192,6 +234,13 @@ impl LevelPlanner {
         change
     }
 
+    /// Puts `changes` back, the last first: a plan whose images could not be made.
+    pub fn undo(&mut self, changes: &[LevelChange]) {
+        for change in changes.iter().rev() {
+            self.set_top(change.texture, change.from);
+        }
+    }
+
     /// The changes at `now`, at most `upload` bytes of new levels between them (at least one
     /// change when any is due), applied to the planner's tops: the caller remakes each texture
     /// from its `to` down. Down to the targets first; then up, the largest gap first, each as far
@@ -203,9 +252,10 @@ impl LevelPlanner {
         let mut changes: Vec<LevelChange> = Vec::new();
         let mut changed = vec![false; n];
         let mut spent = 0u64;
-        // Within the bytes this plan may upload: the first change always is.
+        // Within the bytes and the changes this plan may make: the first change always is.
+        let most_changes = self.most_changes;
         let fits = |spent: u64, cost: u64, changes: &[LevelChange]| {
-            changes.is_empty() || spent + cost <= upload
+            changes.is_empty() || (spent + cost <= upload && changes.len() < most_changes)
         };
         // Down to the targets: textures no longer wanted as finely.
         for (i, done) in changed.iter_mut().enumerate() {
@@ -238,7 +288,10 @@ impl LevelPlanner {
         });
         // The textures that may give their levels back, the least recently wanted first.
         let mut victims: Vec<usize> = (0..n)
-            .filter(|&v| self.textures[v].top < self.textures[v].tail && !changed[v])
+            .filter(|&v| {
+                let t = &self.textures[v];
+                t.top < t.tail && !t.keeps && !changed[v]
+            })
             .collect();
         victims.sort_by(|&a, &b| {
             self.textures[a]
@@ -276,7 +329,7 @@ impl LevelPlanner {
                         k += 1;
                         continue;
                     }
-                    if t.last_use() >= mine {
+                    if t.last_use() + EVICT_MARGIN_SECONDS > mine {
                         break;
                     }
                     freed += bytes(t, t.top) - bytes(t, t.tail);
@@ -318,6 +371,419 @@ impl LevelPlanner {
     }
 }
 
+/// A texture's first level of [`TAIL_TEXELS`] or less: what a scene uploads of it at the start
+/// when it streams it ([`TextureStream`]).
+pub fn tail_level(texture: &CompressedTexture) -> usize {
+    streamed(texture).tail()
+}
+
+fn streamed(texture: &CompressedTexture) -> StreamedTexture {
+    let side = texture.width.max(texture.height);
+    StreamedTexture {
+        levels: texture.levels.iter().map(|l| l.len() as u64).collect(),
+        sides: (0..texture.levels.len() as u32)
+            .map(|k| (side >> k).max(1))
+            .collect(),
+    }
+}
+
+/// `texture`'s levels from `top` down, as a texture of their own.
+fn from_level(texture: &CompressedTexture, top: usize) -> CompressedTexture {
+    let top = top.min(texture.levels.len().saturating_sub(1));
+    CompressedTexture {
+        name: texture.name.clone(),
+        width: (texture.width >> top).max(1),
+        height: (texture.height >> top).max(1),
+        format: texture.format,
+        srgb: texture.srgb,
+        levels: texture.levels[top..].to_vec(),
+    }
+}
+
+/// The most textures a [`TextureStream`] changes in one frame: each moves its rows and takes a
+/// slot, whatever its bytes.
+const MOST_CHANGES: usize = 96;
+
+/// After a plan whose images could not be made (out of memory, most likely), the seconds before
+/// the next.
+const RETRY_SECONDS: f64 = 2.0;
+
+/// A texture named by more material rows than this only ever grows: moving it to a new slot
+/// writes every one of its rows, once per frame slot.
+const MANY_ROWS: usize = 64;
+
+/// The rows a frame moves at most (one texture at least): the rest of a plan's images wait for
+/// the next frames.
+const MOST_ROWS_A_FRAME: usize = 16_384;
+
+/// One texture a [`TextureStream`] streams.
+struct StreamEntry {
+    id: TextureId,
+    /// Every level, in the CPU's memory until D-105's files.
+    source: Arc<CompressedTexture>,
+    /// Its bindless slot now.
+    slot: u32,
+    /// The top level the image in that slot holds: the feedback counts from it.
+    top: usize,
+}
+
+/// One texture's new image, waiting for its frame to take its place.
+struct Landing {
+    change: LevelChange,
+    image: Image,
+    bytes: u64,
+    texture: CompressedTexture,
+}
+
+/// A plan's textures, each with the level its new image starts from.
+type UploadJob = Vec<(Arc<CompressedTexture>, usize)>;
+/// A plan's images with their bytes, and its textures' descriptions (their levels left out).
+type UploadDone = Result<(Vec<(Image, u64)>, Vec<CompressedTexture>)>;
+
+/// The thread that makes a plan's images: the frame neither copies their texels nor waits for
+/// their transfer.
+struct Uploader {
+    jobs: Option<Sender<UploadJob>>,
+    done: Receiver<UploadDone>,
+    thread: Option<JoinHandle<()>>,
+}
+
+impl Uploader {
+    fn new(device: Arc<Device>) -> Result<Self> {
+        let (jobs, todo) = channel::<UploadJob>();
+        let (made, done) = channel::<UploadDone>();
+        let thread = std::thread::Builder::new()
+            .name("texture stream".to_owned())
+            .spawn(move || {
+                while let Ok(job) = todo.recv() {
+                    let mut data: Vec<CompressedTexture> = job
+                        .iter()
+                        .map(|(source, top)| from_level(source, *top))
+                        .collect();
+                    let uploaded = crate::material::upload_compressed(&device, &data);
+                    for texture in &mut data {
+                        texture.levels = Vec::new();
+                    }
+                    if made.send(uploaded.map(|images| (images, data))).is_err() {
+                        break;
+                    }
+                }
+            })
+            .map_err(|e| GpuError::Unsupported(format!("the texture stream's worker: {e}")))?;
+        Ok(Self {
+            jobs: Some(jobs),
+            done,
+            thread: Some(thread),
+        })
+    }
+}
+
+impl Drop for Uploader {
+    fn drop(&mut self) {
+        // Closing the jobs ends its loop.
+        self.jobs = None;
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
+}
+
+/// D-105 joined up: each frame the textures' feedback (`meshlet::feedback`) goes to the planner,
+/// what it plans is made on a worker ([`Uploader`]), the images take their textures' places
+/// ([`TextureSet::replace_compressed`]), the rows move to the new slots
+/// ([`MeshletScene::remap_texture`]) and the old images retire once no frame can read them.
+///
+/// **Only what reaches its slot through the scene's material rows can stream.** Decals, holograms,
+/// particles and the sky copy a texture's slot once and never follow it, and the feedback doesn't
+/// see what they sample: those stay out of the stream, resident and whole.
+pub struct TextureStream {
+    planner: LevelPlanner,
+    textures: Vec<StreamEntry>,
+    /// The bytes one plan may remake.
+    upload: u64,
+    start: Option<Instant>,
+    uploader: Option<Uploader>,
+    /// The plan the worker is on: one at a time.
+    uploading: Option<Vec<LevelChange>>,
+    /// A plan's images made and not yet in place ([`MOST_ROWS_A_FRAME`]).
+    landing: VecDeque<Landing>,
+    /// The material rows moved so far.
+    rows_moved: u64,
+    /// When the next plan may be made (seconds), after one that failed.
+    retry_at: f64,
+    /// The plans that failed.
+    failed: u64,
+    /// Old images waiting for every frame slot's table to take the new slot, by the remap's
+    /// generation.
+    waiting: VecDeque<(u64, RetiredTexture)>,
+    /// Old images no table names any more, with the frame from which none in flight can use them.
+    dropping: VecDeque<(u64, RetiredTexture)>,
+    /// Old images whose rows did not move (a slideshow shows them): kept for good.
+    kept: Vec<RetiredTexture>,
+    remade: u64,
+    uploaded: u64,
+    /// Seconds spent so far planning, remaking and moving rows, and the most changes in one plan.
+    plan_s: f64,
+    remake_s: f64,
+    remap_s: f64,
+    changes_max: usize,
+}
+
+impl TextureStream {
+    /// A stream within `pool` bytes, remaking at most `upload` bytes a frame.
+    pub fn new(pool: u64, upload: u64) -> Self {
+        let mut planner = LevelPlanner::new(pool, WINDOW_SECONDS);
+        planner.set_most_changes(MOST_CHANGES);
+        Self {
+            planner,
+            textures: Vec::new(),
+            upload,
+            start: None,
+            uploader: None,
+            uploading: None,
+            landing: VecDeque::new(),
+            rows_moved: 0,
+            retry_at: 0.0,
+            failed: 0,
+            waiting: VecDeque::new(),
+            dropping: VecDeque::new(),
+            kept: Vec::new(),
+            remade: 0,
+            uploaded: 0,
+            plan_s: 0.0,
+            remake_s: 0.0,
+            remap_s: 0.0,
+            changes_max: 0,
+        }
+    }
+
+    /// [`Self::new`] with `pool_mib` and 32 MiB a frame; `FORGE_TEXTURE_POOL_MIB` and
+    /// `FORGE_TEXTURE_UPLOAD_MIB` in their place.
+    pub fn from_env(pool_mib: u64) -> Self {
+        let mib = |name: &str, default: u64| {
+            std::env::var(name)
+                .ok()
+                .and_then(|v| v.parse::<u64>().ok())
+                .unwrap_or(default)
+                << 20
+        };
+        Self::new(
+            mib("FORGE_TEXTURE_POOL_MIB", pool_mib),
+            mib("FORGE_TEXTURE_UPLOAD_MIB", 32),
+        )
+    }
+
+    /// Streams texture `id`, whose image holds `source`'s levels from its tail
+    /// ([`tail_level`]) down.
+    pub fn add(&mut self, id: TextureId, source: Arc<CompressedTexture>) {
+        let number = self.planner.add(streamed(&source));
+        self.textures.push(StreamEntry {
+            id,
+            source,
+            slot: 0,
+            top: self.planner.top(number),
+        });
+    }
+
+    /// The textures it streams.
+    pub fn len(&self) -> usize {
+        self.textures.len()
+    }
+
+    /// Whether it streams none.
+    pub fn is_empty(&self) -> bool {
+        self.textures.is_empty()
+    }
+
+    /// The bytes the streamed textures hold now, the images remade and the bytes they uploaded.
+    pub fn stats(&self) -> (u64, u64, u64) {
+        (self.planner.resident(), self.remade, self.uploaded)
+    }
+
+    /// Learns each texture's slot.
+    pub(crate) fn bind(&mut self, set: &TextureSet) {
+        for entry in &mut self.textures {
+            entry.slot = set.sampled(entry.id);
+        }
+    }
+
+    /// Marks the textures that many material rows name ([`MANY_ROWS`]): `rows_of` gives a slot's
+    /// rows.
+    pub(crate) fn keep_widely_used(&mut self, rows_of: impl Fn(u32) -> usize) {
+        let (mut kept, mut rows, mut most) = (0usize, 0usize, 0usize);
+        let mut rows_kept = 0usize;
+        for (t, entry) in self.textures.iter().enumerate() {
+            let named = rows_of(entry.slot);
+            rows += named;
+            most = most.max(named);
+            if named > MANY_ROWS {
+                self.planner.keep_levels(t);
+                kept += 1;
+                rows_kept += named;
+            }
+        }
+        tracing::info!(
+            textures = self.textures.len(),
+            kept,
+            rows,
+            rows_kept,
+            most,
+            "the streamed textures that many material rows name only grow (D-105)"
+        );
+    }
+
+    /// One frame's work: `wants`, the feedback read this frame, per bindless index, if any.
+    pub(crate) fn step(
+        &mut self,
+        scene: &mut MeshletScene,
+        wants: Option<&[u32]>,
+        frame: u64,
+    ) -> Result<()> {
+        let now = self
+            .start
+            .get_or_insert_with(Instant::now)
+            .elapsed()
+            .as_secs_f64();
+        if let Some(wants) = wants {
+            for (t, entry) in self.textures.iter().enumerate() {
+                let level = wants.get(entry.slot as usize).copied().unwrap_or(NO_WANT);
+                if level != NO_WANT {
+                    // From the image the feedback sampled: a plan on its way up hasn't replaced
+                    // it yet, whatever the planner's top says.
+                    let wanted = entry.top as i64 + i64::from(level) - i64::from(NEED_BIAS);
+                    self.planner.wanted(t, wanted.max(0) as usize, now);
+                }
+            }
+        }
+        self.land(scene, now)?;
+        if self.uploading.is_none()
+            && self.landing.is_empty()
+            && wants.is_some()
+            && now >= self.retry_at
+        {
+            let begun = Instant::now();
+            let changes = self.planner.plan(now, self.upload);
+            self.plan_s += begun.elapsed().as_secs_f64();
+            self.changes_max = self.changes_max.max(changes.len());
+            if let (false, Some(set)) = (changes.is_empty(), scene.textures_mut()) {
+                if self.uploader.is_none() {
+                    self.uploader = Some(Uploader::new(set.device().clone())?);
+                }
+                let job: UploadJob = changes
+                    .iter()
+                    .map(|c| (self.textures[c.texture].source.clone(), c.to))
+                    .collect();
+                if let Some(jobs) = self.uploader.as_ref().and_then(|u| u.jobs.as_ref()) {
+                    jobs.send(job).map_err(|_| worker_gone())?;
+                }
+                self.uploading = Some(changes);
+            }
+        }
+        while let Some(&(generation, _)) = self.waiting.front() {
+            if !scene.texture_remap_done(generation) {
+                break;
+            }
+            if let Some((_, retired)) = self.waiting.pop_front() {
+                self.dropping
+                    .push_back((frame + FRAMES_IN_FLIGHT as u64 + 1, retired));
+            }
+        }
+        while self.dropping.front().is_some_and(|&(at, _)| at <= frame) {
+            self.dropping.pop_front();
+        }
+        if frame.is_multiple_of(600) {
+            tracing::info!(
+                frame,
+                textures = self.textures.len(),
+                held_mib = self.planner.resident() >> 20,
+                remade = self.remade,
+                uploaded_mib = self.uploaded >> 20,
+                waiting = self.waiting.len() + self.dropping.len(),
+                kept = self.kept.len(),
+                failed = self.failed,
+                rows_moved = self.rows_moved,
+                plan_s = self.plan_s,
+                remake_s = self.remake_s,
+                remap_s = self.remap_s,
+                changes_max = self.changes_max,
+                "texture stream (D-105)"
+            );
+        }
+        Ok(())
+    }
+
+    /// The plan on its way up: once the worker has made its images, they take their textures'
+    /// places and the rows move to their slots, as many as [`MOST_ROWS_A_FRAME`] a frame. A plan
+    /// that failed is put back and the next one waits; the textures stay as they are.
+    fn land(&mut self, scene: &mut MeshletScene, now: f64) -> Result<()> {
+        if let (Some(uploader), true) = (&self.uploader, self.uploading.is_some()) {
+            let made = match uploader.done.try_recv() {
+                Ok(made) => Some(made),
+                Err(TryRecvError::Empty) => None,
+                Err(TryRecvError::Disconnected) => return Err(worker_gone()),
+            };
+            if let Some(made) = made {
+                let changes = self.uploading.take().unwrap_or_default();
+                match made {
+                    Ok((images, data)) => {
+                        for ((change, (image, bytes)), texture) in
+                            changes.into_iter().zip(images).zip(data)
+                        {
+                            self.landing.push_back(Landing {
+                                change,
+                                image,
+                                bytes,
+                                texture,
+                            });
+                        }
+                    }
+                    Err(error) => {
+                        self.planner.undo(&changes);
+                        self.retry_at = now + RETRY_SECONDS;
+                        self.failed += 1;
+                        tracing::warn!(%error, textures = changes.len(), "a texture stream's plan could not be made");
+                    }
+                }
+            }
+        }
+        let mut rows = 0;
+        while rows < MOST_ROWS_A_FRAME {
+            let Some(landing) = self.landing.pop_front() else {
+                break;
+            };
+            let Some(set) = scene.textures_mut() else {
+                break;
+            };
+            let begun = Instant::now();
+            let entry = &mut self.textures[landing.change.texture];
+            let retired =
+                set.replace_compressed(entry.id, landing.image, landing.bytes, &landing.texture)?;
+            entry.slot = set.sampled(entry.id);
+            entry.top = landing.change.to;
+            let new = entry.slot;
+            self.remade += 1;
+            self.uploaded += landing.bytes;
+            self.remake_s += begun.elapsed().as_secs_f64();
+            let begun = Instant::now();
+            // At least one texture's, so a texture with more rows than the budget still lands.
+            let named = scene.texture_rows(retired.slot());
+            rows += named.max(1);
+            self.rows_moved += named as u64;
+            match scene.remap_texture(retired.slot(), new) {
+                Some(generation) => self.waiting.push_back((generation, retired)),
+                None => self.kept.push(retired),
+            }
+            self.remap_s += begun.elapsed().as_secs_f64();
+        }
+        Ok(())
+    }
+}
+
+/// The error of a [`TextureStream`] whose worker has stopped.
+fn worker_gone() -> GpuError {
+    GpuError::Unsupported("the texture stream's worker stopped".to_owned())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -355,6 +821,43 @@ mod tests {
         let u = p.add(square(1024));
         p.wanted(u, 6, 0.2);
         assert!(p.plan(0.3, u64::MAX).is_empty());
+    }
+
+    #[test]
+    fn a_texture_that_keeps_its_levels_never_shrinks_and_is_never_evicted() {
+        let mut p = LevelPlanner::new(u64::MAX, WINDOW_SECONDS);
+        let t = p.add(square(512));
+        p.keep_levels(t);
+        p.wanted(t, 0, 0.0);
+        p.plan(0.0, u64::MAX);
+        assert_eq!(p.top(t), 0);
+        // Long unwanted: an ordinary texture would be back at its tail.
+        assert!(p.plan(100.0, u64::MAX).is_empty());
+        assert_eq!(p.top(t), 0);
+        // Another's growth can't take its levels.
+        let mut q = LevelPlanner::new(
+            square(512).bytes_from(0) + square(512).bytes_from(1),
+            WINDOW_SECONDS,
+        );
+        let (a, b) = (q.add(square(512)), q.add(square(512)));
+        q.keep_levels(a);
+        q.wanted(a, 0, 0.0);
+        q.plan(0.0, u64::MAX);
+        q.wanted(b, 0, 50.0);
+        q.plan(50.0, u64::MAX);
+        assert_eq!(q.top(a), 0);
+    }
+
+    #[test]
+    fn a_plan_put_back_leaves_the_tops_and_the_bytes_as_they_were() {
+        let mut p = LevelPlanner::new(u64::MAX, WINDOW_SECONDS);
+        let t = p.add(square(1024));
+        let (top, held) = (p.top(t), p.resident());
+        p.wanted(t, 0, 0.0);
+        let changes = p.plan(0.0, u64::MAX);
+        assert_ne!(p.top(t), top);
+        p.undo(&changes);
+        assert_eq!((p.top(t), p.resident()), (top, held));
     }
 
     #[test]

@@ -1002,6 +1002,42 @@ impl TextureSet {
         )
     }
 
+    /// [`Self::remake`] with an image [`upload_compressed`] made of `texture` (its `bytes`): several
+    /// remade together wait once for all of them.
+    pub fn replace_compressed(
+        &mut self,
+        id: TextureId,
+        image: Image,
+        bytes: u64,
+        texture: &CompressedTexture,
+    ) -> Result<RetiredTexture> {
+        let image = if texture.format == crate::dds::BlockFormat::Bc5 {
+            image.with_view_components(vk::ComponentMapping {
+                r: vk::ComponentSwizzle::IDENTITY,
+                g: vk::ComponentSwizzle::IDENTITY,
+                b: vk::ComponentSwizzle::ONE,
+                a: vk::ComponentSwizzle::ONE,
+            })?
+        } else {
+            image
+        };
+        let sampled = self
+            .device
+            .register_sampled_image(image.view(), vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL);
+        let (old, slot) = std::mem::replace(&mut self.textures[id.0 as usize], (image, sampled));
+        self.bytes = self.bytes.saturating_sub(image_bytes(&old)) + bytes;
+        Ok(RetiredTexture {
+            device: self.device.clone(),
+            image: Some(old),
+            slot,
+        })
+    }
+
+    /// The device its images are on.
+    pub fn device(&self) -> &Arc<Device> {
+        &self.device
+    }
+
     /// Number of textures.
     pub fn len(&self) -> usize {
         self.textures.len()

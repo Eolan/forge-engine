@@ -12321,6 +12321,32 @@ mask in fixed-function hardware), was filed in 2000 and has expired. The searche
   - In BC5 it would still be about 1 GB.
   - That asks for levels by distance (this decision's streaming), not a global cap.
 
+**Wired (2026-11-08, `TextureStream`, #385).** The feedback's wants per slot go to the planner; a worker thread makes one plan's
+images at a time; the frame puts them in place (a new slot each) and moves the rows that name the old slot, at most 16,384 rows
+a frame; the old image goes once every frame slot's table has moved and `FRAMES_IN_FLIGHT + 1` frames have passed. Measured on
+the private district's wide world, 2560 × 1440, DLSS Quality, the 5,000-frame walk (20,481 maps streamed, 652 kept whole):
+
+| | every map resident | streamed |
+|---|---|---|
+| textures | 7,179 MiB | 6,365 MiB (the maps hold 384 MiB) |
+| frame time, the first 400 frames left out | | p50 19.2 ms, p99 34.8 ms, p99.9 74 ms |
+| `cpu/declare passes` | 7.8 ms | 11.0 ms |
+
+- **The picture:** at two close views, the settled frames differ from every map resident by at most 2.3 codes (of 255) in any
+  16-pixel tile.
+- **What it saves is small:** the masks (4 GiB) are the rest of the memory, and they are the next step.
+- **Only what reaches its slot through the material rows can stream.** Decals, holograms, particles and the sky copy a slot once
+  and never follow it, and the feedback doesn't see what they sample. A map shared with a decal, remade, left the decal's table
+  on a freed image: the device was lost about 1,850 frames into the walk. Those maps go up whole and stay.
+- **The rows are the cost, not the uploads.** A popular tile texture is named by up to 1.6 million rows, and each frame slot
+  writes each of them. 752 of the 20,481 textures hold 99.6 % of the row references: those (over 64 rows) only ever grow, and
+  the rows a frame moves are capped. Before that the walk's p99 was 100 ms, with the uploads already on the worker.
+- **The wants count from the image the feedback sampled.** A plan on its way up hasn't replaced it yet, so the planner's own top
+  can't be used. After a remap the slot is new, so no stale want can reach the new image.
+- **Eviction needs a margin** (0.5 s): the feedback looks at one pixel in 64 a frame, so two textures on screen together are
+  rarely wanted in the same frame and would evict each other in turn.
+- **A plan that can't be made** (out of memory, most likely) is put back and the next one waits 2 s; the textures stay as they are.
+
 ## D-106 — An authored world shown by the camera: each piece's own range, real pieces and stand-ins in one table ✅ (accepted by the owner 2026-11-08; being built, step by step)
 
 **Why:** the private district draws a fixed set of pieces, chosen once for the whole run, and a free camera goes where that

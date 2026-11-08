@@ -10212,17 +10212,19 @@ void texture_need_main(uint3 id : SV_DispatchThreadID)
     PixelShading p = pixel_shading(f, MATERIAL_CLASS_ANY, pixel, vis, float2(need_push.width, need_push.height));
     Material mat = p.mat;
     Surface s = p.s;
+    if ((mat.flags & MATERIAL_FLAG_ROOM_ATLAS) != 0u)
+    {
+        // As `interior_atlas` takes its level: a pixel's metres over the whole atlas's width.
+        float atlas_span = max(length(s.dpdx), length(s.dpdy)) / max(mat.uv_v.x * mat.uv_u.x, 1e-3);
+        need_level(need, mat.albedo_texture, float2(atlas_span, 0.0), float2(0.0, atlas_span));
+        return;
+    }
     if (!s.has_uv || (mat.flags & MATERIAL_FLAG_UV) == 0u)
     {
         // Textures from the object's position, `inv_texture_scale` repeats a metre.
         float span = max(length(s.dpdx), length(s.dpdy)) * mat.inv_texture_scale;
         need_level(need, mat.albedo_texture, float2(span, 0.0), float2(0.0, span));
         need_level(need, mat.normal_texture, float2(span, 0.0), float2(0.0, span));
-        return;
-    }
-    if ((mat.flags & MATERIAL_FLAG_ROOM_ATLAS) != 0u)
-    {
-        need_level(need, mat.albedo_texture, s.duvdx, s.duvdy);
         return;
     }
     if ((mat.flags & MATERIAL_FLAG_MULTILAYER) == 0u)

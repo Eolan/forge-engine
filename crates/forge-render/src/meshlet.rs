@@ -40,6 +40,7 @@ use glam::{DQuat, DVec3, IVec3, Mat4, Quat, Vec2, Vec3, Vec4};
 
 pub(crate) mod dynamic;
 mod feedback;
+pub(crate) use feedback::{NEED_BIAS, NO_WANT};
 mod static_edits;
 pub use dynamic::{DynamicCapacity, InstanceFadeEdge, MeshRays, SceneEdit, SceneEditor};
 
@@ -3073,6 +3074,7 @@ impl MeshletSceneBuilder {
             far_retired: Vec::new(),
             frame: 0,
             textures: self.textures.take(),
+            texture_stream: None,
             instance_count: self.instances.len() as u32,
             origin: self.origin,
             work_bound: self.work_bound,
@@ -3309,6 +3311,8 @@ pub struct MeshletScene {
     far_retired: Vec<(u64, FarLampBuffers)>,
     frame: u64,
     textures: Option<TextureSet>,
+    /// Its textures streamed by need (D-105, [`Self::set_texture_stream`]).
+    texture_stream: Option<crate::texture_stream::TextureStream>,
     /// What it keeps alive for its instances ([`MeshletSceneBuilder::keep`]).
     _kept: Vec<Box<dyn std::any::Any + Send>>,
     /// Instances.
@@ -3356,7 +3360,15 @@ struct SceneMotions {
 /// and the last remap its table holds.
 struct StreamedRows {
     rows: Vec<GpuMaterial>,
-    pending: Vec<std::collections::BTreeSet<u32>>,
+    /// By texture slot, the rows naming it: a remap touches those alone.
+    slots: HashMap<u32, Vec<u32>>,
+    /// By texture slot, the moving rows (indices into [`SceneMotions::rows`]) naming it.
+    moving: HashMap<u32, Vec<u32>>,
+    /// The slots a slideshow shows: its pictures are written into their rows every frame, so
+    /// they never move.
+    shown: HashSet<u32>,
+    /// Per frame slot, the rows to write again (a row twice is written twice).
+    pending: Vec<Vec<u32>>,
     generation: u64,
     written: Vec<u64>,
 }
@@ -3437,6 +3449,39 @@ impl SceneMotions {
             "material rows that move with the scene's clock (D-104)"
         );
         let first = slots.remove(0);
+        let all = streamed.then(|| {
+            let mut slots: HashMap<u32, Vec<u32>> = HashMap::new();
+            for (k, row) in table.iter().enumerate() {
+                let mut named = row.texture_slots();
+                named.sort_unstable();
+                named.dedup();
+                for slot in named {
+                    slots.entry(slot).or_default().push(k as u32);
+                }
+            }
+            let mut moving: HashMap<u32, Vec<u32>> = HashMap::new();
+            let mut shown = HashSet::new();
+            for (k, (_, built, _, show)) in rows.iter().enumerate() {
+                let mut named = built.texture_slots();
+                named.sort_unstable();
+                named.dedup();
+                for slot in named {
+                    moving.entry(slot).or_default().push(k as u32);
+                }
+                if let Some(show) = show {
+                    shown.extend(show.pictures.iter().map(|p| p.picture));
+                }
+            }
+            RefCell::new(StreamedRows {
+                rows: table.to_vec(),
+                slots,
+                moving,
+                shown,
+                pending: vec![Vec::new(); FRAMES_IN_FLIGHT],
+                generation: 0,
+                written: vec![0; FRAMES_IN_FLIGHT],
+            })
+        });
         Ok((
             first,
             Self {
@@ -3444,14 +3489,7 @@ impl SceneMotions {
                 extra: slots,
                 written: (0..FRAMES_IN_FLIGHT).map(|_| Cell::new(None)).collect(),
                 clock: Cell::new(0.0),
-                all: streamed.then(|| {
-                    RefCell::new(StreamedRows {
-                        rows: table.to_vec(),
-                        pending: vec![std::collections::BTreeSet::new(); FRAMES_IN_FLIGHT],
-                        generation: 0,
-                        written: vec![0; FRAMES_IN_FLIGHT],
-                    })
-                }),
+                all,
             },
         ))
     }
@@ -3723,31 +3761,73 @@ impl MeshletScene {
     /// (the caller keeps the old image).
     pub fn remap_texture(&mut self, from: u32, to: u32) -> Option<u64> {
         let motions = self.motions.as_mut()?;
-        let shown = motions.rows.iter().any(|(_, _, _, show)| {
-            show.as_ref()
-                .is_some_and(|s| s.pictures.iter().any(|p| p.picture == from))
-        });
-        if shown {
-            return None;
-        }
         let all = motions.all.as_mut()?.get_mut();
-        let mut hit = false;
-        for (k, row) in all.rows.iter_mut().enumerate() {
-            if row.remap_texture(from, to) {
-                hit = true;
-                for pending in &mut all.pending {
-                    pending.insert(k as u32);
-                }
-            }
-        }
-        for (_, built, _, _) in &mut motions.rows {
-            built.remap_texture(from, to);
-        }
-        if !hit {
+        if all.shown.contains(&from) {
             return None;
         }
+        if let Some(moving) = all.moving.remove(&from) {
+            for &k in &moving {
+                motions.rows[k as usize].1.remap_texture(from, to);
+            }
+            all.moving.entry(to).or_default().extend(moving);
+        }
+        let rows = all.slots.remove(&from).unwrap_or_default();
+        if rows.is_empty() {
+            return None;
+        }
+        for &k in &rows {
+            all.rows[k as usize].remap_texture(from, to);
+        }
+        for pending in &mut all.pending {
+            pending.extend_from_slice(&rows);
+        }
+        all.slots.entry(to).or_default().extend(rows);
         all.generation += 1;
         Some(all.generation)
+    }
+
+    /// Streams the scene's textures by need from now on (D-105): needs
+    /// [`MeshletSceneBuilder::set_streamed_textures`], and the renderer's feedback
+    /// ([`MeshletRenderer::enable_texture_feedback`]).
+    pub fn set_texture_stream(&mut self, mut stream: crate::texture_stream::TextureStream) {
+        if let Some(set) = &self.textures {
+            stream.bind(set);
+        }
+        stream.keep_widely_used(|slot| self.texture_rows(slot));
+        self.texture_stream = Some(stream);
+    }
+
+    /// How many material rows name bindless `slot` (a streamed-texture scene's; else 0).
+    pub(crate) fn texture_rows(&self, slot: u32) -> usize {
+        self.motions
+            .as_ref()
+            .and_then(|m| m.all.as_ref())
+            .map_or(0, |all| all.borrow().slots.get(&slot).map_or(0, Vec::len))
+    }
+
+    /// Whether its textures stream by need ([`Self::set_texture_stream`]).
+    pub fn streams_textures(&self) -> bool {
+        self.texture_stream.is_some()
+    }
+
+    /// The bytes its streamed textures hold, the images remade and the bytes they uploaded.
+    pub fn texture_stream_stats(&self) -> Option<(u64, u64, u64)> {
+        self.texture_stream.as_ref().map(|s| s.stats())
+    }
+
+    /// Its textures, for what remakes them.
+    pub(crate) fn textures_mut(&mut self) -> Option<&mut TextureSet> {
+        self.textures.as_mut()
+    }
+
+    /// One frame of its texture stream, if it has one.
+    fn stream_textures(&mut self, wants: Option<&[u32]>, frame: u64) -> Result<()> {
+        let Some(mut stream) = self.texture_stream.take() else {
+            return Ok(());
+        };
+        let result = stream.step(self, wants, frame);
+        self.texture_stream = Some(stream);
+        result
     }
 
     /// Whether every frame slot's table holds the remap of `generation`
@@ -4791,6 +4871,8 @@ pub struct MeshletRenderer {
     /// The textures' feedback (#385, `FORGE_TEXTURE_FEEDBACK=1`): which level of each texture the
     /// frame's surfaces want, summed over the run.
     texture_feedback: Option<feedback::TextureFeedback>,
+    /// The shader file its entry is compiled from.
+    texture_feedback_shading: &'static str,
     /// Slots of the visible-cluster list, its raster lists and, on the fallback path, its draw
     /// commands, transients of the frame's graph (#78; see [`MeshletRenderer::begin_frame`]).
     visible_target: u32,
@@ -5426,6 +5508,7 @@ impl MeshletRenderer {
             stats,
             stats_readback,
             texture_feedback: feedback::TextureFeedback::from_env(device, shaders, shading)?,
+            texture_feedback_shading: shading,
             visible_target,
             rejects_target: REJECTS_INITIAL_CAPACITY,
             visible_max,
@@ -5671,6 +5754,23 @@ impl MeshletRenderer {
         }
     }
 
+    /// Turns on the textures' feedback, for a scene that streams its textures by need (D-105,
+    /// [`MeshletScene::set_texture_stream`]).
+    pub fn enable_texture_feedback(
+        &mut self,
+        device: &Arc<Device>,
+        shaders: &ShaderCompiler,
+    ) -> Result<()> {
+        if self.texture_feedback.is_none() {
+            self.texture_feedback = Some(feedback::TextureFeedback::new(
+                device,
+                shaders,
+                self.texture_feedback_shading,
+            )?);
+        }
+        Ok(())
+    }
+
     /// Call once per frame, after waiting for `slot` and before [`MeshletRenderer::draw`]:
     /// reads and clears the statistics of the frame that last used `slot` (`None` for the
     /// first frames in flight) and sizes the slot's visible-cluster list. A frame that
@@ -5686,8 +5786,19 @@ impl MeshletRenderer {
         // frame's pages over the residency they changed (#220).
         scene.begin_scene_frame(slot.frame_number);
         scene.begin_dynamic_frame(slot.frame_number);
-        if let Some(feedback) = &self.texture_feedback {
-            feedback.take(slot, scene.textures.as_ref());
+        let streaming = scene.streams_textures();
+        let wants = self.texture_feedback.as_ref().and_then(|feedback| {
+            feedback.take(
+                slot,
+                if streaming {
+                    None
+                } else {
+                    scene.textures.as_ref()
+                },
+            )
+        });
+        if streaming {
+            scene.stream_textures(wants.as_deref(), slot.frame_number)?;
         }
         if let Some(streamer) = scene.streamer.as_mut() {
             streamer.begin_frame(slot.index, slot.frame_number);

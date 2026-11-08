@@ -56,9 +56,11 @@ struct TextureNeedPush {
 
 /// No level wanted.
 const NONE: u32 = u32::MAX;
+/// [`NONE`], for what reads the frames' wants.
+pub(crate) const NO_WANT: u32 = NONE;
 /// What the shader adds to a level (`NEED_BIAS` in `meshlet.slang`): a recorded level under it asks
 /// for levels finer than the bound image holds.
-const NEED_BIAS: u32 = 16;
+pub(crate) const NEED_BIAS: u32 = 16;
 /// Levels a texture holds at most.
 const LEVELS: usize = 16;
 /// Seconds a level wanted counts in the working set.
@@ -164,6 +166,16 @@ impl TextureFeedback {
         if !std::env::var("FORGE_TEXTURE_FEEDBACK").is_ok_and(|v| v == "1") {
             return Ok(None);
         }
+        Self::new(device, shaders, shading).map(Some)
+    }
+
+    /// The feedback, its entry compiled from `shading`: for a scene that streams its textures
+    /// (D-105), and for the measure.
+    pub(crate) fn new(
+        device: &Arc<Device>,
+        shaders: &ShaderCompiler,
+        shading: &'static str,
+    ) -> Result<Self> {
         let entry = "texture_need_main";
         let module = device.create_shader_module(
             &shaders.compile(shading, entry, ShaderStage::Compute)?,
@@ -202,12 +214,12 @@ impl TextureFeedback {
         tracing::info!(
             "texture feedback on (#385): every 8th pixel each way, totals logged every {LOG_EVERY} frames and at the end"
         );
-        Ok(Some(Self {
+        Ok(Self {
             pipeline,
             need,
             readback,
             totals: RefCell::default(),
-        }))
+        })
     }
 
     /// The frame's passes, after the resolve: the needs cleared, recorded from the visibility
@@ -272,9 +284,18 @@ impl TextureFeedback {
 
     /// The needs the frame that last used `slot` wrote (done by now), summed into the run's
     /// totals with the sizes of `textures`, the scene's.
-    pub(crate) fn take(&self, slot: FrameSlot, textures: Option<&TextureSet>) {
+    ///
+    /// Returns the wants as read, per bindless index, for a scene that streams its textures
+    /// (D-105). Such a scene passes no `textures`: its images are remade, so the totals' sizes
+    /// would not hold, and they are left out.
+    pub(crate) fn take(&self, slot: FrameSlot, textures: Option<&TextureSet>) -> Option<Vec<u32>> {
         if slot.frame_number < FRAMES_IN_FLIGHT as u64 {
-            return;
+            return None;
+        }
+        if textures.is_none() {
+            let mut raw = vec![NONE; SAMPLED_IMAGE_CAPACITY as usize];
+            self.readback[slot.index].read(0, &mut raw);
+            return Some(raw);
         }
         let mut t = self.totals.borrow_mut();
         let now = t
@@ -321,6 +342,7 @@ impl TextureFeedback {
         if t.frames.is_multiple_of(LOG_EVERY) {
             t.log();
         }
+        Some(raw)
     }
 }
 
