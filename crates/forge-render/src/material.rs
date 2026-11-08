@@ -279,9 +279,17 @@ pub struct GpuMaterial {
     presence_texture: u32,
     mask_texture_9: u32,
     mask_textures: [u32; 8],
+    /// Its relief's height map ([`MATERIAL_RELIEF`], D-107), [`TEXTURE_NONE`] without.
+    height_texture: u32,
+    /// Metres of the object's space from its relief's top to its floor.
+    parallax_depth: f32,
+    /// The height map's value that lies on the mesh's surface.
+    parallax_top: f32,
+    /// The share of the sky's and the probes' light its relief's floor loses.
+    parallax_cavity: f32,
 }
 
-const _: () = assert!(std::mem::size_of::<GpuMaterial>() == 240);
+const _: () = assert!(std::mem::size_of::<GpuMaterial>() == 256);
 
 impl GpuMaterial {
     /// What a far impostor drawn with this row keeps of its look (D-075 step 4): the share of the
@@ -314,7 +322,7 @@ impl GpuMaterial {
     }
 
     /// Its texture fields (D-105's second step): the colour, normal, metal-roughness (or
-    /// metalness), occlusion, emissive and presence maps, then its masks (with
+    /// metalness), occlusion, emissive, presence and height maps, then its masks (with
     /// [`MATERIAL_MASK_PAIRS`], ten), or a microblend row's microblend alone: the mask fields
     /// after the first hold its floats (tiling, contrast, strength, offset;
     /// [`MATERIAL_MICROBLEND`]).
@@ -332,6 +340,7 @@ impl GpuMaterial {
             &mut self.occlusion_texture,
             &mut self.emissive_texture,
             &mut self.presence_texture,
+            &mut self.height_texture,
         ];
         fields.extend(masks.iter_mut());
         if pairs {
@@ -581,6 +590,10 @@ pub const MATERIAL_ROOM_ATLAS: u32 = 131072;
 /// [`forge_core::material::Multilayer::pairs`]): layer `k`'s mask is channel `(k - 1) % 2` of
 /// its masks' texture `(k - 1) / 2`, the ninth and tenth in the row's own two words.
 pub const MATERIAL_MASK_PAIRS: u32 = 262144;
+
+/// [`GpuMaterial`]'s flags: its height map is marched in the resolve
+/// ([`forge_core::material::Parallax`], D-107).
+pub const MATERIAL_RELIEF: u32 = 524288;
 
 /// The textures a world's materials sample, uploaded with their mips and visible to every
 /// shader through the bindless set. Released when dropped.
@@ -1478,6 +1491,11 @@ pub fn gpu_rows(table: &MaterialTable, textures: Option<&TextureSet>) -> Vec<Gpu
                         MATERIAL_MICROBLEND
                     } else {
                         0
+                    }
+                    | if r.parallax.is_some() {
+                        MATERIAL_RELIEF
+                    } else {
+                        0
                     },
                 contour: r.contour.map_or(0, |c| u32::from(c.below) + 1),
                 contour_above: r.contour.map_or(0, |c| c.above),
@@ -1530,6 +1548,10 @@ pub fn gpu_rows(table: &MaterialTable, textures: Option<&TextureSet>) -> Vec<Gpu
                     ],
                     _ => std::array::from_fn(|k| texture(multilayer.and_then(|m| m.masks[k]))),
                 },
+                height_texture: texture(r.parallax.map(|p| p.texture)),
+                parallax_depth: r.parallax.map_or(0.0, |p| p.depth.max(0.0)),
+                parallax_top: r.parallax.map_or(1.0, |p| p.top.max(1e-3)),
+                parallax_cavity: r.parallax.map_or(0.0, |p| p.cavity.clamp(0.0, 1.0)),
             }
         })
         .collect()
@@ -1698,6 +1720,7 @@ mod tests {
             occlusion_texture: TEXTURE_NONE,
             emissive_texture: TEXTURE_NONE,
             presence_texture: TEXTURE_NONE,
+            height_texture: TEXTURE_NONE,
             mask_textures: [TEXTURE_NONE; 8],
             ..bytemuck::Zeroable::zeroed()
         };

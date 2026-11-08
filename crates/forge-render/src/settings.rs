@@ -474,6 +474,92 @@ pub fn decal_reflections(default: bool) -> Spec<bool> {
     )
 }
 
+/// Relief marched from the rows' height maps (D-107).
+pub fn pom(default: bool) -> Spec<bool> {
+    Spec::bool(
+        "r.pom",
+        default,
+        "Relief inside surfaces from their height maps (parallax occlusion). Rows without a height \
+         map are not touched; rays, depth and motion vectors stay the mesh's.",
+    )
+}
+
+/// The most steps of the relief's march along the view.
+pub fn pom_steps(default: i64) -> Spec<i64> {
+    Spec::int(
+        "r.pom.steps",
+        default,
+        4..=i64::from(crate::parallax::RELIEF_STEPS_MOST),
+        "The most steps the relief's march takes along the view, at a grazing angle.",
+    )
+}
+
+/// The steps of the relief's shadow along the sun and the strongest lamp.
+pub fn pom_shadow_steps(default: i64) -> Spec<i64> {
+    Spec::int(
+        "r.pom.shadow_steps",
+        default,
+        0..=i64::from(crate::parallax::RELIEF_SHADOW_STEPS_MOST),
+        "Steps of the relief's own shadow along the sun and the strongest lamp; 0: no self-shadow.",
+    )
+}
+
+/// Where the relief starts to fade.
+pub fn pom_fade(default: f64) -> Spec<f64> {
+    Spec::float(
+        "r.pom.fade",
+        default,
+        -2.0..=8.0,
+        "The level of detail of the height map the relief starts to fade at (0: a texel a pixel), \
+         gone two levels on: higher keeps it further away, and shimmers sooner.",
+    )
+}
+
+/// Every row's relief depth times this.
+pub fn pom_scale(default: f64) -> Spec<f64> {
+    Spec::float(
+        "r.pom.scale",
+        default,
+        0.0..=4.0,
+        "Every row's relief depth times this (1: as authored; 0: flat, for comparing).",
+    )
+}
+
+/// How much of its micro-shadow an occlusion map casts.
+pub fn micro_ao(default: f64) -> Spec<f64> {
+    Spec::float(
+        "r.micro.ao",
+        default,
+        0.0..=1.0,
+        "How much of its micro-shadow an occlusion map casts on the sun's and the lamps' light \
+         (0: none, as before; 1: all of it).",
+    )
+}
+
+/// A mapped normal's terminator softened.
+pub fn micro_bump(default: bool) -> Spec<bool> {
+    Spec::bool(
+        "r.micro.bump",
+        default,
+        "Soften a mapped normal's terminator against its surface's, so bumps stop catching a \
+         light their surface turns from.",
+    )
+}
+
+/// How an occlusion map joins the screen's.
+pub const AO_MATERIAL: &[&str] = &["multiply", "min"];
+
+/// How an occlusion map joins the screen's occlusion.
+pub fn ao_material(default: usize) -> Spec<usize> {
+    Spec::choice(
+        "r.ao.material",
+        AO_MATERIAL,
+        default,
+        "How a material's occlusion map joins the screen's (GTAO) on the sky's and the probes' \
+         light: multiply, as before, or min, which does not darken twice a crevice both see.",
+    )
+}
+
 /// The mirrors' motion vectors moved towards their reflections.
 pub fn reflection_motion(default: bool) -> Spec<bool> {
     Spec::bool(

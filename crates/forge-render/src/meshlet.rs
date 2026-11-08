@@ -801,7 +801,15 @@ struct GpuFrame {
     near_lamps: u64,
     /// What a diffuse ray meets of a glow, times this ([`MeshletRenderer::ray_glow`]).
     ray_glow: f32,
-    ray_glow_pad: u32,
+    /// Relief (D-107): the view's march at most (low byte) and each light's (the next).
+    relief_steps: u32,
+    /// The level of detail it starts to fade at.
+    relief_fade: f32,
+    /// Every row's relief depth times this.
+    relief_scale: f32,
+    /// How much of its micro-shadow an occlusion map casts on direct light.
+    micro_ao: f32,
+    relief_pad: u32,
 }
 
 /// Where a frame slot's light lists start in its lamps' buffer, bytes: after the lamps.
@@ -4844,6 +4852,8 @@ pub struct MeshletRenderer {
     /// roughness map (the others draw as before, to the bit); off, it takes the probes' dimmed sky
     /// as before.
     pub decal_mirrors: bool,
+    /// Relief marched from the rows' height maps, and the micro-shadows (D-107).
+    pub relief: crate::parallax::ReliefSettings,
 }
 
 /// What to draw this frame.
@@ -5441,6 +5451,7 @@ impl MeshletRenderer {
             gi_reference: 0,
             gi_trace: false,
             decal_mirrors: true,
+            relief: crate::parallax::ReliefSettings::default(),
         })
     }
 
@@ -5917,7 +5928,11 @@ impl MeshletRenderer {
             exposure: params.exposure,
             sun_illuminance: self.sun_illuminance,
             ray_glow: self.ray_glow,
-            ray_glow_pad: 0,
+            relief_steps: self.relief.step_word(),
+            relief_fade: self.relief.fade,
+            relief_scale: self.relief.scale,
+            micro_ao: self.relief.micro_ao,
+            relief_pad: 0,
             sun_angular_radius: self.sun_angular_radius,
             clusters: scene.clusters[slot.index].address(),
             draws: 0,
@@ -5950,7 +5965,8 @@ impl MeshletRenderer {
             skin_vertices: scene.skins.as_ref().map_or(0, SceneSkins::vertices_address),
             skin_joints: scene.skins.as_ref().map_or(0, SceneSkins::joints_address),
             movers_rays: scene.movers_rays(),
-            options: u32::from(self.decal_mirrors && scene.decals_smooth),
+            options: u32::from(self.decal_mirrors && scene.decals_smooth)
+                | self.relief.option_bits(),
             ground_window: scene.ground_window.get(),
             planet: scene.planet.get().camera,
             planet_axis: scene.planet.get().axis,
