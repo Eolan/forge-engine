@@ -44,6 +44,7 @@ pub mod mipcheck;
 pub mod night;
 pub mod nrc;
 mod opacity;
+pub mod parallax;
 pub mod particles;
 pub mod placement;
 pub mod precision;

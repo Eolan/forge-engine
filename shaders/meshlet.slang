@@ -28,6 +28,7 @@ import probes;
 import shore;
 import brdf;
 import surface_cache;
+import parallax;
 
 // ---------------------------------------------------------------- shared data ---
 
@@ -154,6 +155,10 @@ public struct Material
     public uint mask_texture_9; // MATERIAL_FLAG_MASK_PAIRS: its tenth masks' texture (layers 19 and 20)
     public uint4 mask_textures_a; // its masks' textures, four layers' masks each (layers 1 to 16),
     public uint4 mask_textures_b; // then layers 17 to 32; MATERIAL_FLAG_MASK_PAIRS: two each
+    public uint height_texture;   // MATERIAL_FLAG_RELIEF (D-107): its height map, red 1 high
+    public float parallax_depth;  // metres of the object's space from the relief's top to its floor
+    public float parallax_top;    // the map's value that lies on the mesh's surface
+    public float parallax_cavity; // the share of the sky's and the probes' light its floor loses
 };
 
 static const uint MATERIAL_FLAG_HEX_TILING = 1; // Material::flags, forge_render::material
@@ -175,6 +180,7 @@ static const uint MATERIAL_FLAG_ROOM_ATLAS = 131072; // with INTERIOR: the rooms
 static const uint MATERIAL_FLAG_MICROBLEND = 65536; // a layered material's layer with a microblend in its mask slots: texture, tiles, contrast, normal strength, offset u, v (float bits)
 static const uint MATERIAL_FLAG_DRAWN_AFTER = 8192; // left out of the visibility pass, drawn after the resolve; the rays meet it (D-065's glass)
 static const uint MATERIAL_FLAG_MASK_PAIRS = 262144; // with MULTILAYER: its masks two a texture (BC5), the ninth and tenth in mask_texture_8 and _9
+static const uint MATERIAL_FLAG_RELIEF = 524288; // a height map marched in the resolve (D-107, `relief_surface`)
 static const uint CUTOUT_GROUND_WINDOW = 1u << 31; // `cluster_cutouts`: windowed ground reaching into the ground window (#197)
 static const uint CUTOUT_LADDER = 1u << 30;        // `describe_cluster`: a cluster of an instance crossing its ladder (D-075), dithered (`cutout_kept`)
 static const uint MESH_WINDOWED_GROUND = 1;     // Mesh::flags: its fragments in the frame's ground window go (#197)
@@ -618,6 +624,10 @@ public struct Frame
     public CubeSet* reflection_cubes; // the reflection cubes (D-108), or null
     public float3 ring_offset;        // from this view's camera to the one the rings were drawn for
     public uint ring_offset_pad;
+    public uint relief_steps;       // D-107: the view's march at most (low byte) and each light's (the next; 0: no self-shadow)
+    public float relief_fade;       // the level of detail the relief starts to fade at (`relief_fade`, `r.pom.fade`)
+    public float relief_scale;      // every row's relief depth times this (`r.pom.scale`)
+    public float micro_ao;          // how much of its micro-shadow an occlusion map casts on direct light (`r.micro.ao`)
 };
 
 // Whether this thread's rays meet the movers: every pass's but the probes' unless their scene asks
@@ -4492,6 +4502,7 @@ void lamps_at<let SHADOWS : int>(Frame* f, ProbeField* probes, float3 world, uin
     {
         bool skip_outside = restir != 0xFFFFu;
         LampPlace place = lamp_place(f, probes, world, n, view, channels);
+        relief_main_lamp(f, place, world, n);
         if (share != 0xFFFFu)
         {
             for (uint r = 0u; r < 3u; r++)
@@ -4502,7 +4513,7 @@ void lamps_at<let SHADOWS : int>(Frame* f, ProbeField* probes, float3 world, uin
                     if (lamp_by_restir(f, i, skip_outside))
                         continue;
                     if (lamp_counted(f, place.runs, r, i) && lamp_weight_in(f[0].lamps[i], world, n, place.region, place.other, place.channels) > 0.0)
-                        lamp_add<0>(f, f[0].lamps[i], i, 1.0, world, n, shading_n, view, specular_power, specular_weight, f0, bias, float2(0.0));
+                        lamp_add<0>(f, f[0].lamps[i], i, relief_lamp_scale(i), world, n, shading_n, view, specular_power, specular_weight, f0, bias, float2(0.0));
                 }
             }
             float3 reaching = g_sampled_images[NonUniformResourceIndex(share)].Load(int3(pixel, 0)).rgb;
@@ -4538,16 +4549,17 @@ void lamps_at<let SHADOWS : int>(Frame* f, ProbeField* probes, float3 world, uin
             if (picks.top[0] < count)
             {
                 float2 u_half = sun_disc_point(pixel, f[0].noise_frame + SUN_DISC_POINTS / 2u);
-                lamp_add<SHADOWS>(f, f[0].lamps[picks.top[0]], picks.top[0], 0.5, world, n, shading_n, view, specular_power, specular_weight, f0, bias, u);
-                lamp_add<SHADOWS>(f, f[0].lamps[picks.top[0]], picks.top[0], 0.5, world, n, shading_n, view, specular_power, specular_weight, f0, bias, u_half);
+                float half_share = 0.5 * relief_lamp_scale(picks.top[0]);
+                lamp_add<SHADOWS>(f, f[0].lamps[picks.top[0]], picks.top[0], half_share, world, n, shading_n, view, specular_power, specular_weight, f0, bias, u);
+                lamp_add<SHADOWS>(f, f[0].lamps[picks.top[0]], picks.top[0], half_share, world, n, shading_n, view, specular_power, specular_weight, f0, bias, u_half);
             }
             for (uint j = 1u; j < 3u; j++)
             {
                 if (picks.top[j] < count)
-                    lamp_add<SHADOWS>(f, f[0].lamps[picks.top[j]], picks.top[j], 1.0, world, n, shading_n, view, specular_power, specular_weight, f0, bias, u);
+                    lamp_add<SHADOWS>(f, f[0].lamps[picks.top[j]], picks.top[j], relief_lamp_scale(picks.top[j]), world, n, shading_n, view, specular_power, specular_weight, f0, bias, u);
             }
             if (picks.chosen < count)
-                lamp_add<SHADOWS>(f, f[0].lamps[picks.chosen], picks.chosen, picks.scale, world, n, shading_n, view, specular_power, specular_weight, f0, bias, u);
+                lamp_add<SHADOWS>(f, f[0].lamps[picks.chosen], picks.chosen, picks.scale * relief_lamp_scale(picks.chosen), world, n, shading_n, view, specular_power, specular_weight, f0, bias, u);
         }
         // The street lamps beyond the set, the rest of their light unshadowed (#284); ReSTIR's
         // street lamps are all in the set.
@@ -4643,6 +4655,7 @@ void lamp_add<let SHADOWS : int>(Frame* f, Lamp lamp, uint i, float scale, float
     float3 dir = d / max(dist, 1e-6);
     float ndl = dot(n, dir);
     float radius = lamp.position_radius.w;
+    scale *= surface_micro_shadow(f, n, shading_n, dir, g_surface_ao);
     if (SHADOWS != 0 && f[0].tlas != 0)
     {
         // A point of the sphere's disc facing the surface (a flat piece's rectangle,
@@ -5495,6 +5508,264 @@ float3 decal_filled(float3 n, float3 surface, float3 bend, float fill)
     return decal_bent(fill > 0.0 ? normalize(lerp(n, surface, fill)) : n, bend * (1.0 - fill));
 }
 
+// Relief without geometry (D-107, `parallax.slang`). The row's height map is marched in the resolve,
+// where a pixel's UVs and their gradients are at hand: what reads its maps reads them where the
+// view ray meets the relief, under the gradients of the true surface (those of the moved point
+// would part at every step of the relief). No depth is written and no ray leaves the moved point:
+// the shadow rays, the probes and the mirror rays see the true surface, the relief below it.
+
+// `Frame::options`.
+static const uint OPTION_RELIEF = 16u;    // `r.pom`
+static const uint OPTION_MICRO_BUMP = 4u; // `r.micro.bump`
+static const uint OPTION_AO_MIN = 8u;     // `r.ao.material`: an occlusion map and GTAO by their minimum
+
+// Where a pixel's relief lies, for its lights.
+struct ReliefFrame
+{
+    float3 grad_u;      // the change of the row's first coordinate per metre, in its marching space
+    float3 grad_v;      // and of its second
+    float3 n;           // the surface's normal there
+    float3x3 to_object; // scene directions to that space
+    float2 map_u;       // the first row of what takes those coordinates to the height map's
+    float2 map_v;       // and its second
+    float depth;        // metres from the relief's top to its floor, after its fade
+    float sunk;         // how far down it the view ray met it, 0 to 1
+    float2 hit;         // the height map's coordinates there
+    float margin;       // the least radius of a light's cone, metres (RELIEF_SHADOW_MARGIN)
+    float fade;         // what is left of the relief, 1 to 0
+};
+
+static bool g_relief_on = false;  // whether this pixel's row marched its relief
+static Relief g_relief;
+static ReliefFrame g_relief_frame;
+static uint g_relief_lamp = 0xFFFFFFFFu; // the lamp whose light `g_relief_lamp_share` scales (`relief_main_lamp`)
+static float g_relief_lamp_share = 1.0;
+static float g_surface_ao = 1.0;  // the pixel's occlusion map and relief, for the lamps' micro-shadows (`lamp_add`)
+
+// `ao`, GTAO's (below 0: none computed), joined with a material's own occlusion: their product, or
+// their minimum (`r.ao.material`), which does not darken twice a crevice both see.
+float occlusion_joined(Frame* f, float ao, float occlusion)
+{
+    if (ao < 0.0)
+        return occlusion;
+    return (f[0].options & OPTION_AO_MIN) != 0u ? min(ao, occlusion) : ao * occlusion;
+}
+
+// The occlusion that casts micro-shadows on direct light: a row's `ao`, or none where its relief's
+// own march shadows the same crevices (darkened twice otherwise).
+float micro_occlusion(Frame* f, float ao)
+{
+    return g_relief_on && ((f[0].relief_steps >> 8) & 0xFFu) != 0u ? 1.0 : ao;
+}
+
+// The share of a direct light from `light` a surface keeps of its micro-shadows: `ao`, its
+// occlusion map's and relief's, without GTAO's (which the rays have seen), and the terminator of
+// its mapped normal against its interpolated one. 1, to the bit, with the switches off.
+float surface_micro_shadow(Frame* f, float3 geometric, float3 shading, float3 light, float ao)
+{
+    float share = 1.0;
+    if (f[0].micro_ao > 0.0 && ao < 1.0)
+        share = 1.0 + (micro_shadow(dot(shading, light), ao) - 1.0) * f[0].micro_ao;
+    if ((f[0].options & OPTION_MICRO_BUMP) != 0u)
+        share *= bump_terminator(geometric, shading, light);
+    return share;
+}
+
+// The surface a row's maps are read on: `s` itself, or moved to where the view ray meets its relief
+// (`g_relief_on`, then `g_relief` and `g_relief_frame` hold what its lights need). The row's UVs, or
+// its projection along the axis the surface faces most (a projected row's relief; none through hex
+// tiles, whose cells each lie elsewhere in the map).
+Surface relief_surface(Frame* f, Material mat, Surface s)
+{
+    g_relief_on = false;
+    if ((mat.flags & MATERIAL_FLAG_RELIEF) == 0u || (f[0].options & OPTION_RELIEF) == 0u)
+        return s;
+    bool uv = (mat.flags & MATERIAL_FLAG_UV) != 0u && s.has_uv;
+    if (!uv && (mat.flags & MATERIAL_FLAG_HEX_TILING) != 0u)
+        return s;
+    // A world-projected row marches in the scene's frame, every other in the object's.
+    bool world = !uv && (mat.flags & MATERIAL_FLAG_WORLD_PROJECTED) != 0u;
+    float3x3 to_object = float3x3(1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0);
+    if (!world)
+        to_object = transpose(s.normal_frame);
+    float3 N = world ? s.n : s.object_normal;
+    float3 V = world ? s.view : normalize(mul(to_object, s.view));
+    float ndv = dot(N, V);
+    if (ndv <= 1e-3)
+        return s;
+    float3 grad_u;
+    float3 grad_v;
+    float2 at;
+    float2 gx;
+    float2 gy;
+    float2 map_u = float2(1.0, 0.0);
+    float2 map_v = float2(0.0, 1.0);
+    if (uv)
+    {
+        // The gradients of the mesh's u and v along the surface: Schüler's cotangent frame
+        // (`uv_mapped_light`'s) over its determinant, which a normal map's frame leaves out.
+        float3 dp1 = cross(N, s.dpdx);
+        float3 dp2 = cross(s.dpdy, N);
+        float det = dot(s.dpdx, dp2);
+        if (abs(det) < 1e-24)
+            return s;
+        grad_u = (dp2 * s.duvdx.x + dp1 * s.duvdy.x) / det;
+        grad_v = (dp2 * s.duvdx.y + dp1 * s.duvdy.y) / det;
+        map_u = mat.uv_u.xy;
+        map_v = mat.uv_v.xy;
+        at = float2(dot(mat.uv_u, float3(s.uv, 1.0)), dot(mat.uv_v, float3(s.uv, 1.0)));
+        gx = float2(dot(map_u, s.duvdx), dot(map_v, s.duvdx));
+        gy = float2(dot(map_u, s.duvdy), dot(map_v, s.duvdy));
+    }
+    else
+    {
+        float scale = mat.inv_texture_scale;
+        float3 p = (world ? s.world : s.object_position) * scale;
+        float3 dpx = s.dpdx * scale;
+        float3 dpy = s.dpdy * scale;
+        float3 a = abs(N);
+        if (a.x >= a.y && a.x >= a.z)
+        {
+            at = p.zy;
+            gx = dpx.zy;
+            gy = dpy.zy;
+            grad_u = float3(0.0, 0.0, scale);
+            grad_v = float3(0.0, scale, 0.0);
+        }
+        else if (a.y >= a.z)
+        {
+            at = p.xz;
+            gx = dpx.xz;
+            gy = dpy.xz;
+            grad_u = float3(scale, 0.0, 0.0);
+            grad_v = float3(0.0, 0.0, scale);
+        }
+        else
+        {
+            at = p.xy;
+            gx = dpx.xy;
+            gy = dpy.xy;
+            grad_u = float3(scale, 0.0, 0.0);
+            grad_v = float3(0.0, scale, 0.0);
+        }
+    }
+    uint width;
+    uint height;
+    uint levels;
+    g_sampled_images[NonUniformResourceIndex(mat.height_texture)].GetDimensions(0, width, height, levels);
+    float2 size = float2(float(width), float(height));
+    // The texels under the pixel along its two axes: its minor axis the level the march reads (the
+    // march itself samples along the major one, the view's), their mean what the relief fades by.
+    float tx = length(gx * size);
+    float ty = length(gy * size);
+    float major = log2(max(max(tx, ty), 1e-6));
+    float minor = log2(max(min(tx, ty), 1e-6));
+    float fade = relief_fade(0.5 * (major + minor), f[0].relief_fade);
+    float depth = mat.parallax_depth * f[0].relief_scale * fade;
+    if (depth <= 0.0)
+        return s;
+    float level = clamp(minor, 0.0, float(levels - 1u));
+    float slide = 1.0 / max(ndv, RELIEF_LEAST_COSINE);
+    float2 across = float2(dot(grad_u, V), dot(grad_v, V)) * (-slide * depth);
+    Relief r;
+    r.image = mat.height_texture;
+    r.sampler = uv ? mat.sampler : SAMPLER_ANISOTROPIC_REPEAT;
+    r.at = at;
+    r.across = float2(dot(map_u, across), dot(map_v, across));
+    r.top = mat.parallax_top;
+    r.level = level;
+    // Under a fiftieth of a texel the view's march moves nothing: the height where it stands.
+    float span = length(r.across * size) * exp2(-level);
+    float sunk = span < 0.02 ? 1.0 - relief_height(r, at) : relief_march(r, relief_steps(span, ndv, f[0].relief_steps & 0xFFu));
+    Surface moved = s;
+    float3 along = V * (depth * sunk * slide);
+    if (uv)
+        moved.uv = s.uv + across * sunk;
+    if (world)
+        moved.world = s.world - along;
+    else
+    {
+        moved.object_position = s.object_position - along;
+        moved.world = s.world - mul(s.frame, along);
+    }
+    ReliefFrame relief;
+    relief.grad_u = grad_u;
+    relief.grad_v = grad_v;
+    relief.n = N;
+    relief.to_object = to_object;
+    relief.map_u = map_u;
+    relief.map_v = map_v;
+    relief.depth = depth;
+    relief.sunk = sunk;
+    relief.hit = r.at + r.across * sunk;
+    relief.margin = RELIEF_SHADOW_MARGIN * exp2(level) * min(length(s.dpdx) / max(tx, 1e-6), length(s.dpdy) / max(ty, 1e-6));
+    relief.fade = fade;
+    g_relief = r;
+    g_relief_frame = relief;
+    g_relief_on = true;
+    return moved;
+}
+
+// The share of a light from the scene direction `to_light` that the marched relief lets reach this
+// pixel. `tan_cone`: the light's angular radius. Let go towards the true surface's terminator,
+// whose rays and cosine take the light from there.
+float relief_share(Frame* f, float3 to_light, float tan_cone)
+{
+    if (!g_relief_on)
+        return 1.0;
+    uint steps = (f[0].relief_steps >> 8) & 0xFFu;
+    ReliefFrame relief = g_relief_frame;
+    if (steps == 0u || relief.sunk <= 0.0)
+        return 1.0;
+    float3 L = normalize(mul(relief.to_object, to_light));
+    float ndl = dot(relief.n, L);
+    if (ndl <= 1e-3)
+        return 1.0;
+    float2 up = float2(dot(relief.grad_u, L), dot(relief.grad_v, L)) * (relief.depth / max(ndl, RELIEF_LEAST_COSINE));
+    float2 climb = float2(dot(relief.map_u, up), dot(relief.map_v, up));
+    float share = relief_light_share(g_relief, relief.hit, relief.sunk, climb, ndl, relief.depth, tan_cone, relief.margin, steps);
+    return 1.0 - (1.0 - share) * saturate(ndl / RELIEF_LEAST_COSINE);
+}
+
+// The strongest of a place's lamps at this pixel takes its relief's shadow (`relief_lamp_scale`): a
+// march per lamp, for the one that shows. Nothing without a marched relief.
+void relief_main_lamp(Frame* f, LampPlace place, float3 world, float3 n)
+{
+    g_relief_lamp = 0xFFFFFFFFu;
+    if (!g_relief_on || ((f[0].relief_steps >> 8) & 0xFFu) == 0u)
+        return;
+    uint best = 0xFFFFFFFFu;
+    float best_weight = 0.0;
+    for (uint r = 0u; r < 3u; r++)
+    {
+        for (uint e = place.runs.run[r].x; e < place.runs.run[r].y; e++)
+        {
+            uint i = lamp_at(f, place.runs, e);
+            if (!lamp_counted(f, place.runs, r, i))
+                continue;
+            float w = lamp_weight_in(f[0].lamps[i], world, n, place.region, place.other, place.channels);
+            if (w > best_weight)
+            {
+                best_weight = w;
+                best = i;
+            }
+        }
+    }
+    if (best == 0xFFFFFFFFu)
+        return;
+    Lamp lamp = f[0].lamps[best];
+    float3 to_lamp = lamp.position_radius.xyz - world;
+    float dist = max(length(to_lamp), 1e-3);
+    g_relief_lamp = best;
+    g_relief_lamp_share = relief_share(f, to_lamp / dist, min(lamp.position_radius.w / dist, 1.0));
+}
+
+// What lamp `i` of the frame's set keeps of its relief's shadow.
+float relief_lamp_scale(uint i)
+{
+    return i == g_relief_lamp ? g_relief_lamp_share : 1.0;
+}
+
 // The albedo and the normal a standard row gives the surface: the row's two colours mixed by
 // the instance, its cavity, and its textures projected along the object's axes.
 void standard_surface(Material mat, Surface s, out float3 albedo, out float3 n)
@@ -5640,6 +5911,7 @@ struct LightInputs
     float bumps;        // the share of a light its normal map's bumps keep, in `albedo` (#373)
     float fill;         // how far those decals filled its relief (`decal_fill`), `uv_mapped_light`'s alone
     float laid;         // the share of its roughness its colour decals laid where they made it smoother (#395): 0 where none
+    float material_ao;  // its occlusion map's and relief's occlusion alone, without GTAO: what casts micro-shadows (D-107); 1 without
 };
 
 // A debug view of a standard row's shading input (D-086, `r.show.input`): 1 the diffuse albedo,
@@ -5699,10 +5971,11 @@ LightInputs uv_mapped_light(Frame* f, Material mat, Surface s)
         metal *= mr.b;
     }
     float ao = s.ao;
+    float material_ao = 1.0;
     if (!levels && mat.occlusion_texture != TEXTURE_NONE)
     {
-        float occlusion = 1.0 + mat.occlusion_strength * (sample_image_grad(mat.occlusion_texture, mat.sampler, uv, gx, gy).r - 1.0);
-        ao = ao >= 0.0 ? ao * occlusion : occlusion;
+        material_ao = 1.0 + mat.occlusion_strength * (sample_image_grad(mat.occlusion_texture, mat.sampler, uv, gx, gy).r - 1.0);
+        ao = occlusion_joined(f, ao, material_ao);
     }
     float3 emissive = emission(f, mat);
     if (mat.emissive_texture != TEXTURE_NONE)
@@ -5769,6 +6042,7 @@ LightInputs uv_mapped_light(Frame* f, Material mat, Surface s)
     li.bumps = bumps;
     li.laid = laid;
     li.fill = fill;
+    li.material_ao = material_ao;
     return li;
 }
 
@@ -5890,6 +6164,7 @@ LightInputs multilayer_light(Frame* f, Material mat, Surface s)
         li.variance = lerp(li.variance, l.variance, w);
         li.bumps = lerp(li.bumps, l.bumps, w);
         li.laid = lerp(li.laid, l.laid, w);
+        li.material_ao = lerp(li.material_ao, l.material_ao, w);
     }
     return li;
 }
@@ -6111,6 +6386,7 @@ StandardInputs row_inputs(Material mat, Surface s)
     si.li.variance = 0.0;
     si.li.bumps = 1.0;
     si.li.laid = 0.0;
+    si.li.material_ao = 1.0;
     si.n = s.n;
     si.uv = false;
     si.interior = false;
@@ -6137,13 +6413,17 @@ StandardInputs standard_inputs(Frame* f, Material mat, Surface s)
     li.variance = 0.0;
     li.bumps = 1.0;
     li.laid = 0.0;
+    li.material_ao = 1.0;
     bool uv = false;
     bool interior = false;
     if (!debug_albedo(f, s.meshlet_index, s.lod_level, albedo))
     {
+        // Where the view ray meets the row's relief (D-107): what reads the row's maps reads them
+        // there, and the light stays on the true surface (`s`).
+        Surface relieved = relief_surface(f, mat, s);
         if ((mat.flags & MATERIAL_FLAG_UV) != 0 && s.has_uv)
         {
-            li = (mat.flags & MATERIAL_FLAG_MULTILAYER) != 0u ? multilayer_light(f, mat, s) : uv_mapped_light(f, mat, s);
+            li = (mat.flags & MATERIAL_FLAG_MULTILAYER) != 0u ? multilayer_light(f, mat, relieved) : uv_mapped_light(f, mat, relieved);
             uv = true;
         }
         else if ((mat.flags & MATERIAL_FLAG_INTERIOR) != 0)
@@ -6157,16 +6437,23 @@ StandardInputs standard_inputs(Frame* f, Material mat, Surface s)
         }
         else
         {
-            standard_surface(mat, s, albedo, n);
+            standard_surface(mat, relieved, albedo, n);
             float3 decal_bend = float3(0.0);
             float2 decal_rough = float2(0.0, 1.0);
-            apply_colour_decals(f, s, albedo, decal_bend, decal_rough);
+            apply_colour_decals(f, relieved, albedo, decal_bend, decal_rough);
             li.albedo = albedo;
             float undecaled = li.power;
             li.n = decal_filled(n, s.n, decal_bend, decal_power_fill(undecaled, decal_rough));
             li.power = decal_power(li.power, decal_rough);
             li.laid = li.power > undecaled ? 1.0 - decal_rough.y : 0.0;
             li.emissive = emission(f, mat);
+        }
+        // Its floor sees less of the sky than its top: as an occlusion map's, under the row's own.
+        if (g_relief_on && mat.parallax_cavity > 0.0)
+        {
+            float cavity = 1.0 - mat.parallax_cavity * g_relief_frame.sunk * g_relief_frame.fade;
+            li.ao = occlusion_joined(f, li.ao, cavity);
+            li.material_ao = min(li.material_ao, cavity);
         }
     }
     else
@@ -6191,7 +6478,14 @@ float3 standard_light(Frame* f, Material mat, Surface s, StandardInputs si)
     // A thin surface's side turned from the sun takes it only through the surface: its shadow is the sun's
     // from the far side, and a bump tilted sunward would catch it whole, in specks (`sun_shadow`).
     bool averted = sun_through_thin(mat) && dot(s.n, f[0].sun_dir) <= 0.0;
-    float3 lit = sun_light(f, li.albedo, li.n, s.n, li.power, li.specular, averted ? s.shadow * 0.0 : s.shadow, s.sky, li.ao, s.view, li.reflectance, s.world, s.probes, s.traced, ndl) + li.emissive;
+    float3 sunlit = averted ? s.shadow * 0.0 : s.shadow;
+    // What the true surface's rays cannot see (D-107): its relief's own shadow along the sun, and
+    // the micro-shadows of its occlusion and normal maps. As it was, to the bit, without them.
+    float3 towards_sun = normalize(f[0].sun_dir);
+    if (g_relief_on && any(sunlit > 0.0))
+        sunlit *= relief_share(f, towards_sun, f[0].sun_angular_radius);
+    sunlit *= surface_micro_shadow(f, s.n, li.n, towards_sun, micro_occlusion(f, li.material_ao));
+    float3 lit = sun_light(f, li.albedo, li.n, s.n, li.power, li.specular, sunlit, s.sky, li.ao, s.view, li.reflectance, s.world, s.probes, s.traced, ndl) + li.emissive;
     if (si.uv && takes_sun_through(mat))
         lit += leaf_transmission(f, li.albedo, mat.scatter, s);
     // A reflection cube's face takes the pane alone: the room behind is lit by the daylight times
@@ -8797,6 +9091,7 @@ uint shade_pixel<let SHADOWS : int>(uint class_index, uint2 pixel, uint vis)
     // normal, lobe and reflectance, where they took the row's factors (on a mapped row roughness
     // 1: the Bistro's scooter matte under its lamps). The other classes, their rows' factors.
     StandardInputs si = class_index == MATERIAL_CLASS_STANDARD ? standard_inputs(f, mat, s) : row_inputs(mat, s);
+    g_surface_ao = micro_occlusion(f, si.li.material_ao);
     // A standard pixel its colour decals smoothed into the mirror rays' reach (a puddle on rough
     // ground, #395) traces one too, at its own roughness, which the request's lower half carries
     // to `reflections_main` (0 there: the row's). By its row alone it took the probes' dimmed sky.

@@ -358,6 +358,26 @@ pub struct RenderLayer {
     pub planet_layers: bool,
     /// Standard with `uv`: a layered material, its layers rows after it ([`Multilayer`], D-095).
     pub multilayer: Option<Multilayer>,
+    /// Standard: relief marched in the resolve from a height map ([`Parallax`], D-107).
+    pub parallax: Option<Parallax>,
+}
+
+/// Relief inside a surface, without geometry (D-107): a standard row's height map, read at the row's
+/// own UVs or along its projection (not through hex tiles), marched along the view in the resolve.
+/// The mesh is the relief's top: nothing rises out of it, so the silhouette and the depth stay the
+/// mesh's. Rays see the mesh alone.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Parallax {
+    /// The height map: red 1 high, 0 at the relief's floor (linear).
+    pub texture: TextureId,
+    /// Metres of the object's space from the relief's top to its floor.
+    pub depth: f32,
+    /// The map's value that lies on the mesh's surface (over 0): a map that never reaches 1, as a
+    /// scan's displacement seldom does, sets where its peaks stand.
+    pub top: f32,
+    /// How much of the sky's and the probes' light its floor loses, 0 to 1, where the row has no
+    /// occlusion map of its own to say so.
+    pub cavity: f32,
 }
 
 /// A layer of a [`ShadingClass::Layered`] row drawn by the ground's height under each pixel: the
@@ -444,6 +464,7 @@ impl Default for RenderLayer {
             underside: 0.0,
             planet_layers: false,
             multilayer: None,
+            parallax: None,
         }
     }
 }

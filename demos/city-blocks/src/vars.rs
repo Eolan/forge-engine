@@ -27,6 +27,14 @@ pub(crate) struct RenderVars {
     local: Var<usize>,
     ao: Var<bool>,
     ao_radius: Var<f64>,
+    pom: Var<bool>,
+    pom_steps: Var<i64>,
+    pom_shadow_steps: Var<i64>,
+    pom_fade: Var<f64>,
+    pom_scale: Var<f64>,
+    micro_ao: Var<f64>,
+    micro_bump: Var<bool>,
+    ao_material: Var<usize>,
     texture_lod_bias: Var<f64>,
     show_input: Var<i64>,
     show_probes: Var<i64>,
@@ -348,6 +356,16 @@ impl Gallery {
                 true,
                 self.renderer.decal_mirrors,
             ),
+            pom: s.add(rs::pom(self.renderer.relief.enabled)),
+            pom_steps: s.add(rs::pom_steps(i64::from(self.renderer.relief.steps))),
+            pom_shadow_steps: s.add(rs::pom_shadow_steps(i64::from(
+                self.renderer.relief.shadow_steps,
+            ))),
+            pom_fade: s.add(rs::pom_fade(f64::from(self.renderer.relief.fade))),
+            pom_scale: s.add(rs::pom_scale(f64::from(self.renderer.relief.scale))),
+            micro_ao: s.add(rs::micro_ao(f64::from(self.renderer.relief.micro_ao))),
+            micro_bump: s.add(rs::micro_bump(self.renderer.relief.micro_bump)),
+            ao_material: s.add(rs::ao_material(usize::from(self.renderer.relief.ao_min))),
             bits,
             denoiser,
             shadow_history: (!self.sun_shadows.is_empty()).then(|| {
@@ -743,6 +761,16 @@ impl Gallery {
         if changed(v.decal_reflections) {
             self.renderer.decal_mirrors = s.get(v.decal_reflections);
         }
+        self.renderer.relief = forge_render::parallax::ReliefSettings {
+            enabled: s.get(v.pom),
+            steps: s.get(v.pom_steps) as u32,
+            shadow_steps: s.get(v.pom_shadow_steps) as u32,
+            fade: s.get(v.pom_fade) as f32,
+            scale: s.get(v.pom_scale) as f32,
+            micro_ao: s.get(v.micro_ao) as f32,
+            micro_bump: s.get(v.micro_bump),
+            ao_min: s.get(v.ao_material) == 1,
+        };
         if changed(v.sky_light) {
             self.sky_light = s.get(v.sky_light);
         }

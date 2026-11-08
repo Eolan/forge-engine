@@ -828,6 +828,14 @@ struct GpuFrame {
     /// the rings from elsewhere.
     ring_offset: [f32; 3],
     ring_offset_pad: u32,
+    /// Relief (D-107): the view's march at most (low byte) and each light's (the next).
+    relief_steps: u32,
+    /// The level of detail it starts to fade at.
+    relief_fade: f32,
+    /// Every row's relief depth times this.
+    relief_scale: f32,
+    /// How much of its micro-shadow an occlusion map casts on direct light.
+    micro_ao: f32,
 }
 
 /// `options`: the smooth rows' reflections come from the screen (`OPTION_SCREEN_REFLECTIONS`).
@@ -5354,6 +5362,8 @@ pub struct MeshletRenderer {
     /// roughness map (the others draw as before, to the bit); off, it takes the probes' dimmed sky
     /// as before.
     pub decal_mirrors: bool,
+    /// Relief marched from the rows' height maps, and the micro-shadows (D-107).
+    pub relief: crate::parallax::ReliefSettings,
 }
 
 /// What to draw this frame.
@@ -5982,6 +5992,7 @@ impl MeshletRenderer {
             gi_reference: 0,
             gi_trace: false,
             decal_mirrors: true,
+            relief: crate::parallax::ReliefSettings::default(),
         })
     }
 
@@ -6487,6 +6498,10 @@ impl MeshletRenderer {
             sun_illuminance: self.sun_illuminance,
             ray_glow: self.ray_glow,
             hollow_backs: u32::from(scene.hollow_backs),
+            relief_steps: self.relief.step_word(),
+            relief_fade: self.relief.fade,
+            relief_scale: self.relief.scale,
+            micro_ao: self.relief.micro_ao,
             sun_angular_radius: self.sun_angular_radius,
             clusters: scene.clusters[slot.index].address(),
             draws: 0,
@@ -6541,7 +6556,8 @@ impl MeshletRenderer {
                     OPTION_SCREEN_GI
                 } else {
                     0
-                },
+                }
+                | self.relief.option_bits(),
             ground_window: scene.ground_window.get(),
             planet: scene.planet.get().camera,
             planet_axis: scene.planet.get().axis,

@@ -21,6 +21,7 @@ const IMPOSTOR_BAKE: &[&str] = &[
     "shaders/impostor_layout.slang",
     "shaders/meshlet.slang",
     "shaders/meshlet_bake.slang",
+    "shaders/parallax.slang",
 ];
 
 /// FNV-1a, 64 bits, over the text with its line endings made `\n` (a checkout's CRLF must not
