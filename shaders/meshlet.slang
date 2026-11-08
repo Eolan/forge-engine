@@ -487,7 +487,8 @@ public struct GrassCell
 
 // An instance's fade (D-106, mirrors `GpuInstanceFade`): for each side the way from its bounding
 // sphere's centre to the point the distance is measured from (xyz) and the distance at which the
-// crossing is half done (w, 0: no such side), then each side's width.
+// crossing is half done (w, 0: no such side), then each side's width. A negative width: that side
+// goes by each pixel's own distance from the camera (`pixel_distance`), xyz unused.
 public struct InstanceFade
 {
     public float4 comes;
@@ -1505,17 +1506,50 @@ bool ladder_crossing_now(Frame* f, uint instance, Instance inst)
 // double, and one whose own two bands overlap keeps only what both allow.
 static const float FADE_WHOLE = 1023.0;
 
+// How far one side of a fade has come `dist` metres out: 1 inside its band, 0 outside.
+float fade_share(float half_done, float band, float dist)
+{
+    return saturate((half_done + 0.5 * band - dist) / band);
+}
+
 float instance_fade(Frame* f, Instance inst, uint instance)
 {
     InstanceFade fade = f[0].fades[instance];
     float3 centre = instance_center_relative(f, inst);
+    // A side by the pixel: `cutout_kept` has each pixel's share, and here the instance needs only
+    // what its nearest and farthest points allow: whether any pixel stays, and whether all do.
+    float nearest = max(length(centre) - inst.radius, 0.0);
+    float farthest = length(centre) + inst.radius;
+    bool in_part = false;
     float comes = 1.0;
     if (fade.comes.w > 0.0)
-        comes = saturate((fade.comes.w + 0.5 * fade.comes_band - length(centre + fade.comes.xyz)) / fade.comes_band);
+    {
+        if (fade.comes_band < 0.0)
+        {
+            comes = fade_share(fade.comes.w, -fade.comes_band, nearest);
+            in_part = in_part || fade_share(fade.comes.w, -fade.comes_band, farthest) < 1.0;
+        }
+        else
+            comes = fade_share(fade.comes.w, fade.comes_band, length(centre + fade.comes.xyz));
+    }
     float goes = 0.0;
     if (fade.goes.w > 0.0)
-        goes = saturate((fade.goes.w + 0.5 * fade.goes_band - length(centre + fade.goes.xyz)) / fade.goes_band);
-    return 1024.0 * round(goes * 1023.0) + round(comes * 1023.0);
+    {
+        if (fade.goes_band < 0.0)
+        {
+            goes = fade_share(fade.goes.w, -fade.goes_band, farthest);
+            in_part = in_part || fade_share(fade.goes.w, -fade.goes_band, nearest) > 0.0;
+        }
+        else
+            goes = fade_share(fade.goes.w, fade.goes_band, length(centre + fade.goes.xyz));
+    }
+    float come = round(comes * 1023.0);
+    float gone = round(goes * 1023.0);
+    // Some of its pixels go though both ends read whole: a value that isn't whole takes the
+    // cut-outs, and past 1023 no noise reaches it, so a side not by the pixel still keeps them all.
+    if (in_part && come == FADE_WHOLE && gone == 0.0)
+        come = FADE_WHOLE + 0.5;
+    return 1024.0 * gone + come;
 }
 
 float fade_goes(float value)
@@ -3723,14 +3757,25 @@ GrassHit grass_hit(Frame* f, uint vis, uint2 pixel, float2 size)
 // The cut-outs' alpha test's mip bias (`cutout_kept`): one level finer than the colour's.
 static const float CUTOUT_MIP_BIAS = -1.0;
 
+// How far from the camera the fragment at `position` (`SV_Position`: pixels, and the reversed-Z
+// depth, znear over the view depth) lies, metres.
+float pixel_distance(Frame* f, float4 position)
+{
+    float view_depth = f[0].znear / max(position.z, 1e-7);
+    float2 ndc = position.xy / float2(f[0].target_width, f[0].target_height) * 2.0 - 1.0;
+    float2 aside = ndc / float2(f[0].p00, f[0].p11);
+    return view_depth * sqrt(1.0 + dot(aside, aside));
+}
+
 // Whether a fragment of the cut-outs' raster stays (#171): a single-sided row's back faces go
 // (the cut-outs' pipeline culls no face), and a cut-out row's pixels whose base colour alpha,
 // the factor's times its map's at the pixel's UV, falls under its cutoff; and the windowed
 // ground's in the ground window, at `ground` in its mesh's frame (#197). A grating's pixels by
 // the share its bars cover (`grating_coverage`) against the frame's spatio-temporal noise at
 // `pixel`, `duv_dx` and `duv_dy` the UV's change per pixel and `slant` the view's (`card_slant`).
-bool cutout_kept(Frame* f, uint id, float2 uv, bool front, float2 ground, float2 duv_dx, float2 duv_dy, float slant, uint2 pixel)
+bool cutout_kept(Frame* f, uint id, float2 uv, bool front, float2 ground, float2 duv_dx, float2 duv_dy, float slant, float4 position)
 {
+    uint2 pixel = uint2(position.xy);
     uint slot = id >> VISIBILITY_TRIANGLE_BITS;
     uint2 record = f[0].visible[slot];
     Meshlet m = f[0].meshlets[record.y & MESHLET_INDEX_MASK];
@@ -3745,7 +3790,18 @@ bool cutout_kept(Frame* f, uint id, float2 uv, bool front, float2 ground, float2
     {
         float value = f[0].ladder[record.x];
         float noise = spatio_temporal_noise(pixel, f[0].noise_frame).x * FADE_WHOLE;
-        if (noise < fade_goes(value) || noise >= fade_comes(value))
+        float goes = fade_goes(value);
+        float comes = fade_comes(value);
+        InstanceFade fade = f[0].fades[record.x];
+        if (fade.comes_band < 0.0 || fade.goes_band < 0.0)
+        {
+            float dist = pixel_distance(f, position);
+            if (fade.comes_band < 0.0)
+                comes = round(fade_share(fade.comes.w, -fade.comes_band, dist) * FADE_WHOLE);
+            if (fade.goes_band < 0.0)
+                goes = round(fade_share(fade.goes.w, -fade.goes_band, dist) * FADE_WHOLE);
+        }
+        if (noise < goes || noise >= comes)
             return false;
     }
     else if (ladder_crossing_now(f, record.x, inst))
@@ -3808,7 +3864,7 @@ uint frag_cutout_main(float4 position : SV_Position, float2 uv : TEXCOORD0, floa
 {
     float2 dx = ddx(uv);
     float2 dy = ddy(uv);
-    if (!cutout_kept(push.frame, id, uv, front, ground, dx, dy, slant, uint2(position.xy)))
+    if (!cutout_kept(push.frame, id, uv, front, ground, dx, dy, slant, position))
         discard;
     return id;
 }
@@ -3819,7 +3875,7 @@ uint frag_fallback_cutout_main(float4 position : SV_Position, nointerpolation ui
     uint id = id_base | triangle;
     float2 dx = ddx(uv);
     float2 dy = ddy(uv);
-    if (!cutout_kept(push.frame, id, uv, front, ground, dx, dy, slant, uint2(position.xy)))
+    if (!cutout_kept(push.frame, id, uv, front, ground, dx, dy, slant, position))
         discard;
     return id;
 }

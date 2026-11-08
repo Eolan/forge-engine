@@ -60,8 +60,10 @@ pub struct DynamicCapacity {
 /// the crossing is half done with the camera `distance` metres away, across `band` metres.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct InstanceFadeEdge {
-    /// The point the distance is measured from.
-    pub centre: CellPos,
+    /// The point the distance is measured from. `None`: each pixel's own distance from the
+    /// camera, so that one instance can stand on both sides, and two that swap at the same
+    /// distance meet in one clean ring however their pieces are cut.
+    pub centre: Option<CellPos>,
     /// How far from it the crossing is half done, metres.
     pub distance: f32,
     /// How wide the crossing is, metres.
@@ -69,7 +71,8 @@ pub struct InstanceFadeEdge {
 }
 
 /// `InstanceFade` in the shader: per side the way from the instance's bounding sphere's centre to
-/// the point measured from, and the distance (0: no such side), then the two bands.
+/// the point measured from, and the distance (0: no such side), then the two bands, negative for
+/// a side measured at each pixel.
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
 struct GpuInstanceFade {
@@ -824,9 +827,12 @@ impl SceneEditor {
             local: Vec3::from(record.center),
         };
         let side = |edge: Option<InstanceFadeEdge>| {
-            edge.map_or(([0.0; 4], 0.0), |e| {
-                let to = e.centre.relative_to(centre);
-                ([to.x, to.y, to.z, e.distance.max(1e-3)], e.band.max(1e-3))
+            edge.map_or(([0.0; 4], 0.0), |e| match e.centre {
+                Some(point) => {
+                    let to = point.relative_to(centre);
+                    ([to.x, to.y, to.z, e.distance.max(1e-3)], e.band.max(1e-3))
+                }
+                None => ([0.0, 0.0, 0.0, e.distance.max(1e-3)], -e.band.max(1e-3)),
             })
         };
         let going = goes.is_some();

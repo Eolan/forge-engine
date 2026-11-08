@@ -12563,6 +12563,22 @@ between (dec2b714), so it is not a clean 0 px.
 Known limits: after a jump across the map, a stand-in dissolves before its members' cell is in, a moment of nothing until the worker's next edit. A group
 spread wide now comes in earlier than its members' own ranges, at some cost in meshes.
 
+**Amended 2026-11-08: a fade side can go by the pixel, for what the data doesn't group (the owner: low and high resolution side by side at one distance).**
+In the private district almost no road stand-in names the road pieces it replaces, so each piece and each stand-in crossed at its own point: a road's
+base in while the pieces carrying its markings were out, and a road's two versions in patches.
+- **What:** `InstanceFadeEdge::centre` is an `Option`; `None` measures that side at each pixel's own distance from the camera (`pixel_distance`, from the
+  reversed-Z depth; stored as a negative band). The instance cull needs only what the bounding sphere's nearest and farthest points allow: whether any
+  pixel stays and whether all do, and an instance part way across takes the cut-out raster as a dissolve does. A road's two versions then meet in one ring round the
+  camera, however they are cut.
+- **The stand-in's ring is half a band nearer,** so that a pixel where the two surfaces lie apart along the ray keeps one or both, never neither; it stands a little
+  lower, so where both stay the road shows.
+- **Rays are not dithered, again:** a stand-in inside the ring is still in the scene, undrawn, and as a shadow caster it left the real road under it black. On the ring
+  it leaves the shadow rays altogether.
+- **What takes the ring is the data's to say:** only stand-ins whose pieces reach the ring; one that comes earlier stands for pieces that end earlier, and inside the
+  ring it would leave nothing. The first two tries opened holes that way.
+- **Measured** along the walk at 2560 x 1440, DLSS Quality, private district: the ring at 281 m against 450 m, frame time p50 20.5 ms both, p99 27.1 against 28.3 ms,
+  geometry 6,606 against 7,239 MiB, video memory 89.7 against 91.8 %. At 1,000 m the walk ran out of video memory (108 %).
+
 **Costs and risks:**
 
 - **Pops:** the swap is a hard cut until step 5, and the owner sees those at once.
