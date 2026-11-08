@@ -12653,9 +12653,10 @@ code, its own check against the traced reference, and its own branch.
   the cut-outs' raster.
 - **Depth range:** the camera depth's minimum and maximum, from the previous frame's pyramid with no
   readback, quantised so the rings do not swim.
-- **Filter and bias:** PCF over a disc, its rotation per pixel as `sun_disc_point`'s, the upscaler
-  averaging it; blended across ring borders with the kernel constant in world space; normal offset and
-  a receiver-plane bias at sampling. Contact-hardening edges later.
+- **Filter and bias:** PCSS: a blocker search, then PCF over a disc as wide as the sun's angular size
+  and the blocker's distance ask, its rotation per pixel as `sun_disc_point`'s, the upscaler averaging
+  it; blended across ring borders; normal offset and a receiver-plane bias at sampling. The blocker
+  search's cost is not in the estimate below.
 - **In the resolve:** the rings fill `s.shadow` where the rays do now, in the entries without rays and
   behind `r.shadows.mode` (rays, rings) on a card with them, so both can be compared on one machine.
 - **Why not virtual shadow maps first:** the one open measurement (0.39 ms cached, 2.37 ms uncached, an
@@ -12665,8 +12666,8 @@ code, its own check against the traced reference, and its own branch.
 
 **Step 2, contact and lamps.** A contact march of a few steps in screen space along the sun and the
 strongest lamp, written here. The lamps: an atlas in `D32_SFLOAT` with slots sized by each lamp's
-screen size, static casters cached and movers over a copy, a budget of slots a frame, PCF, and the
-present penumbra filter kept for its denoising where it fits.
+screen size, static casters cached and movers over a copy, a budget of slots a frame, PCSS from each
+lamp's radius, and the present penumbra filter kept for its denoising where it fits.
 
 **Step 3, reflections.** Screen-space tracing on the depth pyramid after the resolve, with
 FidelityFX's SSSR (MIT) as the starting point and a fade at the screen's edges and on back faces.
