@@ -39,9 +39,22 @@ const STEADY_STOPS: (f32, f32) = (-4.0, 0.0);
 const FOLLOW_RANGE: (f32, f32) = (-6.0, 8.0);
 
 /// Stops a frame the pre-exposure eases back to the steady one once it has followed the
-/// exposure (`FORGE_DLSS_EXPOSURE_EASE` overrides it): DLSS's history is off by this much a
-/// frame, against the whole adaptation's step before (0.06 stops a frame through a window).
+/// exposure (`FORGE_DLSS_EXPOSURE_EASE` overrides it, 0 keeps the following whole): DLSS's history
+/// is off by this much a frame, against the whole adaptation's step before (0.06 stops a frame
+/// through a window).
 const EASE_STOPS: f32 = 0.004;
+
+/// Stops of following above which DLSS is handed the scene too dim: a falling scene's following
+/// (the exposure rising, a dark room) stays under about this. At 8 stops in a dark bar, DLSS kept
+/// long fans of echoes behind everything that moved, for the 40 s the slow ease takes (the owner,
+/// 2026-11-08). The other way, the colour is only brighter than shown, and the window of #354 keeps
+/// its slow ease.
+const DIM_STOPS: f32 = 0.5;
+
+/// Stops a frame the following eases back above [`DIM_STOPS`], which holds it there unless the
+/// exposure climbs faster than this. Only a rise of many stops does, at a long frame time: 8 stops
+/// up at a 30 Hz step (2.6 % of the way a frame) overshoot to under 2 stops, and come back as fast.
+const DIM_EASE: f32 = 0.1;
 
 /// A change of exposure over this many stops in one frame is a new start (the first frames'
 /// jump to the metered exposure), not an adaptation to follow.
@@ -108,6 +121,11 @@ fn next_follow(follow: f32, last: f32, stops: f32, ease: f32) -> f32 {
     // What the clamp hid of the change: the exposure's move less the steady value's.
     let hidden = (stops - last) - (after - before);
     let f = (follow + hidden).clamp(FOLLOW_RANGE.0 - after, FOLLOW_RANGE.1 - after);
+    // Down to the limit and no further: dropped under it, the slow ease would let a rise climb
+    // over it again, and the pre-exposure would flutter by a few percent.
+    if ease > 0.0 && f > DIM_STOPS {
+        return (f - ease.max(DIM_EASE)).max(DIM_STOPS);
+    }
     if f.abs() <= ease {
         0.0
     } else {
@@ -326,6 +344,42 @@ mod tests {
         }
         assert_eq!(follow, 0.0);
         assert_eq!(pre_exposure(2f32.powf(last), follow), 1.0);
+    }
+
+    /// Into the dark the exposure rises for seconds: DLSS is handed the scene no dimmer than the
+    /// limit (the echoes in a dark bar), and steadily: up to the limit, then on it, no flutter.
+    #[test]
+    fn an_exposure_rising_past_the_clamp_stays_near_what_is_shown() {
+        let (mut follow, mut last) = (0.0, 3.0_f32);
+        for frame in 0..240 {
+            let stops = last + 0.06;
+            let next = next_follow(follow, last, stops, EASE_STOPS);
+            assert!(next <= DIM_STOPS, "frame {frame}: {next}");
+            assert!(next >= follow, "frame {frame}: {follow} to {next}");
+            (follow, last) = (next, stops);
+        }
+        assert_eq!(follow, DIM_STOPS);
+    }
+
+    /// A long frame time and a rise of many stops outrun the ease for a moment: the following stays
+    /// under 2 stops, and is back at the limit once the exposure slows.
+    #[test]
+    fn a_rise_faster_than_the_ease_overshoots_briefly() {
+        let (mut follow, mut last, mut most) = (0.0, 3.0_f32, 0.0_f32);
+        for _ in 0..600 {
+            let stops = last + (11.0 - last) * 0.026;
+            follow = next_follow(follow, last, stops, EASE_STOPS);
+            last = stops;
+            most = most.max(follow);
+        }
+        assert!(most > DIM_STOPS && most < 2.0, "{most}");
+        assert!(follow <= DIM_STOPS, "{follow}");
+    }
+
+    /// An ease of 0 (`FORGE_DLSS_EXPOSURE_EASE=0`, to compare) keeps the following whole, up too.
+    #[test]
+    fn an_ease_of_zero_keeps_the_following() {
+        assert_eq!(next_follow(3.0, 4.0, 4.0, 0.0), 3.0);
     }
 
     /// Settled, a scene exposed under the reference reaches DLSS as it is shown, not dimmer (the

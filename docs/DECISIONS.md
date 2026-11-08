@@ -7012,6 +7012,20 @@ EV 15; the ceiling was +4).
 - **Images:** every DLSS capture exposed under EV 15 moves a little, since DLSS sees a brighter
   input.
 
+**Amended again 2026-11-08 (the owner: "very strong and long trails", in the first seconds of the bar's path):** the same cause
+while the exposure adapts. The first amendment covered a settled scene only. Going into the dark, the exposure rises past the
+steady clamp and the following added for #354 took all of it, up to 8 stops: DLSS got the frame up to 256 times dimmer than shown,
+and the slow ease back (0.004 stops a frame) kept it so for about 40 s. Every near object left a long fan of echoes behind it.
+- **What changes:** above 0.5 stops of positive following, it eases back at 0.1 stops a frame and stops at 0.5, so DLSS is
+  handed the scene 1.4 times dimmer than shown at most, while the exposure climbs under 0.1 stops a frame. Only a rise of many stops at a long
+  frame time climbs faster: 8 stops at a 30 Hz step overshoot to under 2 stops, and come back as fast. Negative following (the exposure falling, #354's window) is
+  unchanged, as is everything once settled.
+- **How it was found:** at a 60 Hz fixed step a near object moves too little between frames to show it. At a 30 Hz step (`--step-hz
+  30`, the first seconds of a real run are near 35 ms a frame) the same frame carries a fan of copies; `FORGE_DLSS_EXPOSURE_EASE`
+  large removes it. Lighting, fog, reflections, texture streaming, the cross-fade and the DLSS model were each ruled out before.
+- **The price, to watch:** going into the dark, DLSS doesn't see most of the rise, as before #354, in a lit room left for a night street too (6
+  stops up, not tried). One frame at the bar's doors at the 30 Hz step shows no cross-hatch; the owner's eye is the real check, and the 5,000-frame walk's times are unchanged (p50 20.7 ms, p99 26.4 ms).
+
 **Next:** FSR 4, once there is an RDNA 4 card to test on and its SDK has a Vulkan path.
 
 ## D-071 — The day check and the night's full batch ✅ (2026-10-18, #286, the owner's choice)
