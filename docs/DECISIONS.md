@@ -12457,21 +12457,44 @@ ranges want lengthening by what memory allows once D-105 frees it. At full textu
 Open from these runs: from the five high views the streamed area's shadows are darker than the resident district's, 0.7 to 1.6 stops in the
 shaded tenth of the picture, 0.2 or less at the two street-level views. The geometry is there; the cause is not yet known.
 
-**Step 5's design, proposed (2026-11-08), not built.**
+**Step 5, built (2026-11-08), waiting for the owner's walk.**
 
-- **What:** a piece dissolves across a band of distance instead of cutting. A stand-in and its group's pieces share one crossing value and
-  complementary noise, so each pixel keeps one or the other: no hole, no double. It is D-075's dithered ladder crossing with a distance in
-  place of a size on screen, the frames' noise averaged by the anti-aliasing's history; no new technique to clear.
-- **Measured each frame in the instance cull,** from the viewer to the group's reference, so the crossing follows the camera exactly and the
-  worker's timing does not show. A side table per instance slot holds the reference, the swap distance, the band and the direction: about
-  7 MiB for 300,000 slots.
-- **The worker keeps both present across the band:** `RangedSet` shows a piece out to its far plus the band, and a stand-in leaves only past
-  the inner edge.
-- **The band:** 10 % of the swap distance, between 8 and 40 m. Counted over the table at five cameras, against each piece's own range,
-  about 4,900 to 11,500 of the 29,000 to 73,000 pieces shown are mid-fade at once (5 %: 2,700 to 5,800). Those go through the cut-out raster,
-  whose cost here is to be measured; pieces too small on screen at their swap to see can keep the hard cut.
-- **Rays are not dithered in the first version:** both sides stay in the structure during the band.
-- **Checked** with the pop hunt's frame differences (#363) at swaps along the walk and the 40 m/s tour, then by the owner's walk.
+- **What:** a piece dissolves across a band of distance instead of cutting. A stand-in and its group's pieces share one crossing and the same
+  noise, so each pixel keeps one or the other: no hole, no double. It is D-075's dithered ladder crossing with a distance in place of a size on
+  screen, the frames' noise averaged by the anti-aliasing's history; no new technique to clear.
+- **Measured each frame in the instance cull,** from the viewer to the crossing's point, so it follows the camera exactly. A table per instance
+  slot (`SceneEditor::set_instance_fade`, 48 bytes, 14 MiB for 300,000 slots) holds each side's point, distance and band. A piece mid-fade takes the
+  cut-out raster; the value is written where a ladder's crossing is, as how far it has come and how far it has gone.
+- **`RangedSet` resolves each piece once into the crossing it comes at and, for a stand-in, the one it goes at.** A group shares one, round the middle
+  of its members' references and as far as the farthest member reaches, which replaces the test of which members are in range: a coarser group's
+  stand-ins then come together, and a coarser crossing is kept at least as far as its members' own.
+- **The pieces are in before their band:** the worker brings a piece 8 m ahead of the band's outer edge, and takes a stand-in out 8 m past its inner
+  edge, undrawn there, so the shader's crossing never runs ahead of the worker's edit (the batch's review: measured from the camera alone, the first
+  pixels of a dissolve had nothing behind them).
+- **The band:** 10 % of the swap distance, between 8 and 40 m, and never wider than the distance, so that a piece with a very short range is still whole
+  at its point.
+- **Rays are not dithered:** both sides stay in the structure during the band.
+
+Measured along the walk at 2560 x 1440 under DLSS Quality, textures a level down, against the same build with hard cuts:
+
+| | Hard cuts | Fade |
+|---|---|---|
+| GPU per frame | 18.88 ms | 18.99 ms |
+| Frame time p50 / p99 | 18.92 / 23.79 ms | 19.00 / 23.77 ms |
+| Video memory | 11,518 MiB | 11,828 MiB |
+| Meshes held, most | 7,032 | 7,543 |
+| Worker per edit p50 / p99 | 1.6 / 4.0 ms | 1.8 / 4.4 ms |
+
+The pop hunt's score (#363) could not tell the two apart: its strongest pops are near objects sweeping past, the same in both runs. The frames of the two
+runs differ in small patches only, 12 to 80 of 3,600 tiles by 2 levels or more, round the pieces mid-swap. Whether the swaps are now invisible is the
+owner's to say: that walk is the check.
+
+The resident district is untouched by construction (no instance is flagged, no table made). Its stills differ from those before this step by a
+FLIP mean of 0.006 and 0.013 at road 1 and at the tall building, along thin edges: that comparison also spans the DLSS exposure fix pushed in
+between (dec2b714), so it is not a clean 0 px.
+
+Known limits: after a jump across the map, a stand-in dissolves before its members' cell is in, a moment of nothing until the worker's next edit. A group
+spread wide now comes in earlier than its members' own ranges, at some cost in meshes.
 
 **Costs and risks:**
 

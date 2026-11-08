@@ -30,5 +30,5 @@ pub use cell_id::{CellId, CellKind, MAX_LEVEL};
 pub use cells::{CELL_SIZE, CellPos};
 pub use frame::{Frame, FrameId, FrameKind, FrameTree, SECTOR_SIZE, SectorId, WorldPos};
 pub use partition::{CubeSphere, Face, FlatGrid, Partition};
-pub use ranged::{GroupId, RangedChanges, RangedPiece, RangedSet};
+pub use ranged::{Crossing, FadeBand, GroupId, RangedChanges, RangedPiece, RangedSet};
 pub use streaming::{CellWant, Changes, Detail, Residency, StreamPlan, StreamPolicy};

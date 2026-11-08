@@ -41,7 +41,7 @@ use glam::{DQuat, DVec3, IVec3, Mat4, Quat, Vec2, Vec3, Vec4};
 pub(crate) mod dynamic;
 mod feedback;
 mod static_edits;
-pub use dynamic::{DynamicCapacity, MeshRays, SceneEdit, SceneEditor};
+pub use dynamic::{DynamicCapacity, InstanceFadeEdge, MeshRays, SceneEdit, SceneEditor};
 
 /// Culling flags, mirrored in `meshlet.slang`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -140,6 +140,9 @@ const INSTANCE_STILL: u32 = 1;
 /// `Instance::flags`: a dynamic scene's slot no instance holds (#220, `INSTANCE_VACANT` in the
 /// shader).
 const INSTANCE_VACANT: u32 = 2;
+/// `Instance::flags`: a dynamic scene's instance that dissolves in and out by distance (D-106,
+/// [`SceneEditor::set_instance_fade`], `INSTANCE_FADES` in the shader).
+const INSTANCE_FADES: u32 = 128;
 
 /// What sees an instance (#301): the picture and each world of rays. A stand-in the probes' rays
 /// meet in place of leaf cards is [`Visibility::PROBES`], the cards it stands for
@@ -760,6 +763,10 @@ struct GpuFrame {
     /// Per instance, this frame's crossing of its ladder (D-075): a transient the instance culls
     /// write ("geometry/cull clears" writes its address), 0 in a scene without ladders.
     ladder: u64,
+    /// Per instance slot, its fade's two sides (D-106, `InstanceFade`), 0 in a scene without.
+    fades: u64,
+    /// Keeps what follows on its 16 bytes.
+    fades_pad: u64,
     /// The distance from which the shadow rays meet the far shadows' world (D-075 step 3,
     /// [`MeshletSceneBuilder::set_far_shadows`]), metres; 0: never.
     far_shadows: f32,
@@ -1547,6 +1554,8 @@ pub struct MeshletSceneBuilder {
     far_lamps: Option<crate::lamps::FarLamps>,
     /// Some mesh has a next step on a ladder ([`MeshletSceneBuilder::set_ladder`], D-075).
     ladders: bool,
+    /// A dynamic scene's instances can fade ([`MeshletSceneBuilder::reserve_instance_fades`]).
+    instance_fades: bool,
     /// Where the far shadows start ([`MeshletSceneBuilder::set_far_shadows`]), 0: never.
     far_shadows: f32,
     /// What the scene keeps alive ([`MeshletSceneBuilder::keep`]).
@@ -2061,6 +2070,14 @@ impl MeshletSceneBuilder {
     /// meshes the movers show nor instances a skinned mesh, which only movers show.
     pub fn reserve_dynamic(&mut self, capacity: DynamicCapacity) {
         self.dynamic = Some(capacity);
+    }
+
+    /// Lets a dynamic scene's instances dissolve in and out by the camera's distance (D-106,
+    /// [`SceneEditor::set_instance_fade`]): a table of 48 bytes per instance slot, the per-instance
+    /// crossings a ladder uses (D-075) and the cut-outs' raster for what is mid-fade.
+    pub fn reserve_instance_fades(&mut self) {
+        self.instance_fades = true;
+        self.ladders = true;
     }
 
     /// Has the scene keep `item` alive for instance `instance` (in the order added): until the
@@ -2800,6 +2817,7 @@ impl MeshletSceneBuilder {
         let dynamic = self.dynamic.map(|capacity| {
             Box::new(dynamic::SceneDynamic::new(dynamic::DynamicSeed {
                 capacity,
+                fades: self.instance_fades,
                 meshes: &self.meshes,
                 mesh_finest: &self.mesh_finest,
                 mesh_sections: &self.mesh_sections,
@@ -5951,6 +5969,12 @@ impl MeshletRenderer {
                 .as_ref()
                 .map_or(0, |l| l.shares[slot.index].address()),
             ladder: 0,
+            fades: scene
+                .dynamic
+                .as_ref()
+                .and_then(|d| d.fades.as_ref())
+                .map_or(0, |b| b.address()),
+            fades_pad: 0,
             far_shadows: scene.far_shadows,
             lamp_restir_from: self.lamp_restir_from.unwrap_or(u32::MAX),
             grass,

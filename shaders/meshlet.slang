@@ -185,6 +185,7 @@ static const uint INSTANCE_NO_RASTER = 4;      // Instance::flags: left out of t
 static const uint INSTANCE_NO_SHADOW_RAYS = 8; // Instance::flags: not met by the shadow rays (the sun's, the lamps'; #301)
 static const uint INSTANCE_NO_PROBE_RAYS = 16; // Instance::flags: not met by the probes' rays (#301)
 static const uint INSTANCE_NO_MIRROR_RAYS = 32; // Instance::flags: not met by the mirror rays (#301)
+static const uint INSTANCE_FADES = 128;        // Instance::flags: dissolves in and out by distance (D-106, `Frame::fades`)
 static const uint INSTANCE_NO_FAR_SHADOW_RAYS = 64; // Instance::flags: not met by the shadow rays from far points (D-075 step 3, `shadow_world`)
 // The TLAS records' mask bits, one a world of rays (#301): an instance a kind of ray does not meet
 // leaves its bit out, and a pass's rays carry their own (`g_ray_mask`).
@@ -482,6 +483,18 @@ public struct GrassCell
     public uint look;               // its blades (bits 0–7, at most GRASS_CELL_BLADES), their height in centimetres (8–15), their row after `Frame::grass_row` (16–22), the ninths no blade stands in (23–31, bit 23 + x + 3 z)
 };
 
+// An instance's fade (D-106, mirrors `GpuInstanceFade`): for each side the way from its bounding
+// sphere's centre to the point the distance is measured from (xyz) and the distance at which the
+// crossing is half done (w, 0: no such side), then each side's width.
+public struct InstanceFade
+{
+    public float4 comes;
+    public float4 goes;
+    public float comes_band;
+    public float goes_band;
+    public float2 pad;
+};
+
 public struct Frame
 {
     public float4x4 view_proj;      // for drawing
@@ -563,6 +576,8 @@ public struct Frame
     public FarLamps* far_lamps;     // the street lamps lit beyond the frame's set (#284), null: none
     public float* far_shares;       // their shares of their light this frame, unshadowed
     public float* ladder;           // per instance on a ladder (D-075), this frame's crossing (`ladder_crossing`) with the fade after it packed in (`ladder_fade_share`, #363), written by the instance culls; null: no ladder
+    public InstanceFade* fades;     // per instance slot, its fade (D-106), null: a scene without
+    public uint2 fades_pad;         // keeps what follows on its 16 bytes
     public float far_shadows;       // metres from the camera from which the shadow rays meet RAY_SHADOW_FAR's world (D-075 step 3, `shadow_world`); 0: never
     public uint lamp_restir_from;   // the first of the frame's lamps ReSTIR DI lights where it runs (`lamp_by_restir`, #372): 0 every lamp, ~0 none (the street lamps under --street-restir)
     public GrassCell* grass;        // the grass map's cells (#300, D-075), rows of increasing z; null: no grass
@@ -1481,6 +1496,58 @@ bool ladder_crossing_now(Frame* f, uint instance, Instance inst)
     return (t > 0.0 && t < 1.0) || ladder_fading(value);
 }
 
+// An instance with a fade (D-106), written per instance by the culls as a ladder's crossing is.
+// How far it has come and how far it has gone, each in 1023rds: `1024 goes + comes`. A pixel is
+// kept where the noise, in the same 1023rds, is at or above `goes` and below `comes`. So a stand-in
+// going across the crossing its pieces come across is replaced pixel by pixel, no hole and no
+// double, and one whose own two bands overlap keeps only what both allow.
+static const float FADE_WHOLE = 1023.0;
+
+float instance_fade(Frame* f, Instance inst, uint instance)
+{
+    InstanceFade fade = f[0].fades[instance];
+    float3 centre = instance_center_relative(f, inst);
+    float comes = 1.0;
+    if (fade.comes.w > 0.0)
+        comes = saturate((fade.comes.w + 0.5 * fade.comes_band - length(centre + fade.comes.xyz)) / fade.comes_band);
+    float goes = 0.0;
+    if (fade.goes.w > 0.0)
+        goes = saturate((fade.goes.w + 0.5 * fade.goes_band - length(centre + fade.goes.xyz)) / fade.goes_band);
+    return 1024.0 * round(goes * 1023.0) + round(comes * 1023.0);
+}
+
+float fade_goes(float value)
+{
+    return floor(value / 1024.0);
+}
+
+float fade_comes(float value)
+{
+    return value - 1024.0 * fade_goes(value);
+}
+
+// No pixel left.
+bool fade_gone(float value)
+{
+    return fade_comes(value) <= fade_goes(value);
+}
+
+// Whether `inst` fades at all this frame's way: a mesh on a ladder keeps its ladder.
+bool instance_has_fade(Frame* f, Instance inst)
+{
+    return (inst.flags & INSTANCE_FADES) != 0 && f[0].ladder != nullptr && f[0].fades != nullptr
+        && f[0].meshes[inst.mesh].ladder_next == LADDER_NONE;
+}
+
+// Whether instance `instance` is part way through a fade this frame (its cull wrote the value).
+bool instance_fading_now(Frame* f, uint instance, Instance inst)
+{
+    if (!instance_has_fade(f, inst))
+        return false;
+    float value = f[0].ladder[instance];
+    return value != FADE_WHOLE && !fade_gone(value);
+}
+
 // An instance's rotation and scale and its origin relative to the camera, built once where
 // several of its points are needed (the cluster cull takes up to five per cluster). Rebuilt
 // at every point, the quaternion's matrix and the camera's cell and offset made the streamed
@@ -1864,7 +1931,7 @@ void describe_cluster(Frame* f, inout ClusterVerdict v, Meshlet m)
     Instance inst = f[0].instances[v.instance];
     v.cutouts = cluster_cutouts(f, inst, m);
     // Both meshes of an instance crossing its ladder take the cut-outs' raster, dithered (D-075).
-    if (ladder_crossing_now(f, v.instance, inst))
+    if (ladder_crossing_now(f, v.instance, inst) || instance_fading_now(f, v.instance, inst))
         v.cutouts |= CUTOUT_LADDER;
 }
 
@@ -2536,9 +2603,17 @@ void append_instance_work(Frame* f, uint64_t* status, uint ticket, uint groups, 
             value += LADDER_FADE_UNIT * max(round(fade * LADDER_FADE_STEPS), 1.0);
         if (mesh[0].ladder_next != LADDER_NONE && f[0].ladder != nullptr)
             f[0].ladder[instance_index] = value;
+        // Its fade (D-106), read as a crossing is: all gone, it draws nothing.
+        bool faded_out = false;
+        if (instance_has_fade(f, inst[0]))
+        {
+            float share = instance_fade(f, inst[0], instance_index);
+            f[0].ladder[instance_index] = share;
+            faded_out = fade_gone(share);
+        }
         // The pair it crosses: its own mesh and the next, or further down its ladder (#332).
         float t = ladder_t(value);
-        bool taken = fade >= 1.0;
+        bool taken = fade >= 1.0 || faded_out;
         Mesh* first_mesh = f[0].meshes + ladder_step(f, inst[0].mesh, ladder_pair(value));
         if (t < 1.0 && !taken)
         {
@@ -3663,7 +3738,15 @@ bool cutout_kept(Frame* f, uint id, float2 uv, bool front, float2 ground, float2
     // An instance crossing its ladder (D-075): its own mesh's pixels where the noise is at or
     // above the crossing, the next mesh's where it is below. Its next mesh's clusters lie outside
     // its own mesh's run.
-    if (ladder_crossing_now(f, record.x, inst))
+    // A piece part way through its fade (D-106).
+    if (instance_fading_now(f, record.x, inst))
+    {
+        float value = f[0].ladder[record.x];
+        float noise = spatio_temporal_noise(pixel, f[0].noise_frame).x * FADE_WHOLE;
+        if (noise < fade_goes(value) || noise >= fade_comes(value))
+            return false;
+    }
+    else if (ladder_crossing_now(f, record.x, inst))
     {
         float value = f[0].ladder[record.x];
         Mesh* mesh = f[0].meshes + ladder_first(f, record.x, inst);

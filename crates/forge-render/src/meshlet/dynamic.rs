@@ -56,6 +56,32 @@ pub struct DynamicCapacity {
     pub ray_triangles: u32,
 }
 
+/// One side of an instance's fade ([`SceneEditor::set_instance_fade`]): measured from `centre`,
+/// the crossing is half done with the camera `distance` metres away, across `band` metres.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct InstanceFadeEdge {
+    /// The point the distance is measured from.
+    pub centre: CellPos,
+    /// How far from it the crossing is half done, metres.
+    pub distance: f32,
+    /// How wide the crossing is, metres.
+    pub band: f32,
+}
+
+/// `InstanceFade` in the shader: per side the way from the instance's bounding sphere's centre to
+/// the point measured from, and the distance (0: no such side), then the two bands.
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+struct GpuInstanceFade {
+    comes: [f32; 4],
+    goes: [f32; 4],
+    comes_band: f32,
+    goes_band: f32,
+    pad: [f32; 2],
+}
+
+const _: () = assert!(std::mem::size_of::<GpuInstanceFade>() == 48);
+
 /// A table's free ranges, first fit.
 #[derive(Debug)]
 pub(crate) struct Ranges {
@@ -284,6 +310,10 @@ pub(super) struct SceneDynamic {
     capacity: DynamicCapacity,
     /// What the movers' instances keep alive, as long as the scene.
     _kept: Vec<Box<dyn Any + Send>>,
+    /// Whether its instances can fade ([`MeshletSceneBuilder::reserve_instance_fades`]).
+    fades_wanted: bool,
+    /// Per instance slot, its fade (`InstanceFade`): made with the editor, written by it.
+    pub(super) fades: Option<Arc<Buffer>>,
 }
 
 /// What an instance of `mesh` adds to the scene's triangles, finest clusters, work bound and
@@ -301,6 +331,7 @@ fn instance_counts(mesh: &LiveMesh) -> [i64; 4] {
 /// built, where each lies.
 pub(super) struct DynamicSeed<'a> {
     pub capacity: DynamicCapacity,
+    pub fades: bool,
     pub meshes: &'a [GpuMesh],
     pub mesh_finest: &'a [u32],
     pub mesh_sections: &'a [u32],
@@ -434,6 +465,8 @@ impl SceneDynamic {
             }),
             capacity: c,
             _kept: kept,
+            fades_wanted: seed.fades,
+            fades: None,
         }
     }
 }
@@ -573,6 +606,11 @@ pub struct SceneEditor {
     /// The edit's promotions and demotions.
     promotions: Vec<Promotion>,
     demotions: Vec<u32>,
+    /// Per instance slot, its fade (`InstanceFade`), in a scene whose instances can fade.
+    fades: Option<Arc<Buffer>>,
+    /// The fades the edit in progress sets, which [`Self::finish`] writes: into slots no frame
+    /// reads, as a slot comes back only once the frames that showed it are done.
+    pending_fades: Vec<(u32, GpuInstanceFade)>,
 }
 
 /// An edit [`SceneEditor::finish`] made, for [`MeshletScene::apply`].
@@ -754,6 +792,56 @@ impl SceneEditor {
     pub fn set_instance_texture(&mut self, instance: u32, sampled: u32) {
         self.assert_not_mover(instance);
         self.instances[instance as usize].texture = sampled + 1;
+        self.modified.push(instance);
+    }
+
+    /// Has instance `instance`, just added in this edit, dissolve in and out by the camera's
+    /// distance (D-106): it comes across `comes` and goes across `goes`, a side left `None` not
+    /// fading. Each pixel is kept or not by the frame's noise against the crossing, the same noise
+    /// for every instance, so a stand-in going across the crossing its pieces come across is
+    /// replaced pixel by pixel, with no hole and no double (D-075's dithered crossing). The rays
+    /// are not dithered: they meet the instance while it is in the scene. On a mesh with a ladder
+    /// the ladder has the crossing and this does nothing.
+    ///
+    /// # Panics
+    ///
+    /// When `instance` is a mover's, or the scene has no table for fades
+    /// ([`MeshletSceneBuilder::reserve_instance_fades`]).
+    pub fn set_instance_fade(
+        &mut self,
+        instance: u32,
+        comes: Option<InstanceFadeEdge>,
+        goes: Option<InstanceFadeEdge>,
+    ) {
+        self.assert_not_mover(instance);
+        assert!(
+            self.fades.is_some(),
+            "a scene without MeshletSceneBuilder::reserve_instance_fades"
+        );
+        let record = &mut self.instances[instance as usize];
+        let centre = CellPos {
+            cell: IVec3::from(record.cell),
+            local: Vec3::from(record.center),
+        };
+        let side = |edge: Option<InstanceFadeEdge>| {
+            edge.map_or(([0.0; 4], 0.0), |e| {
+                let to = e.centre.relative_to(centre);
+                ([to.x, to.y, to.z, e.distance.max(1e-3)], e.band.max(1e-3))
+            })
+        };
+        let (comes, comes_band) = side(comes);
+        let (goes, goes_band) = side(goes);
+        record.flags |= INSTANCE_FADES;
+        self.pending_fades.push((
+            instance,
+            GpuInstanceFade {
+                comes,
+                goes,
+                comes_band,
+                goes_band,
+                pad: [0.0; 2],
+            },
+        ));
         self.modified.push(instance);
     }
 
@@ -1065,6 +1153,23 @@ impl SceneEditor {
         let new_pages: u64 = new_meshes.iter().map(|m| u64::from(m.ranges.pages.1)).sum();
         // An entry per new page, and one per page evicted for those loaded.
         let entries = new_pages + (roots + preload.len()) as u64;
+        // The fades this edit sets, into slots no frame reads.
+        if let Some(fades) = &self.fades {
+            let size = std::mem::size_of::<GpuInstanceFade>() as u64;
+            let writes: Vec<(&Buffer, u64, &[u8])> = self
+                .pending_fades
+                .iter()
+                .map(|(slot, fade)| {
+                    (
+                        fades.as_ref(),
+                        u64::from(*slot) * size,
+                        bytemuck::bytes_of(fade),
+                    )
+                })
+                .collect();
+            device.write_buffers_staged(&writes)?;
+        }
+        self.pending_fades.clear();
         let staging = device.create_buffer(BufferDesc {
             size: (table_at + entries * 4).max(4),
             usage: vk::BufferUsageFlags::TRANSFER_SRC,
@@ -1276,8 +1381,19 @@ impl MeshletScene {
             }
             None => None,
         };
+        if dynamic.fades_wanted {
+            dynamic.fades = Some(Arc::new(device.create_buffer(BufferDesc {
+                size: u64::from(capacity.max(1)) * std::mem::size_of::<GpuInstanceFade>() as u64,
+                usage: vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_DST,
+                location: MemoryLocation::GpuOnly,
+                category: MemoryCategory::Geometry,
+                name: "instance fades",
+            })?));
+        }
         Ok(Some(SceneEditor {
             device: Arc::clone(device),
+            fades: dynamic.fades.clone(),
+            pending_fades: Vec::new(),
             room: Arc::clone(&dynamic.room),
             meshlets: Arc::clone(&self.meshlets),
             meshes: Arc::clone(&self.meshes),

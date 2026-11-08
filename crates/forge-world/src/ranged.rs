@@ -3,20 +3,28 @@
 //! them. Cells ([`crate::streaming`]) stay the unit of loading; inside the cells in, this set tests
 //! every piece against the viewer and says which come and go.
 //!
-//! - **A piece** shows while the viewer is within its `far` of its `reference`, a point that need
-//!   not be the piece's own place.
-//! - **A group** swaps as one: while any member is in range, all its members show and its stand-in
-//!   waits; with none in range, the stand-in shows. No group is drawn in part or twice, and a group
-//!   whose members' reach stops short of the stand-in's near distance has no gap.
-//! - **A stand-in with no members in the world** obeys its own `near`: closer than that it hides.
-//! - **Chains:** a stand-in may itself be a member of a coarser group. Showing, or with its own
-//!   group occupied, it keeps the coarser one away; then all that group's members show, each past
-//!   its own `far` if it must, so the coarser one's area stays covered.
-//! - **Only pieces in cells count:** a stand-in shows until its members' cell has come in, so what
-//!   is still loading is low detail and not a hole.
+//! Each piece is resolved once into [`Crossing`]s, spheres round a point: the one inside which it
+//! comes, and for a stand-in the one inside which it goes.
 //!
-//! A piece shown keeps showing `slack` metres past its limits, so a viewer standing on one does
-//! not flip it.
+//! - **A piece** comes within its `far` of its `reference`, a point that need not be its own place.
+//! - **A group** swaps as one: its members and its stand-in share a crossing, about the middle of
+//!   the members' references and wide enough for every member's own range. No group is drawn in
+//!   part or twice, and a group whose reach stops short of the stand-in's near distance has no gap.
+//! - **A stand-in with no members in the world** goes inside its own `near`.
+//! - **Chains:** a stand-in may itself be a member of a coarser group, and comes with its siblings
+//!   at that group's crossing. A coarser group's crossing reaches at least as far as its members'
+//!   own groups', so a coarser stand-in never shows beside finer pieces.
+//!
+//! A crossing has a width, its band ([`FadeBand`]): the renderer dissolves one side into the other
+//! across it from the camera's position each frame, so both must be in for that stretch. A piece
+//! comes `lead` metres before the band's outer edge and a stand-in goes that far past its inner
+//! edge, undrawn there: the band's first pixels are not waiting on the streamer. A piece shown keeps
+//! showing `slack` metres past those, so a viewer standing on one does not flip it.
+//!
+//! A cell not yet in holds its pieces back while the stand-in over them goes as the viewer nears: a
+//! moment of nothing after a jump across the map, until the worker's next edit.
+
+use std::collections::HashMap;
 
 use glam::DVec3;
 
@@ -32,17 +40,96 @@ pub struct RangedPiece {
     pub near: f32,
     /// How far it shows, metres.
     pub far: f32,
-    /// The group it is a member of: in range, it keeps that group's stand-in away.
+    /// The group it is a member of: it comes at that group's crossing.
     pub member_of: Option<GroupId>,
     /// The group it stands in for.
     pub stands_for: Option<GroupId>,
 }
 
+/// How wide the bands of a set's crossings are.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct FadeBand {
+    /// The band as a share of the crossing's distance.
+    pub share: f32,
+    /// The narrowest band, metres.
+    pub least: f32,
+    /// The widest band, metres.
+    pub most: f32,
+    /// How far ahead of the band a piece is brought in, metres: at least what the camera covers
+    /// before the streamer's edit is on screen.
+    pub lead: f32,
+}
+
+impl FadeBand {
+    /// No band: every crossing a hard cut.
+    pub const NONE: Self = Self {
+        share: 0.0,
+        least: 0.0,
+        most: 0.0,
+        lead: 0.0,
+    };
+
+    /// The band of a crossing at `distance`, never wider than it: a piece with a very short
+    /// range still becomes whole near its point.
+    pub fn of(self, distance: f32) -> f32 {
+        (distance * self.share)
+            .clamp(self.least, self.most)
+            .min(distance.max(0.0))
+    }
+}
+
+/// A sphere a piece comes or goes at: inside it with the viewer, the piece's side of a swap has
+/// taken over, across `band` metres centred on `distance`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Crossing {
+    /// The point it is measured from, metres in the partition's frame.
+    pub centre: DVec3,
+    /// How far from it the crossing is half done, metres.
+    pub distance: f32,
+    /// How wide it is, metres.
+    pub band: f32,
+    /// How far ahead of the band a piece is in the scene, metres.
+    pub lead: f32,
+}
+
+impl Crossing {
+    fn at(centre: DVec3, distance: f32, band: FadeBand) -> Self {
+        Self {
+            centre,
+            distance,
+            band: band.of(distance),
+            lead: band.lead,
+        }
+    }
+
+    /// How far from its point the piece is first needed, metres: the band's outer edge and the
+    /// lead.
+    pub fn reach(&self) -> f64 {
+        f64::from(self.distance) + 0.5 * f64::from(self.band) + f64::from(self.lead)
+    }
+
+    /// Whether `viewer` is inside the reach, `extra` metres further out.
+    fn reaches(&self, viewer: DVec3, extra: f64) -> bool {
+        let edge = self.reach() + extra;
+        self.centre.distance_squared(viewer) <= edge * edge
+    }
+
+    /// Whether `viewer` is outside the inner edge and the lead, `extra` metres further in.
+    fn clear_of(&self, viewer: DVec3, extra: f64) -> bool {
+        let edge =
+            f64::from(self.distance) - 0.5 * f64::from(self.band) - f64::from(self.lead) - extra;
+        edge <= 0.0 || self.centre.distance_squared(viewer) >= edge * edge
+    }
+}
+
 const LOADED: u8 = 1;
 const SHOWN: u8 = 2;
-const WITHIN_FAR: u8 = 4;
-const PAST_NEAR: u8 = 8;
-const IN_RANGE: u8 = WITHIN_FAR | PAST_NEAR;
+/// The piece has a crossing it goes at, in [`RangedSet::goes`].
+const GOES: u8 = 4;
+/// The piece swaps with others: hard cuts give it no slack, or both sides would show in the ring.
+const SWAPS: u8 = 8;
+/// What [`RangedSet::leave`] keeps of a piece's bits.
+const LASTING: u8 = GOES | SWAPS;
 /// Marks a slot free in [`RangedSet::slots`].
 const NO_SLOT: u32 = u32::MAX;
 
@@ -58,55 +145,109 @@ pub struct RangedChanges<'a> {
 /// A world's pieces and which of them show (see the module notes).
 #[derive(Clone, Debug)]
 pub struct RangedSet {
-    pieces: Vec<RangedPiece>,
-    /// Per group, how many members the world has.
-    members: Vec<u32>,
-    /// Per group, whether a member in a cell is in range: this refresh's.
-    occupied: Vec<bool>,
-    /// Per piece, its `LOADED`, `SHOWN`, `WITHIN_FAR` and `PAST_NEAR` bits.
+    /// Per piece, the crossing it comes at.
+    comes: Vec<Crossing>,
+    /// By piece, the crossing it goes at: only stand-ins have one.
+    goes: HashMap<u32, Crossing>,
+    /// Per piece, its `LOADED`, `SHOWN`, `GOES` and `SWAPS` bits.
     flags: Vec<u8>,
     /// The pieces in, and per piece its index there.
     loaded: Vec<u32>,
     slots: Vec<u32>,
-    /// The stand-ins that are members of a coarser group.
-    chained: Vec<u32>,
     slack: f64,
+    /// The slack of a piece that swaps with others: none with hard cuts.
+    swap_slack: f64,
     add: Vec<u32>,
     remove: Vec<u32>,
 }
 
 impl RangedSet {
-    /// A set over `pieces` in `groups` groups, none in yet; a piece shown keeps showing `slack`
-    /// metres past its limits.
+    /// A set over `pieces` in `groups` groups, none in yet, its crossings `band` wide; a piece
+    /// shown keeps showing `slack` metres past its limits.
     ///
     /// # Panics
     ///
     /// If a piece names a group at or past `groups`.
-    pub fn new(pieces: Vec<RangedPiece>, groups: u32, slack: f64) -> Self {
-        let mut members = vec![0; groups as usize];
-        let mut chained = Vec::new();
-        for (i, p) in pieces.iter().enumerate() {
-            if let Some(g) = p.member_of {
-                members[g as usize] += 1;
-                if p.stands_for.is_some() {
-                    chained.push(i as u32);
-                }
-            }
+    pub fn new(pieces: Vec<RangedPiece>, groups: u32, slack: f64, band: FadeBand) -> Self {
+        let n = groups as usize;
+        let mut members = vec![0u32; n];
+        let mut sum = vec![DVec3::ZERO; n];
+        for p in &pieces {
             assert!(
                 p.stands_for.is_none_or(|g| g < groups),
                 "a stand-in names a group past the last"
             );
+            if let Some(g) = p.member_of {
+                members[g as usize] += 1;
+                sum[g as usize] += p.reference;
+            }
         }
-        let n = pieces.len();
+        let centre: Vec<DVec3> = sum
+            .iter()
+            .zip(&members)
+            .map(|(&s, &m)| s / f64::from(m.max(1)))
+            .collect();
+        // Far enough for every member's own range.
+        let mut reach = vec![0.0f64; n];
+        for p in &pieces {
+            if let Some(g) = p.member_of {
+                let needed = f64::from(p.far) + p.reference.distance(centre[g as usize]);
+                reach[g as usize] = reach[g as usize].max(needed);
+            }
+        }
+        // A coarser group at least as far as its members' own groups: each pass settles a level.
+        let chained: Vec<(usize, usize)> = pieces
+            .iter()
+            .filter_map(|p| Some((p.stands_for? as usize, p.member_of? as usize)))
+            .filter(|&(own, _)| members[own] > 0)
+            .collect();
+        for _ in 0..=chained.len() {
+            let mut changed = false;
+            for &(own, parent) in &chained {
+                let needed = reach[own] + centre[own].distance(centre[parent]);
+                if needed > reach[parent] {
+                    reach[parent] = needed;
+                    changed = true;
+                }
+            }
+            if !changed {
+                break;
+            }
+        }
+        let of_group = |g: u32| Crossing::at(centre[g as usize], reach[g as usize] as f32, band);
+        let mut goes = HashMap::new();
+        let mut flags = vec![0u8; pieces.len()];
+        let comes = pieces
+            .iter()
+            .enumerate()
+            .map(|(i, p)| {
+                let going = match p.stands_for {
+                    Some(g) if members[g as usize] > 0 => Some(of_group(g)),
+                    Some(_) if p.near > 0.0 => Some(Crossing::at(p.reference, p.near, band)),
+                    _ => None,
+                };
+                if p.member_of.is_some() || p.stands_for.is_some() {
+                    flags[i] = SWAPS;
+                }
+                if let Some(crossing) = going {
+                    goes.insert(i as u32, crossing);
+                    flags[i] |= GOES;
+                }
+                match p.member_of {
+                    Some(g) => of_group(g),
+                    None => Crossing::at(p.reference, p.far, band),
+                }
+            })
+            .collect::<Vec<_>>();
+        let count = comes.len();
         Self {
-            pieces,
-            members,
-            occupied: vec![false; groups as usize],
-            flags: vec![0; n],
+            comes,
+            goes,
+            flags,
             loaded: Vec::new(),
-            slots: vec![NO_SLOT; n],
-            chained,
+            slots: vec![NO_SLOT; count],
             slack,
+            swap_slack: if band == FadeBand::NONE { 0.0 } else { slack },
             add: Vec::new(),
             remove: Vec::new(),
         }
@@ -114,12 +255,12 @@ impl RangedSet {
 
     /// How many pieces the world has.
     pub fn len(&self) -> usize {
-        self.pieces.len()
+        self.comes.len()
     }
 
     /// Whether the world has no pieces.
     pub fn is_empty(&self) -> bool {
-        self.pieces.is_empty()
+        self.comes.is_empty()
     }
 
     /// How many pieces are in cells that are in.
@@ -130,6 +271,11 @@ impl RangedSet {
     /// Whether piece `piece` shows.
     pub fn is_shown(&self, piece: u32) -> bool {
         self.flags[piece as usize] & SHOWN != 0
+    }
+
+    /// The crossing piece `piece` comes at, and the one it goes at if it is a stand-in that does.
+    pub fn crossings(&self, piece: u32) -> (Crossing, Option<Crossing>) {
+        (self.comes[piece as usize], self.goes.get(&piece).copied())
     }
 
     /// A cell's pieces have come in. They show from the next [`Self::refresh`].
@@ -155,7 +301,7 @@ impl RangedSet {
             if self.flags[i] & SHOWN != 0 {
                 shown.push(p);
             }
-            self.flags[i] = 0;
+            self.flags[i] &= LASTING;
             let slot = self.slots[i] as usize;
             self.slots[i] = NO_SLOT;
             self.loaded.swap_remove(slot);
@@ -170,79 +316,18 @@ impl RangedSet {
     pub fn refresh(&mut self, viewer: DVec3) -> RangedChanges<'_> {
         self.add.clear();
         self.remove.clear();
-        self.occupied.fill(false);
         for &p in &self.loaded {
             let i = p as usize;
-            let piece = &self.pieces[i];
-            let extra = if self.flags[i] & SHOWN != 0 {
-                self.slack
-            } else {
-                0.0
-            };
-            let d2 = piece.reference.distance_squared(viewer);
-            let far = f64::from(piece.far) + extra;
-            let near = (f64::from(piece.near) - extra).max(0.0);
-            let mut bits = self.flags[i] & !IN_RANGE;
-            if d2 <= far * far {
-                bits |= WITHIN_FAR;
-            }
-            if d2 >= near * near {
-                bits |= PAST_NEAR;
-            }
-            self.flags[i] = bits;
-            if bits & IN_RANGE == IN_RANGE
-                && piece.stands_for.is_none()
-                && let Some(g) = piece.member_of
-            {
-                self.occupied[g as usize] = true;
-            }
-        }
-        // Up the chains: each pass settles a level at least.
-        for _ in 0..=self.chained.len() {
-            let mut changed = false;
-            for &p in &self.chained {
-                let i = p as usize;
-                let piece = &self.pieces[i];
-                let Some(group) = piece.member_of else {
-                    continue;
-                };
-                if self.occupied[group as usize] {
-                    continue;
-                }
-                // Its own group occupied counts even with this stand-in's cell not in: finer
-                // pieces show. Otherwise, whether it would show itself.
-                let own = piece.stands_for.is_some_and(|g| self.occupied[g as usize]);
-                let bits = self.flags[i];
-                let would_show = bits & LOADED != 0
-                    && match piece.stands_for {
-                        Some(g) if self.members[g as usize] > 0 => bits & WITHIN_FAR != 0,
-                        _ => bits & IN_RANGE == IN_RANGE,
-                    };
-                if own || would_show {
-                    self.occupied[group as usize] = true;
-                    changed = true;
-                }
-            }
-            if !changed {
-                break;
-            }
-        }
-        for &p in &self.loaded {
-            let i = p as usize;
-            let piece = &self.pieces[i];
             let bits = self.flags[i];
-            // Its coarser group taken over by a sibling: it shows too, however far, or its part of
-            // that group would have neither level drawn.
-            let sibling = piece.member_of.is_some_and(|g| self.occupied[g as usize]);
-            let in_reach = bits & WITHIN_FAR != 0 || sibling;
-            let want = match (piece.stands_for, piece.member_of) {
-                (Some(g), _) if self.members[g as usize] > 0 => {
-                    in_reach && !self.occupied[g as usize]
-                }
-                (None, Some(g)) => self.occupied[g as usize],
-                _ => in_reach && bits & PAST_NEAR != 0,
+            let shown = bits & SHOWN != 0;
+            let extra = match (shown, bits & SWAPS != 0) {
+                (false, _) => 0.0,
+                (true, false) => self.slack,
+                (true, true) => self.swap_slack,
             };
-            if want != (bits & SHOWN != 0) {
+            let want = self.comes[i].reaches(viewer, extra)
+                && (bits & GOES == 0 || self.goes[&p].clear_of(viewer, extra));
+            if want != shown {
                 self.flags[i] ^= SHOWN;
                 if want {
                     self.add.push(p);
@@ -281,6 +366,11 @@ mod tests {
         v
     }
 
+    /// A set with hard cuts.
+    fn hard(pieces: Vec<RangedPiece>, groups: u32, slack: f64) -> RangedSet {
+        RangedSet::new(pieces, groups, slack, FadeBand::NONE)
+    }
+
     /// (added, removed) at `x`, sorted.
     fn step(set: &mut RangedSet, x: f64) -> (Vec<u32>, Vec<u32>) {
         let c = set.refresh(at(x));
@@ -289,7 +379,7 @@ mod tests {
 
     #[test]
     fn a_piece_shows_within_its_range_and_only_once_in() {
-        let mut set = RangedSet::new(vec![piece(0.0, 10.0)], 0, 0.0);
+        let mut set = hard(vec![piece(0.0, 10.0)], 0, 0.0);
         assert_eq!(step(&mut set, 5.0), (vec![], vec![]), "its cell is not in");
         set.enter(&[0]);
         assert_eq!(step(&mut set, 5.0), (vec![0], vec![]));
@@ -301,7 +391,7 @@ mod tests {
 
     #[test]
     fn the_slack_keeps_a_viewer_on_a_limit_from_flipping_a_piece() {
-        let mut set = RangedSet::new(vec![piece(0.0, 10.0)], 0, 2.0);
+        let mut set = hard(vec![piece(0.0, 10.0)], 0, 2.0);
         set.enter(&[0]);
         assert_eq!(
             step(&mut set, 11.0),
@@ -317,7 +407,7 @@ mod tests {
     fn distances_are_from_the_reference_not_the_viewers_axis() {
         let mut p = piece(0.0, 10.0);
         p.reference = DVec3::new(0.0, 8.0, 8.0);
-        let mut set = RangedSet::new(vec![p], 0, 0.0);
+        let mut set = hard(vec![p], 0, 0.0);
         set.enter(&[0]);
         assert_eq!(step(&mut set, 0.0).0, Vec::<u32>::new(), "11.3 m away");
     }
@@ -327,7 +417,7 @@ mod tests {
         let mut p = piece(0.0, 100.0);
         p.near = 20.0;
         p.stands_for = Some(0);
-        let mut set = RangedSet::new(vec![p], 1, 0.0);
+        let mut set = hard(vec![p], 1, 0.0);
         set.enter(&[0]);
         assert_eq!(step(&mut set, 10.0), (vec![], vec![]), "closer than near");
         assert_eq!(step(&mut set, 30.0), (vec![0], vec![]));
@@ -335,7 +425,7 @@ mod tests {
     }
 
     /// Pieces 0 and 1 and their stand-in 2, in the group 0.
-    fn group(stand_near: f32, member_far: f32) -> RangedSet {
+    fn group_pieces(stand_near: f32, member_far: f32) -> Vec<RangedPiece> {
         let mut a = piece(0.0, member_far);
         let mut b = piece(0.0, member_far);
         // The second member's point lies 10 m further on.
@@ -345,7 +435,11 @@ mod tests {
         let mut s = piece(0.0, 1000.0);
         s.near = stand_near;
         s.stands_for = Some(0);
-        RangedSet::new(vec![a, b, s], 1, 0.0)
+        vec![a, b, s]
+    }
+
+    fn group(stand_near: f32, member_far: f32) -> RangedSet {
+        hard(group_pieces(stand_near, member_far), 1, 0.0)
     }
 
     #[test]
@@ -366,10 +460,10 @@ mod tests {
     }
 
     #[test]
-    fn one_member_in_range_brings_the_whole_group() {
+    fn a_group_reaches_as_far_as_its_farthest_member() {
         let mut set = group(40.0, 50.0);
         set.enter(&[0, 1, 2]);
-        // 55 m from the first member's point, 45 m from the second's.
+        // 55 m from the first member's point, 45 m from the second's, 50 m from their middle.
         assert_eq!(
             step(&mut set, 55.0),
             (vec![0, 1], vec![]),
@@ -391,23 +485,88 @@ mod tests {
     }
 
     #[test]
-    fn the_stand_in_shows_until_its_members_cell_is_in() {
-        let mut set = group(40.0, 50.0);
-        set.enter(&[2]);
+    fn hard_cuts_show_only_one_side_of_a_swap_whatever_the_slack() {
+        let mut set = hard(group_pieces(40.0, 50.0), 1, 2.0);
+        set.enter(&[0, 1, 2]);
+        // The crossing is 55 m from x = 5.
+        assert_eq!(step(&mut set, 61.0), (vec![2], vec![]), "outside");
+        assert_eq!(step(&mut set, 59.5), (vec![0, 1], vec![2]), "54.5 m in");
+        assert_eq!(step(&mut set, 60.5), (vec![2], vec![0, 1]), "55.5 m out");
+    }
+
+    /// The band the fade tests use: a tenth of the distance, 8 to 40 m, `lead` metres ahead.
+    fn band(lead: f32) -> FadeBand {
+        FadeBand {
+            share: 0.1,
+            least: 8.0,
+            most: 40.0,
+            lead,
+        }
+    }
+
+    #[test]
+    fn a_group_and_its_stand_in_share_one_crossing() {
+        let set = RangedSet::new(group_pieces(40.0, 50.0), 1, 0.0, band(0.0));
+        let (member, none) = set.crossings(0);
+        let (other, _) = set.crossings(1);
+        let (_, going) = set.crossings(2);
+        assert_eq!(none, None, "a member does not go");
+        assert_eq!(member, other, "the members together");
+        assert_eq!(Some(member), going, "and the stand-in with them");
+        assert_eq!(member.centre, at(5.0), "about the middle of the members");
+        assert_eq!(member.distance, 55.0, "far enough for the farther one");
+        assert_eq!(member.band, 8.0, "the least band");
+    }
+
+    #[test]
+    fn both_sides_are_in_across_the_band() {
+        let mut set = RangedSet::new(group_pieces(40.0, 50.0), 1, 0.0, band(0.0));
+        set.enter(&[0, 1, 2]);
+        // The crossing is 55 m from x = 5, 8 m wide.
+        assert_eq!(step(&mut set, 70.0), (vec![2], vec![]), "outside the band");
         assert_eq!(
-            step(&mut set, 30.0),
-            (vec![2], vec![]),
-            "low detail, not a hole"
+            step(&mut set, 62.0),
+            (vec![0, 1], vec![]),
+            "in the band: the members come, the stand-in stays"
         );
-        set.enter(&[0, 1]);
-        assert_eq!(step(&mut set, 30.0), (vec![0, 1], vec![2]));
-        let out = sorted(set.leave(&[0, 1]));
-        assert_eq!(out, vec![0, 1], "those that showed");
         assert_eq!(
-            step(&mut set, 30.0),
-            (vec![2], vec![]),
-            "back to the stand-in"
+            step(&mut set, 55.0),
+            (vec![], vec![2]),
+            "past the inner edge the stand-in goes"
         );
+    }
+
+    #[test]
+    fn the_lead_brings_a_side_in_before_its_band_and_keeps_it_after() {
+        let mut set = RangedSet::new(group_pieces(40.0, 50.0), 1, 0.0, band(8.0));
+        set.enter(&[0, 1, 2]);
+        // The crossing is 55 m from x = 5, 8 m wide: the band from 51 to 59, in from 67 to 43.
+        assert_eq!(
+            step(&mut set, 74.0),
+            (vec![2], vec![]),
+            "69 m: the stand-in"
+        );
+        assert_eq!(
+            step(&mut set, 70.0),
+            (vec![0, 1], vec![]),
+            "65 m, before the band: the members are in, undrawn"
+        );
+        assert_eq!(
+            step(&mut set, 50.0),
+            (vec![], vec![]),
+            "45 m, past the band: the stand-in stays, undrawn"
+        );
+        assert_eq!(step(&mut set, 47.0), (vec![], vec![2]), "42 m: it goes");
+    }
+
+    #[test]
+    fn a_band_is_clamped_and_a_short_range_still_becomes_whole() {
+        let band = band(0.0);
+        assert_eq!(band.of(1000.0), 40.0);
+        assert_eq!(band.of(200.0), 20.0);
+        assert_eq!(band.of(50.0), 8.0);
+        assert_eq!(band.of(3.0), 3.0, "at most the distance");
+        assert_eq!(FadeBand::NONE.of(500.0), 0.0);
     }
 
     #[test]
@@ -422,7 +581,7 @@ mod tests {
         let mut coarse = piece(0.0, 3000.0);
         coarse.near = 200.0;
         coarse.stands_for = Some(1);
-        let mut set = RangedSet::new(vec![tile, fine, coarse], 2, 0.0);
+        let mut set = hard(vec![tile, fine, coarse], 2, 0.0);
         set.enter(&[0, 1, 2]);
         assert_eq!(
             step(&mut set, 1000.0),
@@ -452,7 +611,7 @@ mod tests {
         let mut coarse = piece(0.0, 3000.0);
         coarse.near = 10.0;
         coarse.stands_for = Some(1);
-        RangedSet::new(vec![tile, fine, coarse], 2, 0.0)
+        hard(vec![tile, fine, coarse], 2, 0.0)
     }
 
     #[test]
@@ -464,6 +623,19 @@ mod tests {
             (vec![1], vec![]),
             "past the tile's reach: the fine one only"
         );
+    }
+
+    #[test]
+    fn a_tile_reaching_past_its_chain_keeps_the_coarser_one_away() {
+        // The tile reaches 500 m, past the fine one's 300: the coarse one goes at 500 too.
+        let mut set = chain(500.0);
+        set.enter(&[0, 1, 2]);
+        assert_eq!(
+            step(&mut set, 400.0),
+            (vec![0], vec![]),
+            "the tile alone: no stand-in over it"
+        );
+        assert_eq!(step(&mut set, 600.0), (vec![2], vec![0]));
     }
 
     /// A stand-in (`stands_for`) that is a member of the coarser group `of`.
@@ -483,7 +655,7 @@ mod tests {
         tile_a.member_of = Some(0);
         let mut tile_b = piece(400.0, 50.0);
         tile_b.member_of = Some(1);
-        let mut set = RangedSet::new(
+        let mut set = hard(
             vec![
                 chained(0.0, 300.0, 0, 2),
                 chained(400.0, 300.0, 1, 2),
@@ -508,7 +680,7 @@ mod tests {
         assert_eq!(
             step(&mut set, -400.0),
             (vec![2], vec![0, 1]),
-            "neither in reach: the coarse one back"
+            "out of reach: the coarse one back"
         );
         assert_eq!(
             step(&mut set, -10.0),
@@ -526,7 +698,7 @@ mod tests {
         hull.near = 50.0;
         let mut coarse = piece(0.0, 3000.0);
         coarse.stands_for = Some(1);
-        let mut set = RangedSet::new(vec![chained(0.0, 600.0, 0, 1), tile, hull, coarse], 3, 0.0);
+        let mut set = hard(vec![chained(0.0, 600.0, 0, 1), tile, hull, coarse], 3, 0.0);
         set.enter(&[0, 1, 2, 3]);
         assert_eq!(
             step(&mut set, 200.0),
@@ -541,19 +713,8 @@ mod tests {
     }
 
     #[test]
-    fn a_tile_showing_keeps_the_coarser_one_away_before_its_stand_ins_cell_is_in() {
-        let mut set = chain(50.0);
-        set.enter(&[0, 2]);
-        assert_eq!(
-            step(&mut set, 30.0),
-            (vec![0], vec![]),
-            "the coarse one stays away"
-        );
-    }
-
-    #[test]
     fn leaving_forgets_a_pieces_state_and_entering_twice_counts_once() {
-        let mut set = RangedSet::new(vec![piece(0.0, 10.0), piece(1.0, 10.0)], 0, 0.0);
+        let mut set = hard(vec![piece(0.0, 10.0), piece(1.0, 10.0)], 0, 0.0);
         set.enter(&[0, 1]);
         set.enter(&[0]);
         assert_eq!(set.loaded(), 2);
@@ -563,5 +724,19 @@ mod tests {
         assert_eq!(set.loaded(), 1);
         set.enter(&[0]);
         assert_eq!(step(&mut set, 0.0).0, vec![0], "added again");
+    }
+
+    #[test]
+    fn leaving_keeps_what_a_stand_in_goes_at() {
+        let mut set = group(40.0, 50.0);
+        set.enter(&[2]);
+        assert_eq!(step(&mut set, 500.0), (vec![2], vec![]));
+        assert_eq!(set.leave(&[2]), vec![2]);
+        set.enter(&[2]);
+        assert_eq!(
+            step(&mut set, 30.0),
+            (vec![], vec![]),
+            "still goes inside the group's crossing"
+        );
     }
 }
