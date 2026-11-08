@@ -12457,6 +12457,22 @@ ranges want lengthening by what memory allows once D-105 frees it. At full textu
 Open from these runs: from the five high views the streamed area's shadows are darker than the resident district's, 0.7 to 1.6 stops in the
 shaded tenth of the picture, 0.2 or less at the two street-level views. The geometry is there; the cause is not yet known.
 
+**Step 5's design, proposed (2026-11-08), not built.**
+
+- **What:** a piece dissolves across a band of distance instead of cutting. A stand-in and its group's pieces share one crossing value and
+  complementary noise, so each pixel keeps one or the other: no hole, no double. It is D-075's dithered ladder crossing with a distance in
+  place of a size on screen, the frames' noise averaged by the anti-aliasing's history; no new technique to clear.
+- **Measured each frame in the instance cull,** from the viewer to the group's reference, so the crossing follows the camera exactly and the
+  worker's timing does not show. A side table per instance slot holds the reference, the swap distance, the band and the direction: about
+  7 MiB for 300,000 slots.
+- **The worker keeps both present across the band:** `RangedSet` shows a piece out to its far plus the band, and a stand-in leaves only past
+  the inner edge.
+- **The band:** 10 % of the swap distance, between 8 and 40 m. Counted over the table at five cameras, against each piece's own range,
+  about 4,900 to 11,500 of the 29,000 to 73,000 pieces shown are mid-fade at once (5 %: 2,700 to 5,800). Those go through the cut-out raster,
+  whose cost here is to be measured; pieces too small on screen at their swap to see can keep the hard cut.
+- **Rays are not dithered in the first version:** both sides stay in the structure during the band.
+- **Checked** with the pop hunt's frame differences (#363) at swaps along the walk and the 40 m/s tour, then by the owner's walk.
+
 **Costs and risks:**
 
 - **Pops:** the swap is a hard cut until step 5, and the owner sees those at once.
