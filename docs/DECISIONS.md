@@ -12513,3 +12513,106 @@ spread wide now comes in earlier than its members' own ranges, at some cost in m
 1. This design, starting with step 1.
 2. The area first: the district's present reach, about ±1,100 m. The whole city once step 2 is measured.
 3. The fade: after walking the hard swap, if it shows pops.
+
+## D-107 — Relief without geometry: a height map marched in the resolve, its shadow along the sun and the strongest lamp, the micro-shadows of occlusion and normal maps 🟡 (proposed 2026-11-08; the code written beside it on the owner's word, "you can work on the research and the code"; the engine not run yet: every number under "Cost" is a target)
+
+**Why:** up close, surfaces are flat. Normal maps bend the light and nothing else, and every direct
+shadow comes from rays against the true triangles. Nothing in the engine reads a height (searched
+under every name; a procedural set's heights are thrown away once its normal map is made), and no
+direct light is held back by an occlusion map. It has to work with ray tracing off as well: nothing
+here casts a ray. Research: `research/relief-and-micro-shadows.md`.
+
+**Where the height is read.** In the standard class of the resolve (`standard_inputs`, one call,
+`relief_surface`), where a pixel's UVs and their analytic gradients are at hand. A row with a height
+map (`RenderLayer::parallax`, `MATERIAL_RELIEF`) marches it; what reads the row's maps then reads
+them at the moved point, under the gradients of the true surface: the moved point's would part at
+every step of the relief. The row marches in its UVs, or along the axis its projection faces most (a
+projected row; none through hex tiles, whose cells each lie elsewhere in the map). A layered row
+(D-095) has one height, at its own UV transform; heights per layer are not built. The row grew from
+240 to 256 bytes, and the height map is one of its streamed texture fields (D-105).
+
+**How many rows can pay.** Only rows that name a height map. No other row takes more than a flag
+test.
+
+**The march** (`shaders/parallax.slang`, mirrored by `forge_render::parallax` for its tests): a
+linear search, then three secant rounds. A step per texel crossed at the level it reads, never more
+than `r.pom.steps` (32) at a grazing angle or 4 looking straight down. Deterministic, no noise. The
+offset is limited by the view's cosine, at least 0.1. The mesh is the relief's top: nothing rises
+out of it, so nothing is drawn outside the silhouette or before the depth.
+
+**The fade.** The relief's depth fades by the level of detail a pixel reads (the mean of its two
+axes in the height map's texels), from `r.pom.fade` over two levels. By texels and not by distance,
+so it follows the upscaler's mip bias and each texture's own density. The march reads the minor
+axis's level, and steps along the major one, the view's.
+
+**Depth, motion and the upscalers: nothing written.** Hardware depth stays the mesh's. A compute
+resolve cannot change it, and everything before the resolve (the pyramid, GTAO, the denoisers) reads
+it. The motion vectors stay the mesh's too. Their error for a point `t` under the surface at
+distance `d` is about `f v t / (d (d + t))` pixels a frame: at 2 cm under a wall 1 m away, 0.4 px
+at a walk and 1.4 px at a run (1707 × 960, 60 fps), a quarter of that at 2 m. A pass correcting them
+from an offset the resolve writes is the fix if the moving-camera check shows a smear; it is not
+built.
+
+**Meeting the other systems.**
+- **Rays, probes, mirrors, ReSTIR's hits:** the true surface. The light is worked out there (`s`,
+  not the moved surface). Rays cannot see the relief; its shadow is multiplied in.
+- **GTAO:** unchanged, from the mesh's depth. It cannot see the relief; the row's `cavity` stands in
+  (its floor loses that share of the indirect light).
+- **Decals (D-074):** read at the moved point, so a stain lies in the groove it crosses.
+- **Lamps:** the strongest of a pixel's place takes the relief's shadow; a march per lamp would
+  cost more than it shows. ReSTIR's lamps do not.
+
+**The relief's shadow.** An occlusion march from the hit up the ray towards the sun and towards the
+strongest lamp: fixed steps (`r.pom.shadow_steps`, 8), no noise, so nothing to denoise. The light is
+lost by how far the ground stands inside the ray at the deepest step, over one width for the whole
+ray: the light's cone at the ray's end, at least three quarters of a texel, since a hard edge drawn
+through bilinear texels crawls. Let go towards the true surface's terminator, which the rays and the
+cosine hold.
+
+**Micro-shadows.**
+- **From an occlusion map, on direct light** (`r.micro.ao`, off): after Uncharted 4's
+  `saturate(|N·L| + 2 AO² − 1)`, the sun's and every lamp's, from the material's own occlusion and
+  never GTAO's: the rays have seen what GTAO sees. Not on a row whose relief marched: the same
+  crevices would darken twice.
+- **From a normal map** (`r.micro.bump`, off): Chiang, Li and Burley's terminator term, so a bump
+  stops catching a light its surface turns from. 1 where the two normals agree.
+- **Against GTAO, on indirect light** (`r.ao.material`, multiply as before): `min` does not darken
+  twice a crevice both see, as Filament and HDRP do. The occlusion map's product with GTAO is what
+  the engine has always done, so it stays the default until an A/B says otherwise.
+
+**Where the heights come from (measured 2026-11-08).**
+- **The demos:** none. glTF has no height map, and the Bistro's textures hold none.
+- **The private district:** of 282,580 material slots, 5,987 decals carry a real height map (six
+  maps in all) and 7 metals do. Its 64,925 layered materials have none: its 376 layer templates hold
+  colour, normal, roughness and metalness alone. Its relief lives on decals.
+- **Options, by what they cost:**
+  1. The procedural sets' own heights, which made their normal maps: rock, concrete and brick, behind
+     `--pom-sets`. Built; it is the first test scene, projected rows.
+  2. Scanned surfaces with displacement maps, for the UV path. The owner has agreed to free Quixel
+     assets for testing once the engine may run, their licence to be reread before a download.
+  3. Relief on decals: the one place the private district has heights. A march in the decal's frame
+     over a six-map atlas; not built.
+  4. Heights integrated from tiled normal maps when a package is cooked (an FFT, periodic textures
+     only), a scale per material, for the layered walls that have none; not built.
+
+**Cost (targets, nothing measured).** On the RTX 5070 Ti at 1707 × 960 (DLSS Quality at 1440p), at
+most 0.5 ms on `shading/standard` with every pixel's row marching, and 0.2 ms on a view where a third
+do. It adds no pass. RTX 3080: expected 1.3 to 2 times that. RX 9070 XT: not measurable here. Nothing
+depends on a wave size: the loops are per lane, the reads have explicit levels, so no derivatives
+and no helper lanes; a wave64 card pays for divergent step counts in a dispatch of 8 × 8.
+
+**Settings.** `r.pom` (1), `r.pom.steps` (32), `r.pom.shadow_steps` (8), `r.pom.fade` (0.5),
+`r.pom.scale` (1), `r.micro.ao` (0), `r.micro.bump` (0), `r.ao.material` (multiply). `r.pom` off, or a
+row without a height map, draws as before; the micro-shadows' defaults draw as before.
+
+**Built, unverified on the GPU** (branch `raster/pom-micro-shadowing`, not pushed): the row, the march,
+the shadows, the micro-shadows, the settings, `--pom-sets`. Checked: the shaders compile, the CPU
+mirror's tests pass, a CPU mock-up (`RELIEF_SHEET=path cargo test -p forge-render relief_sheet`).
+
+**To check when the engine may run:** a close-up at grazing and steep angles against `--pom-sets`
+off; fixed-exposure stills; a moving camera for shimmer; GPU timings; a `FORGE_NO_RAY_QUERY=1` run;
+`tools/baseline.sh` if the private district's materials change.
+
+**For the owner to decide:** this design; which heights come first (2 for the UV path, then 3 or 4);
+whether the micro-shadows and `min` become defaults after the A/B; the motion vectors' correction,
+if the walk shows a need.

@@ -207,6 +207,13 @@ command line": `--no-ao` and `--set r.ao=0` give the same image to the pixel.
 | `r.ao`, `r.ao.radius` | ambient occlusion, its reach | 0, 1; 0.05..16 m | 1; 1.5 m |
 | `r.ao.contact` | the ambient occlusion's reach under D-088's traced bounce: the contacts its denoiser blurs, the bounce's rays seeing the rest | 0.05..16 m | 0.6 m |
 | `r.ao.ignore_nearer` | what the ambient occlusion leaves out near the camera: a first-person weapon or hands cast no dark halo on the wall behind them (#337) | 0..2 m | 0 |
+| `r.ao.material` | how a material's occlusion map joins GTAO on the sky's and the probes' light: their product, or their minimum, which does not darken twice a crevice both see (D-107) | multiply, min | multiply |
+| `r.pom` | relief inside surfaces from their height maps; rows without one are not touched (D-107) | 0, 1 | 1 |
+| `r.pom.steps`, `r.pom.shadow_steps` | the most steps of the relief's march along the view, and along the sun and the strongest lamp (0: no self-shadow) | 4..64; 0..16 | 32; 8 |
+| `r.pom.fade` | the height map's level of detail the relief starts to fade at (0: a texel a pixel), gone two levels on | -2..8 | 0.5 |
+| `r.pom.scale` | every row's relief depth times this (0: flat, for comparing) | 0..4 | 1 |
+| `r.micro.ao` | how much of its micro-shadow an occlusion map casts on the sun's and the lamps' light (D-107) | 0..1 | 0 |
+| `r.micro.bump` | a mapped normal's terminator softened against its surface's (D-107) | 0, 1 | 0 |
 | `r.probes` | the probes' diffuse light | 0, 1 | 1 |
 | `r.sky_light` | the sky's light | 0, 1 | 1 |
 | `r.shadows` | the sun's ray-traced shadows | 0, 1 | 1 |

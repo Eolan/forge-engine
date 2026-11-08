@@ -530,6 +530,14 @@ Mediterranean ranges walk 4–7 km; swifts fly at 10 m/s and twice that in their
 No patent found on flocking or on fleeing at a distance; the fauna runs region by region, as the
 flora.
 
+## Relief and micro-shadows
+
+[`research/relief-and-micro-shadows.md`](research/relief-and-micro-shadows.md): a height map marched
+in a compute resolve, linear search and secant, no bake, one level a pixel from the analytic
+gradients, and the offset faded by the level. Its shadow is an occlusion march up the ray. Occlusion
+maps cast micro-shadows on direct light alone and join GTAO by their minimum on indirect light.
+D-107.
+
 ## Still to research
 
 - Tools and editor: creation graphs and the editor itself. The data model and hot reload are

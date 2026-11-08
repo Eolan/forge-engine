@@ -308,6 +308,11 @@ files (`docs/research/`) and the decisions (`docs/DECISIONS.md`).
   irradiance over the open sky's, per channel and at most 1 (issue #68); no code is used.
 - **Triplanar normal maps.** Ben Golus, "Normal Mapping for a Triplanar Shader", 2017: the
   whiteout blend the materials' normal maps use.
+- **Relief without geometry (D-107).** Natalya Tatarchuk, "Dynamic Parallax Occlusion Mapping with
+  Approximate Soft Shadows", 2006, and the linear search with secant refinement as Unity's HDRP
+  ships it. The micro-shadow of an occlusion map after Waylon Brinck and Andrew Maximov, "The
+  Technical Art of Uncharted 4", 2016. The bump terminator after Matt Jen-Yuan Chiang, Yining Karl
+  Li and Brent Burley, "Taming the Shadow Terminator", 2019. No code is used.
 - **Hex-tiling.** Morten S. Mikkelsen, "Practical Real-Time Hex-Tiling", *Journal of Computer
   Graphics Techniques* 11(2), 2022, after Eric Heitz and Fabrice Neyret, "High-Performance
   By-Example Noise using a Histogram-Preserving Blending Operator", *Proc. ACM Comput. Graph.
