@@ -273,6 +273,36 @@ fn normal_texture(name: &'static str, size: u32, heights: &[f32], strength: f32)
     }
 }
 
+/// A height map (D-107) from a periodic height field: its value over the field's range in red,
+/// the lowest 0 and the highest 1, its levels box-filtered.
+fn height_map(name: &'static str, size: u32, heights: &[f32]) -> TextureData {
+    let (low, high) = heights
+        .iter()
+        .fold((f32::MAX, f32::MIN), |(l, h), &v| (l.min(v), h.max(v)));
+    let span = (high - low).max(1e-6);
+    let unit: Vec<f32> = heights.iter().map(|&v| (v - low) / span).collect();
+    let bytes = |level: &[f32]| {
+        encode(level, |&v| {
+            let b = to_byte(v);
+            [b, b, b, 255]
+        })
+    };
+    let mut levels = vec![bytes(&unit)];
+    let (mut current, mut side) = (unit, size);
+    while side > 1 {
+        current = downsample(&current, side, |a, b, c, d| (a + b + c + d) * 0.25);
+        side /= 2;
+        levels.push(bytes(&current));
+    }
+    TextureData {
+        name: name.into(),
+        size,
+        height: size,
+        srgb: false,
+        levels,
+    }
+}
+
 fn normalize(v: [f32; 3]) -> [f32; 3] {
     let length = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
     if length > 0.0 {
@@ -305,14 +335,24 @@ fn smoothstep(edge0: f32, edge1: f32, x: f32) -> f32 {
     t * t * (3.0 - 2.0 * t)
 }
 
+/// The relief [`rock`]'s normal map is made from.
+fn rock_heights(seed: u64, size: u32) -> Vec<f32> {
+    grid(size, |u, v| {
+        let base = fbm(seed, u, v, 4, 6);
+        let fine = fbm(seed ^ 0xF1E, u, v, 32, 3);
+        base * 0.8 + fine * 0.2
+    })
+}
+
+/// [`rock`]'s height map (D-107).
+pub fn rock_height(seed: u64, size: u32) -> TextureData {
+    height_map("rock height", size, &rock_heights(seed, size))
+}
+
 /// Bare rock: mottled grey with dark crevices; the relief of weathered stone.
 pub fn rock(seed: u64, size: u32) -> [TextureData; 2] {
     kept("texture-rock", &(seed, size), || {
-        let heights = grid(size, |u, v| {
-            let base = fbm(seed, u, v, 4, 6);
-            let fine = fbm(seed ^ 0xF1E, u, v, 32, 3);
-            base * 0.8 + fine * 0.2
-        });
+        let heights = rock_heights(seed, size);
         let colours = grid(size, |u, v| {
             let mottle = fbm(seed ^ 0xC01, u, v, 8, 5);
             let grain = fbm(seed ^ 0x6A1, u, v, 64, 2);
@@ -329,14 +369,24 @@ pub fn rock(seed: u64, size: u32) -> [TextureData; 2] {
     })
 }
 
+/// The relief [`concrete`]'s normal map is made from.
+fn concrete_heights(seed: u64, size: u32) -> Vec<f32> {
+    grid(size, |u, v| {
+        let pores = fbm(seed ^ 0x9E, u, v, 64, 2);
+        let pits = smoothstep(0.72, 0.8, pores);
+        0.5 * fbm(seed, u, v, 16, 3) - pits
+    })
+}
+
+/// [`concrete`]'s height map (D-107).
+pub fn concrete_height(seed: u64, size: u32) -> TextureData {
+    height_map("concrete height", size, &concrete_heights(seed, size))
+}
+
 /// Cast concrete: light grey with stains, pores and faint formwork lines.
 pub fn concrete(seed: u64, size: u32) -> [TextureData; 2] {
     kept("texture-concrete", &(seed, size), || {
-        let heights = grid(size, |u, v| {
-            let pores = fbm(seed ^ 0x9E, u, v, 64, 2);
-            let pits = smoothstep(0.72, 0.8, pores);
-            0.5 * fbm(seed, u, v, 16, 3) - pits
-        });
+        let heights = concrete_heights(seed, size);
         let colours = grid(size, |u, v| {
             let stain = fbm(seed ^ 0x57A, u, v, 3, 5);
             let speck = fbm(seed ^ 0x5EC, u, v, 128, 1);
@@ -354,30 +404,45 @@ pub fn concrete(seed: u64, size: u32) -> [TextureData; 2] {
     })
 }
 
+/// [`brick`]'s mortar joints, of a brick's height.
+const BRICK_MORTAR: f32 = 0.06;
+
+/// Where (u, v) falls in [`brick`]'s bond, 8 across and 16 rows per repeat: its brick's cell and how
+/// far inside the brick it is (0 at the mortar's centre line, 1 well inside).
+fn brick_cell(u: f32, v: f32) -> (i32, i32, f32) {
+    const ACROSS: f32 = 8.0;
+    const ROWS: f32 = 16.0;
+    let row = (v * ROWS).floor();
+    let shift = if row as i32 % 2 == 0 { 0.0 } else { 0.5 };
+    let x = u * ACROSS + shift;
+    let col = x.floor().rem_euclid(ACROSS);
+    let (fx, fy) = (x.fract(), (v * ROWS).fract());
+    // Distance to the nearest joint in brick heights (a brick is twice as long as tall).
+    let edge = (fx.min(1.0 - fx) * 2.0 * ROWS / ACROSS * 0.5).min(fy.min(1.0 - fy));
+    (col as i32, row as i32, edge)
+}
+
+/// The relief [`brick`]'s normal map is made from.
+fn brick_heights(seed: u64, size: u32) -> Vec<f32> {
+    grid(size, |u, v| {
+        let (_, _, edge) = brick_cell(u, v);
+        let inset = smoothstep(BRICK_MORTAR * 0.5, BRICK_MORTAR, edge);
+        inset * 0.8 + 0.2 * fbm(seed ^ 0xB1, u, v, 32, 3)
+    })
+}
+
+/// [`brick`]'s height map (D-107).
+pub fn brick_height(seed: u64, size: u32) -> TextureData {
+    height_map("brick height", size, &brick_heights(seed, size))
+}
+
 /// Bricks in running bond, 8 across and 16 rows per repeat: fired clay in varied reds and
 /// browns, recessed grey mortar.
 pub fn brick(seed: u64, size: u32) -> [TextureData; 2] {
     kept("texture-brick", &(seed, size), || {
-        const ACROSS: f32 = 8.0;
-        const ROWS: f32 = 16.0;
-        const MORTAR: f32 = 0.06; // of a brick's height
-        // Where (u, v) falls: its brick's cell and how far inside the brick it is (0 at the
-        // mortar's centre line, 1 well inside).
-        let cell = |u: f32, v: f32| {
-            let row = (v * ROWS).floor();
-            let shift = if row as i32 % 2 == 0 { 0.0 } else { 0.5 };
-            let x = u * ACROSS + shift;
-            let col = x.floor().rem_euclid(ACROSS);
-            let (fx, fy) = (x.fract(), (v * ROWS).fract());
-            // Distance to the nearest joint in brick heights (a brick is twice as long as tall).
-            let edge = (fx.min(1.0 - fx) * 2.0 * ROWS / ACROSS * 0.5).min(fy.min(1.0 - fy));
-            (col as i32, row as i32, edge)
-        };
-        let heights = grid(size, |u, v| {
-            let (_, _, edge) = cell(u, v);
-            let inset = smoothstep(MORTAR * 0.5, MORTAR, edge);
-            inset * 0.8 + 0.2 * fbm(seed ^ 0xB1, u, v, 32, 3)
-        });
+        const MORTAR: f32 = BRICK_MORTAR;
+        let cell = brick_cell;
+        let heights = brick_heights(seed, size);
         let colours = grid(size, |u, v| {
             let (col, row, edge) = cell(u, v);
             let brick = unit_f32(hash_cell2(seed, col, row));
