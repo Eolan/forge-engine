@@ -12651,6 +12651,13 @@ code, its own check against the traced reference, and its own branch.
   that ring's texels and a depth-only mesh pipeline into an array layer; the fallback path likewise.
   A ring culls by the light's frustum, the cones and its own previous pyramid. Cut-out rows go through
   the cut-outs' raster.
+- **Movers whose shadow nobody can see:** a mover is left out of a ring's moving layer when the camera
+  cannot see the volume its shadow can fall in. Its bounds are swept along the sun by the ring's depth
+  range, and the swept box takes the test the camera's own culls make, against the camera's frustum and
+  its depth pyramid, in the camera's space. Nothing is marked in the ring's space. The pyramid holds the
+  farthest depth, so this catches a shadow hidden behind what the camera sees, and not one falling in
+  empty air. The static layer keeps every caster: a cached map must be whole for the next view. Behind
+  `r.shadows.mover_cull`, kept only if it measures a gain.
 - **Depth range:** the camera depth's minimum and maximum, from the previous frame's pyramid with no
   readback, quantised so the rings do not swim.
 - **Filter and bias:** PCSS: a blocker search, then PCF over a disc as wide as the sun's angular size
