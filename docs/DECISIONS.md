@@ -12363,6 +12363,61 @@ such stand-ins ever lack real geometry under half their footprint, all neighbour
 stand-ins replace. What this table cannot judge, tall stand-ins whose top third the real pieces do not fill (83 per camera, mostly the
 same hulls), waits for step 2's pictures.
 
+**Step 2, measured (2026-11-08).** The ±1,100 m area streamed, pieces by their own ranges: 41,050 meshes, 4.6 million placements, 2,859
+cells. Off by default, as planned until step 3.
+
+What the first runs changed:
+
+- **A mesh is held by the shown pieces using it,** not by the cells. Held by cells, 22,800 meshes could be in at the worst place for
+  3,400 to 6,800 on screen, and the card could not hold them. The tables are reserved for the most that can show at a populated cell plus
+  a quarter: 10,172 meshes and 34 million ray vertices, for 40,429 meshes and 166 million.
+- **The first view arrives in 10 edits of 768 new meshes,** about 120 ms each on the worker, pieces going only once all those coming are
+  in, so no stand-in leaves before what replaces it. A jump of over 200 m lets the old view go at once.
+- **Setups with the same mask files share their textures:** 6.14 to 3.93 GiB of masks here, 2.20 to 1.48 in the resident district.
+- **The bindless table holds 262,144 sampled images,** up from 65,536 (this area needs about 62,000 with the masks shared; the
+  devices tested allow 1,048,576 and more). The resolve's two 16-bit indices became two words, the push constants still 128 bytes.
+- **A chained stand-in's siblings come in together** (the batch's review): one tile in reach took its coarser parent away while a
+  sibling past its own distance stayed out, leaving neither level over that patch.
+
+The checks, at 2560 x 1440 under DLSS Quality:
+
+| | Walk (benchmark path) | 40 m/s tour |
+|---|---|---|
+| GPU per frame | 18.4 ms (the resident district: 17.1) | 9.4 ms |
+| Frame time p50 / p99 | 18.4 / 24.5 ms (resident: 17.1 / 19.2) | 9.0 / 21.0 ms |
+| Video memory | 11,504 MiB | 12,018 MiB |
+| Worker per edit p50 / p99 / most | 2.5 / 5.7 / 9.5 ms | 2.0 / 7.1 / 17.8 ms |
+| New meshes per edit, mean / most | 0.6 / 36 | 2.3 / 89 |
+| Meshes held, most | 6,998 | 6,955 |
+
+**Those timings draw textures of 512 texels or more one level down,** 4,394 MiB for the full 7,180, so that they fit. At full textures the area
+holds 13,520 to 14,096 MiB of the 14,600 the card gives it and the stills' frames take 18 to 69 ms: the first view goes over budget and the frames stay slow.
+The pictures are right, the timings are not. D-105's wiring is what brings full detail in budget.
+
+**The owner's walk (the same day): "LOD is too close, the pops are obvious."** How large pieces are on screen when they come or go, in pixels of
+their bounding sphere's diameter at 1440p:
+
+| What changes | Median | 90th percentile | Over 64 px |
+|---|---|---|---|
+| A stand-in, at its swap | 134 | 359 | 88 % |
+| A group's member, at the swap | 36 | 94 | 20 % |
+| A piece alone, at its range | 19 | 70 | 13 % |
+
+Scaling every range, along the walk with textures a level down (another session shared the machine, so small differences mean little):
+
+| Ranges | Meshes held | Reserved meshes | Video memory | Frame time p50 / p99 | Stand-in at its swap, median |
+|---|---|---|---|---|---|
+| × 1 | 7,038 | 10,172 | 11,789 MiB | 17.6 / 34.3 ms | 134 px |
+| × 1.5 | 10,388 | 15,510 | 12,555 MiB | 19.1 / 39.5 ms | |
+| × 2 | 13,767 | 20,093 | 13,937 MiB | 19.9 / 142 ms | 67 px |
+| × 3 | | 27,070 | out of memory | | |
+
+Longer ranges alone do not end the cuts: at twice the range a typical stand-in still changes across 67 pixels. So step 5's fade is due, and the
+ranges want lengthening by what memory allows once D-105 frees it. At full textures × 1.5 already runs out of memory.
+
+Open from these runs: from the five high views the streamed area's shadows are darker than the resident district's, 0.7 to 1.6 stops in the
+shaded tenth of the picture, 0.2 or less at the two street-level views. The geometry is there; the cause is not yet known.
+
 **Costs and risks:**
 
 - **Pops:** the swap is a hard cut until step 5, and the owner sees those at once.

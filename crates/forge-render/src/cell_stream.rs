@@ -17,10 +17,14 @@
 //! - **Meshes several cells share** ([`SharedMeshes`]): a source adds one with the first cell
 //!   that uses it and takes it out with the last, told when a cell leaves
 //!   ([`CellSource::unload`]), rather than keeping every mesh resident from the start.
+//! - **Pieces by their own ranges** (D-106): a source whose pieces say how far they show answers
+//!   [`CellSource::refresh_metres`], and the worker asks it ([`CellSource::refresh`]) to bring in
+//!   and take out pieces of the cells in, as the viewer moves or a cell comes or goes, in the same
+//!   edits as the cells' (`forge_world::RangedSet` decides which).
 //! - **Not here:** a cell's own state, which the game keeps and gives back when the cell loads
 //!   again.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender, SyncSender};
@@ -66,6 +70,27 @@ pub trait CellSource: Send + 'static {
     fn unload(&mut self, cell: CellId, editor: &mut SceneEditor) {
         let _ = (cell, editor);
     }
+
+    /// How far the viewer moves between two [`Self::refresh`]es, metres (D-106); 0, the default:
+    /// the source's cells are all it has, and no refresh is asked.
+    fn refresh_metres(&self) -> f64 {
+        0.0
+    }
+
+    /// The viewer is at `viewer`, or cells came or went: brings in and takes out through `editor`
+    /// the pieces of the cells in that change, and says how many did. It makes no edit of its own
+    /// when none did.
+    fn refresh(&mut self, viewer: DVec3, editor: &mut SceneEditor) -> Result<u32> {
+        let _ = (viewer, editor);
+        Ok(0)
+    }
+
+    /// Whether the last [`Self::refresh`] left work for another edit (D-106: a source limiting what
+    /// one edit brings in). The worker asks again at once, and its viewer has not settled until
+    /// none is left. None by default.
+    fn refresh_pending(&self) -> bool {
+        false
+    }
 }
 
 /// Meshes several cells share, counted by the source's key (#338): one is added with the first
@@ -77,7 +102,7 @@ pub struct SharedMeshes<M = MeshId> {
     /// Per key, the mesh and how many cells hold it.
     meshes: HashMap<u64, (M, u32)>,
     /// Per cell, the keys it holds (a key once per cell however often it asked).
-    by_cell: HashMap<CellId, Vec<u64>>,
+    by_cell: HashMap<CellId, HashSet<u64>>,
 }
 
 impl<M> Default for SharedMeshes<M> {
@@ -99,16 +124,14 @@ impl<M: Copy> SharedMeshes<M> {
         add: impl FnOnce() -> Result<M>,
     ) -> Result<M> {
         if let Some((mesh, count)) = self.meshes.get_mut(&key) {
-            let held = self.by_cell.entry(cell).or_default();
-            if !held.contains(&key) {
-                held.push(key);
+            if self.by_cell.entry(cell).or_default().insert(key) {
                 *count += 1;
             }
             return Ok(*mesh);
         }
         let mesh = add()?;
         self.meshes.insert(key, (mesh, 1));
-        self.by_cell.entry(cell).or_default().push(key);
+        self.by_cell.entry(cell).or_default().insert(key);
         Ok(mesh)
     }
 
@@ -126,6 +149,11 @@ impl<M: Copy> SharedMeshes<M> {
             }
         }
         gone
+    }
+
+    /// Mesh `key`, if a cell holds it.
+    pub fn get(&self, key: u64) -> Option<M> {
+        self.meshes.get(&key).map(|&(mesh, _)| mesh)
     }
 
     /// Meshes held.
@@ -157,6 +185,8 @@ struct Batch {
     unloaded: Vec<CellId>,
     /// How many of the loaded swapped from the other detail.
     swapped: u32,
+    /// How many pieces its refresh changed (D-106).
+    pieces: u32,
     /// How long the worker took over it.
     took: Duration,
 }
@@ -173,6 +203,8 @@ pub struct CellStreamStats {
     /// Cells swapped between their content and their proxy (each also counted loaded and
     /// unloaded).
     pub swapped: u32,
+    /// Pieces brought in or taken out by their own ranges (D-106).
+    pub pieces: u32,
     /// The worker's time over them, seconds.
     pub worker_s: f64,
 }
@@ -183,15 +215,19 @@ impl std::ops::AddAssign for CellStreamStats {
         self.loaded += o.loaded;
         self.unloaded += o.unloaded;
         self.swapped += o.swapped;
+        self.pieces += o.pieces;
         self.worker_s += o.worker_s;
     }
 }
 
 /// A world's cells streamed around the viewer (see the module notes).
 pub struct CellStreamer {
-    viewer: Sender<(u64, DVec3, Option<DVec3>)>,
+    /// Number, position, facing, and whether to refresh the pieces exactly there (D-106).
+    viewer: Sender<(u64, DVec3, Option<DVec3>, bool)>,
     /// The positions given so far.
     sent: u64,
+    /// The last position given, with its facing.
+    last: Option<(DVec3, Option<DVec3>)>,
     /// The last position whose changes the worker has all made and sent.
     settled: Arc<AtomicU64>,
     batches: Receiver<Result<Batch>>,
@@ -213,7 +249,7 @@ impl CellStreamer {
         P: Partition + Send + 'static,
         S: CellSource,
     {
-        let (viewer, viewers) = mpsc::channel::<(u64, DVec3, Option<DVec3>)>();
+        let (viewer, viewers) = mpsc::channel::<(u64, DVec3, Option<DVec3>, bool)>();
         // Two edits ahead at most: each holds its staging until the frames take it.
         let (done, batches) = mpsc::sync_channel::<Result<Batch>>(2);
         let stop = Arc::new(AtomicBool::new(false));
@@ -239,6 +275,7 @@ impl CellStreamer {
         Ok(Self {
             viewer,
             sent: 0,
+            last: None,
             settled,
             batches,
             records: HashMap::new(),
@@ -257,7 +294,8 @@ impl CellStreamer {
     /// faces load first (#345), and a turn of more than about 15° plans again.
     pub fn view_facing(&mut self, at: DVec3, facing: Option<DVec3>) -> u64 {
         self.sent += 1;
-        let _ = self.viewer.send((self.sent, at, facing));
+        self.last = Some((at, facing));
+        let _ = self.viewer.send((self.sent, at, facing, false));
         self.sent
     }
 
@@ -271,6 +309,16 @@ impl CellStreamer {
         scene: &mut MeshletScene,
         systems: &mut CellSystems<'_>,
     ) -> Result<CellStreamStats> {
+        // The latest position asked for again, exactly: a step short of the refresh distance
+        // still counts for a capture (D-106).
+        let seq = match self.last {
+            Some((at, facing)) if seq == self.sent => {
+                self.sent += 1;
+                let _ = self.viewer.send((self.sent, at, facing, true));
+                self.sent
+            }
+            _ => seq,
+        };
         let mut total = CellStreamStats::default();
         loop {
             // Read first: every edit sent before it is then in the channel.
@@ -334,6 +382,7 @@ impl CellStreamer {
             stats.loaded += batch.loaded.len() as u32;
             stats.unloaded += batch.unloaded.len() as u32;
             stats.swapped += batch.swapped;
+            stats.pieces += batch.pieces;
             stats.worker_s += batch.took.as_secs_f64();
         }
         Ok(stats)
@@ -388,7 +437,7 @@ struct Worker<P, S> {
 impl<P: Partition, S: CellSource> Worker<P, S> {
     fn run(
         &mut self,
-        viewers: &Receiver<(u64, DVec3, Option<DVec3>)>,
+        viewers: &Receiver<(u64, DVec3, Option<DVec3>, bool)>,
         done: &SyncSender<Result<Batch>>,
         stop: &AtomicBool,
         settled: &AtomicU64,
@@ -396,9 +445,13 @@ impl<P: Partition, S: CellSource> Worker<P, S> {
         // Where the last plan was made from, and the way it faced.
         let mut viewer: Option<(DVec3, Option<DVec3>)> = None;
         let mut seq = 0;
+        // Where the pieces were last refreshed from (D-106), and whether they are due again.
+        let every = self.source.refresh_metres();
+        let mut refreshed: Option<DVec3> = None;
+        let mut due = false;
         while !stop.load(Ordering::Relaxed) {
             // The latest position; wait for one when there is nothing to do.
-            let idle = self.loads.is_empty() && self.unloads.is_empty();
+            let idle = self.loads.is_empty() && self.unloads.is_empty() && !due;
             let first = if idle {
                 match viewers.recv_timeout(Duration::from_millis(50)) {
                     Ok(given) => Some(given),
@@ -408,9 +461,18 @@ impl<P: Partition, S: CellSource> Worker<P, S> {
             } else {
                 viewers.try_recv().ok()
             };
-            if let Some((n, at, facing)) = first.map(|g| viewers.try_iter().last().unwrap_or(g)) {
+            if let Some((n, at, facing, exact)) =
+                first.map(|g| viewers.try_iter().last().unwrap_or(g))
+            {
                 seq = n;
                 let facing = facing.and_then(DVec3::try_normalize);
+                // Far enough from the last refresh, or come to rest short of it, or a capture's
+                // position: a still viewer's pieces are exactly those of where it stands.
+                let still = viewer.is_some_and(|(was, _)| was == at);
+                if every > 0.0 {
+                    let moved = refreshed.map_or(f64::INFINITY, |r| r.distance(at));
+                    due |= moved >= every || ((still || exact) && moved > 0.0);
+                }
                 // Moved, or turned by more than about 15°.
                 let again = viewer.is_none_or(|(was, faced)| {
                     was != at
@@ -424,15 +486,26 @@ impl<P: Partition, S: CellSource> Worker<P, S> {
                     self.plan(at, facing);
                 }
             }
-            if self.loads.is_empty() && self.unloads.is_empty() {
+            if self.loads.is_empty() && self.unloads.is_empty() && !due {
                 settled.store(seq, Ordering::Release);
                 continue;
             }
-            let batch = self.batch();
-            if done.send(batch).is_err() {
+            // Cells changing change what may show: refresh with them.
+            let cells_work = !self.loads.is_empty() || !self.unloads.is_empty();
+            let at = viewer
+                .map(|(v, _)| v)
+                .filter(|_| every > 0.0 && (due || cells_work));
+            let made = self.batch(at);
+            if let Some(v) = at {
+                refreshed = Some(v);
+                due = self.source.refresh_pending();
+            }
+            if let Some(batch) = made.transpose()
+                && done.send(batch).is_err()
+            {
                 return;
             }
-            if self.loads.is_empty() && self.unloads.is_empty() {
+            if self.loads.is_empty() && self.unloads.is_empty() && !due {
                 settled.store(seq, Ordering::Release);
             }
         }
@@ -481,10 +554,12 @@ impl<P: Partition, S: CellSource> Worker<P, S> {
         self.source.unload(cell, &mut self.editor);
     }
 
-    /// The next edit: unloads first, then loads, up to the configured cells. A cell in at the
-    /// other detail is taken out in the same edit that brings it at this one.
-    fn batch(&mut self) -> Result<Batch> {
+    /// The next edit: unloads first, then loads, up to the configured cells, then the pieces of
+    /// the cells in from `refresh` (D-106). A cell in at the other detail is taken out in the same
+    /// edit that brings it at this one. None when nothing changed: no edit to publish.
+    fn batch(&mut self, refresh: Option<DVec3>) -> Result<Option<Batch>> {
         let start = Instant::now();
+        let cells_work = !self.loads.is_empty() || !self.unloads.is_empty();
         let mut unloaded = Vec::new();
         let mut loaded = Vec::new();
         let mut swapped = 0;
@@ -524,14 +599,22 @@ impl<P: Partition, S: CellSource> Worker<P, S> {
                 Err(e) => tracing::warn!(?cell, ?detail, "a streamed cell not made: {e}"),
             }
         }
+        let pieces = match refresh {
+            Some(at) => self.source.refresh(at, &mut self.editor)?,
+            None => 0,
+        };
+        if !cells_work && pieces == 0 {
+            return Ok(None);
+        }
         let edit = self.editor.finish(None)?;
-        Ok(Batch {
+        Ok(Some(Batch {
             edit,
             loaded,
             unloaded,
             swapped,
+            pieces,
             took: start.elapsed(),
-        })
+        }))
     }
 }
 

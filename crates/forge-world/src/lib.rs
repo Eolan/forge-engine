@@ -10,6 +10,8 @@
 //! - [`streaming`]: which cells a viewer needs, by level and distance (their content near, their
 //!   proxy farther, D-077), and the loads, swaps and unloads that follow the viewer with
 //!   hysteresis.
+//! - [`ranged`]: inside the cells in, an authored world's pieces by their own ranges, a stand-in
+//!   swapping with its members as one group (D-106).
 //!
 //! Everything here is deterministic (D-016): integer arithmetic where it can be, `f64` where
 //! it cannot, and `forge_core::dmath` for the transcendental functions, so a client and a
@@ -21,10 +23,12 @@ pub mod cell_id;
 pub mod cells;
 pub mod frame;
 pub mod partition;
+pub mod ranged;
 pub mod streaming;
 
 pub use cell_id::{CellId, CellKind, MAX_LEVEL};
 pub use cells::{CELL_SIZE, CellPos};
 pub use frame::{Frame, FrameId, FrameKind, FrameTree, SECTOR_SIZE, SectorId, WorldPos};
 pub use partition::{CubeSphere, Face, FlatGrid, Partition};
+pub use ranged::{GroupId, RangedChanges, RangedPiece, RangedSet};
 pub use streaming::{CellWant, Changes, Detail, Residency, StreamPlan, StreamPolicy};

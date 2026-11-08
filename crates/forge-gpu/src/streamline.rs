@@ -494,6 +494,11 @@ const RESULT_NAMES: [&str; 40] = [
     "eWarnOutOfVRAM",
 ];
 
+/// `eWarnOutOfVRAM`, a warning among [`RESULT_NAMES`].
+const WARN_OUT_OF_VRAM: SlResult = 39;
+/// Whether [`WARN_OUT_OF_VRAM`] has been logged.
+static OUT_OF_VRAM_SAID: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 fn check(call: &'static str, result: SlResult) -> Result<()> {
     if result == 0 {
         return Ok(());
@@ -750,7 +755,7 @@ impl Streamline {
     ) -> Result<()> {
         let inputs = [viewport.as_base()];
         // SAFETY: guaranteed by the caller; the inputs outlive the call.
-        check("slEvaluateFeature", unsafe {
+        let result = unsafe {
             (self.evaluate_feature)(
                 FEATURE_DLSS,
                 token,
@@ -758,7 +763,16 @@ impl Streamline {
                 1,
                 commands as *mut c_void,
             )
-        })
+        };
+        // Over the card's budget for now (a scripted run's first view keeps every edit's uploads
+        // until the frame that took them ends): said once, no reason to stop the frames.
+        if result == WARN_OUT_OF_VRAM {
+            if !OUT_OF_VRAM_SAID.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                tracing::warn!("Streamline: over the video memory budget (said once)");
+            }
+            return Ok(());
+        }
+        check("slEvaluateFeature", result)
     }
 
     fn dlss_function(&self, name: &CStr) -> Result<*mut c_void> {

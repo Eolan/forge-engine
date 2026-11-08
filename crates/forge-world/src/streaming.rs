@@ -69,6 +69,21 @@ impl StreamPolicy {
         self.rings * partition.cell_size(level)
     }
 
+    /// The finest level whose cells are wanted whenever a viewer is within `reach` metres of any
+    /// point inside them (D-106): a piece put in that level's cell at its reference point is in
+    /// whenever it can show. The coarsest level when none reaches that far.
+    pub fn level_for_reach<P: Partition>(&self, partition: &P, reach: f64) -> u8 {
+        let mut level = self.finest;
+        while level > self.coarsest {
+            let size = partition.cell_size(level);
+            if self.reach(partition, level) >= reach + size * std::f64::consts::FRAC_1_SQRT_2 {
+                break;
+            }
+            level -= 1;
+        }
+        level
+    }
+
     /// Whether the cells past the reach are wanted as proxies.
     pub fn proxies(&self) -> bool {
         self.proxy_rings > self.rings

@@ -19,7 +19,9 @@ pub const BINDING_STORAGE_IMAGES: u32 = 1;
 /// Binding index of the sampler array.
 pub const BINDING_SAMPLERS: u32 = 2;
 
-const MAX_SAMPLED_IMAGES: u32 = 65_536;
+/// A wide streamed district's maps and layered masks came to about 62,000 with their masks shared, over
+/// the 65,536 this was. Device selection checks it: the RTX 5070 Ti allows 1,048,576.
+const MAX_SAMPLED_IMAGES: u32 = 262_144;
 /// The sampled images the bindless set holds: their indices run below it.
 pub const SAMPLED_IMAGE_CAPACITY: u32 = MAX_SAMPLED_IMAGES;
 const MAX_STORAGE_IMAGES: u32 = 16_384;

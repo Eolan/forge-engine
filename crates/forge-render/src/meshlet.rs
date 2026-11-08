@@ -945,7 +945,9 @@ struct ResolvePush {
     /// index of their filtered share of their light, the same with the top bit set for ReSTIR's
     /// light, or `u32::MAX`: the resolve traces their rays.
     lamp_share: u32,
-    tile_capacity: u32,
+    /// Sampled index of D-088's traced diffuse bounce ([`AmbientLight::diffuse_bounce`]), or
+    /// `u32::MAX`: the probes' light.
+    diffuse_bounce: u32,
     /// Written to the empty pixels where its alpha is ≥ 0; else they are left for the sky.
     background: [f32; 4],
     /// The sky's irradiance coefficients (`sh.slang`, issue #47), or 0: space's constant fill.
@@ -967,9 +969,8 @@ struct ResolvePush {
     cloud_frame: [f32; 4],
     /// Its sampled index (r32f: the sun's share through the clouds), or `u32::MAX`.
     cloud_shadow: u32,
-    /// Sampled index of SIGMA's denoised sun shadow (#172, [`AmbientLight::sun_shadow`]) in the
-    /// low half, 0xFFFF: the resolve traces its own ray; that of D-088's traced diffuse bounce
-    /// ([`AmbientLight::diffuse_bounce`]) in the high half, 0xFFFF: the probes' light.
+    /// Sampled index of SIGMA's denoised sun shadow (#172, [`AmbientLight::sun_shadow`]), or
+    /// `u32::MAX`: the resolve traces its own ray.
     sun_shadow: u32,
     /// The mirror rays' `ReflectionHistory` block (#176, [`AmbientLight::reflection_history`]),
     /// or 0: each frame's ray alone.
@@ -7089,7 +7090,9 @@ impl MeshletRenderer {
             lamp_share: ambient
                 .lamp_shadows
                 .code(|image| resources.sampled(image).0),
-            tile_capacity: tile_count(self.extent),
+            diffuse_bounce: ambient
+                .diffuse_bounce
+                .map_or(u32::MAX, |image| resources.sampled(image).0),
             background: background.unwrap_or([0.0, 0.0, 0.0, -1.0]),
             sky: ambient.sky.map_or(0, |s| s.address),
             ao_image: ambient
@@ -7102,16 +7105,9 @@ impl MeshletRenderer {
             cloud_shadow: ambient
                 .clouds
                 .map_or(u32::MAX, |c| resources.sampled(c.image).0),
-            sun_shadow: {
-                let index = |image: Option<ImageHandle>| {
-                    image.map_or(0xFFFF, |image| {
-                        let i = resources.sampled(image).0;
-                        assert!(i < 0xFFFF, "a sampled index past 16 bits");
-                        i
-                    })
-                };
-                index(ambient.sun_shadow) | index(ambient.diffuse_bounce) << 16
-            },
+            sun_shadow: ambient
+                .sun_shadow
+                .map_or(u32::MAX, |image| resources.sampled(image).0),
             reflection_history: ambient.reflection_history.map_or(0, |h| h.address),
         };
 

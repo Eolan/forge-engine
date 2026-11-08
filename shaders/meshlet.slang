@@ -6460,7 +6460,7 @@ struct ResolvePush
     uint width;
     uint height;
     uint lamp_share;     // sampled index of the lamps' filtered share of their light (rgba16f, `lamp_spread_main`), or with the top bit set ReSTIR's light (restir.slang), or 0xFFFFFFFF: their own rays here
-    uint tile_capacity;
+    uint diffuse_bounce; // sampled index of D-088's traced bounce (`diffuse_trace_main`, YCoCg), or 0xFFFFFFFF: the probes' light
     float4 background;   // written to empty pixels where its w ≥ 0 (else they are left for the sky)
     float4* sky;         // the sky's irradiance (sh.slang), or null: space's constant fill (issue #47)
     uint ao_image;       // sampled index of the ambient occlusion (gtao.slang, issue #48), or 0xFFFFFFFF; in `reflections_main`, the motion vectors' storage index (r.reflections.motion), or 0xFFFFFFFF
@@ -6472,6 +6472,12 @@ struct ResolvePush
     uint sun_shadow;     // sampled index of SIGMA's denoised shadow (r16f, its square root; #172), or 0xFFFFFFFF: the resolve's own ray
     ReflectionHistory* reflection_history; // the mirror rays' history (#176), or null: each frame's ray alone
 };
+
+// The tiles a shading class's list can hold, as `tile_count` in meshlet.rs.
+uint resolve_tile_capacity(uint width, uint height)
+{
+    return ((width + 7u) / 8u) * ((height + 7u) / 8u);
+}
 
 // The mirror rays' history (#176, D-050), which `reflections_main` blends each frame's ray into.
 // Mirrors `ReflectionHistoryBlock` in reflection_history.rs.
@@ -6663,7 +6669,7 @@ float denoised_sun_shadow(Frame* f, float3 n, uint2 pixel)
 {
     if (dot(n, normalize(f[0].sun_dir)) <= 0.0)
         return 0.0;
-    float stored = g_sampled_images_r[NonUniformResourceIndex(resolve_push.sun_shadow & 0xFFFFu)].Load(int3(pixel, 0));
+    float stored = g_sampled_images_r[NonUniformResourceIndex(resolve_push.sun_shadow)].Load(int3(pixel, 0));
     return saturate(stored * stored);
 }
 
@@ -8410,7 +8416,7 @@ uint shade_pixel<let SHADOWS : int>(uint class_index, uint2 pixel, uint vis)
         float3 shadow_n = grass ? s.n : leaf_shadow_normal(f, mat, s.n);
         // NVIDIA's SIGMA denoised the sun's shadow before the resolve (#172), or the reference
         // traces 256 rays here; else one ray a frame and TAA's average (#54).
-        if ((resolve_push.sun_shadow & 0xFFFFu) != 0xFFFFu)
+        if (resolve_push.sun_shadow != 0xFFFFFFFFu)
             s.shadow = denoised_sun_shadow(f, shadow_n, pixel);
         else if ((f[0].flags & FLAG_SHADOW_REFERENCE) != 0)
             s.shadow = sun_shadow_reference(f, surface_scene, shadow_n, pixel, sun_bias);
@@ -8452,12 +8458,12 @@ uint shade_pixel<let SHADOWS : int>(uint class_index, uint2 pixel, uint vis)
         }
     }
     // D-088's references for the diffuse light (`r.gi.reference`), or its bounce traced before
-    // the resolve (`diffuse_trace_main`, the high half of the sun shadow's word).
-    uint bounce_image = resolve_push.sun_shadow >> 16;
+    // the resolve (`diffuse_trace_main`).
+    uint bounce_image = resolve_push.diffuse_bounce;
     g_near_on = SHADOWS != 0 && f[0].gi_reference != 0u && (s.probes != nullptr || f[0].gi_reference >= GI_REFERENCE_PATH) && s.sky != nullptr && f[0].tlas != 0;
     if (g_near_on)
         g_near_irradiance = near_field_reference(f, s.sky, s.probes, surface_scene, s.n, si.li.n, f[0].gi_reference);
-    else if (bounce_image != 0xFFFFu && s.sky != nullptr && f[0].tlas != 0 && (mat.flags & MATERIAL_FLAG_FOLIAGE) == 0)
+    else if (bounce_image != 0xFFFFFFFFu && s.sky != nullptr && f[0].tlas != 0 && (mat.flags & MATERIAL_FLAG_FOLIAGE) == 0)
     {
         // In YCoCg, as REBLUR reads and writes it (`ycocg_to_linear`).
         g_near_on = true;
@@ -8594,7 +8600,7 @@ void resolve_standard<let SHADOWS : int>(uint3 group, uint3 thread, uint index)
         uint slot;
         InterlockedAdd(resolve_push.class_args[index * 4 + 3], 1u, slot);
         InterlockedMax(resolve_push.class_args[index * 4 + 1], slot / TILE_GROUPS_X + 1u);
-        resolve_push.tiles[index * resolve_push.tile_capacity + slot] = group.x | (group.y << 16);
+        resolve_push.tiles[index * resolve_tile_capacity(resolve_push.width, resolve_push.height) + slot] = group.x | (group.y << 16);
     }
 }
 
@@ -8604,7 +8610,7 @@ void resolve_tiles<let SHADOWS : int>(uint class_index, uint3 group, uint3 threa
     uint tile_index = group.y * TILE_GROUPS_X + group.x;
     if (tile_index >= resolve_push.class_args[class_index * 4 + 3])
         return;
-    uint tile = resolve_push.tiles[class_index * resolve_push.tile_capacity + tile_index];
+    uint tile = resolve_push.tiles[class_index * resolve_tile_capacity(resolve_push.width, resolve_push.height) + tile_index];
     uint2 pixel = uint2(tile & 0xFFFFu, tile >> 16) * 8 + thread.xy;
     if (pixel.x >= resolve_push.width || pixel.y >= resolve_push.height)
         return;
@@ -8660,7 +8666,7 @@ void reflections_main(uint3 group : SV_GroupID, uint3 thread : SV_GroupThreadID)
     uint tile_index = group.y * TILE_GROUPS_X + group.x;
     if (tile_index >= resolve_push.class_args[REFLECTION_LIST * 4 + 3])
         return;
-    uint tile = resolve_push.tiles[REFLECTION_LIST * resolve_push.tile_capacity + tile_index];
+    uint tile = resolve_push.tiles[REFLECTION_LIST * resolve_tile_capacity(resolve_push.width, resolve_push.height) + tile_index];
     uint2 pixel = uint2(tile & 0xFFFFu, tile >> 16) * 8 + thread.xy;
     if (pixel.x >= resolve_push.width || pixel.y >= resolve_push.height)
         return;
