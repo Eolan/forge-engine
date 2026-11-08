@@ -12514,7 +12514,7 @@ spread wide now comes in earlier than its members' own ranges, at some cost in m
 2. The area first: the district's present reach, about ±1,100 m. The whole city once step 2 is measured.
 3. The fade: after walking the hard swap, if it shows pops.
 
-## D-107 — Relief without geometry: a height map marched in the resolve, its shadow along the sun and the strongest lamp, the micro-shadows of occlusion and normal maps 🟡 (proposed 2026-11-08; the code written beside it on the owner's word, "you can work on the research and the code"; the engine not run yet: every number under "Cost" is a target)
+## D-107 — Relief without geometry: a height map marched in the resolve, its shadow along the sun and the strongest lamp, the micro-shadows of occlusion and normal maps 🟡 (proposed 2026-11-08; the code written beside it on the owner's word, "you can work on the research and the code"; first run the same day on the owner's "Yes, run it")
 
 **Why:** up close, surfaces are flat. Normal maps bend the light and nothing else, and every direct
 shadow comes from rays against the true triangles. Nothing in the engine reads a height (searched
@@ -12601,24 +12601,48 @@ cosine hold.
   4. Heights integrated from tiled normal maps when a package is cooked (an FFT, periodic textures
      only), a scale per material, for the layered walls that have none; not built.
 
-**Cost (targets, nothing measured).** On the RTX 5070 Ti at 1707 × 960 (DLSS Quality at 1440p), at
-most 0.5 ms on `shading/standard` with every pixel's row marching, and 0.2 ms on a view where a third
-do. It adds no pass. RTX 3080: expected 1.3 to 2 times that. RX 9070 XT: not measurable here. Nothing
-depends on a wave size: the loops are per lane, the reads have explicit levels, so no derivatives
-and no helper lanes; a wave64 card pays for divergent step counts in a dispatch of 8 × 8.
+**Cost.** The target on the RTX 5070 Ti at 1707 × 960 (DLSS Quality at 1440p) was at most 0.5 ms on
+`shading/standard` with every pixel's row marching. It adds no pass. Measured there under DLAA, in
+the gallery's brick house (`--pom-sets`; a 512 × 512 map 2 m across, 18 mm deep), the best of three
+alternating runs against `r.pom 0`:
+
+| View | `shading/standard` | The frame |
+|---|---|---|
+| The wall fills the frame, 1 m away | 1.350 → 1.403 ms | 4.99 → 5.05 ms |
+| The ground floor from 5 m | 0.719 → 0.755 ms | 3.62 → 3.67 ms |
+| Grazing, filling the frame, the depth × 3, 64 and 16 steps | 0.952 → 0.893 ms | 4.06 → 3.96 ms |
+
+The last row is under the noise between runs (about 0.05 ms). A scan's 2K or 4K map crosses more
+texels and takes more steps: not measured yet. RTX 3080: expected 1.3 to 2 times that. RX 9070 XT:
+not measurable here. Nothing depends on a wave size: the loops are per lane, the reads have explicit
+levels, so no derivatives and no helper lanes; a wave64 card pays for divergent step counts in a
+dispatch of 8 × 8.
 
 **Settings.** `r.pom` (1), `r.pom.steps` (32), `r.pom.shadow_steps` (8), `r.pom.fade` (0.5),
 `r.pom.scale` (1), `r.micro.ao` (0), `r.micro.bump` (0), `r.ao.material` (multiply). `r.pom` off, or a
 row without a height map, draws as before; the micro-shadows' defaults draw as before.
 
-**Built, unverified on the GPU** (branch `raster/pom-micro-shadowing`, not pushed): the row, the march,
-the shadows, the micro-shadows, the settings, `--pom-sets`. Checked: the shaders compile, the CPU
-mirror's tests pass, a CPU mock-up (`RELIEF_SHEET=path cargo test -p forge-render relief_sheet`).
+**Built and run** (branch `raster/pom-micro-shadowing`): the row, the march, the shadows, the
+micro-shadows, the settings, `--pom-sets`. A CPU mirror's tests and mock-up:
+`RELIEF_SHEET=path cargo test -p forge-render relief_sheet`.
 
-**To check when the engine may run:** a close-up at grazing and steep angles against `--pom-sets`
-off; fixed-exposure stills; a moving camera for shimmer; GPU timings; a `FORGE_NO_RAY_QUERY=1` run;
-`tools/baseline.sh` if the private district's materials change.
+**Checked on the GPU (2026-11-08, RTX 5070 Ti, DLAA, a fixed exposure, the projected rows):**
+- **Off means off:** the branch against its base without `--pom-sets`: 0 pixels in the city, and in
+  the gallery with and without anti-aliasing.
+- **Close up:** a wall from 1 m, at 42° and along it at about 6°, on and off: the mortar lies behind
+  the bricks and the bricks hide it along the wall. Validation: no error.
+- **A still camera, frames ten apart:** none over 30 codes on or off; over 2 codes, 1,035 on against
+  929 off at 1.5 m, and 1,639 against 1,632 at 35 m.
+- **Backing away at 8 m/s, across the whole fade:** the pixels over 30 codes between captures match
+  relief off within 2 % at every frame sampled, so the fade pops nowhere.
+- **Strafing at 1.2 m/s, 1 m from the wall:** no ghosting, so the motion vectors' correction is not
+  built.
+- **`FORGE_NO_RAY_QUERY=1`:** runs, the relief there.
+- **`r.micro.ao`, `r.micro.bump`, `r.ao.material min`** on a model with an occlusion map: each takes
+  effect, on 0.2 to 2.3 % of its frame. `r.micro.ao` darkens the hose's ribs.
+
+**Not checked:** the UV path on the GPU (no asset has both UVs and a height map yet), and
+`tools/baseline.sh`, since no material of the private district changes.
 
 **For the owner to decide:** this design; which heights come first (2 for the UV path, then 3 or 4);
-whether the micro-shadows and `min` become defaults after the A/B; the motion vectors' correction,
-if the walk shows a need.
+whether the micro-shadows and `min` become defaults after the A/B.
