@@ -12281,3 +12281,91 @@ mask in fixed-function hardware), was filed in 2000 and has expired. The searche
   and the frame 18.8 → 79 ms by paging, for no face drawn sharper (the one seen closest wears a mask).
   - In BC5 it would still be about 1 GB.
   - That asks for levels by distance (this decision's streaming), not a global cap.
+
+## D-106 — An authored world shown by the camera: each piece's own range, real pieces and stand-ins in one table ✅ (accepted by the owner 2026-11-08; being built, step by step)
+
+**Why:** the private district draws a fixed set of pieces, chosen once for the whole run, and a free camera goes where that
+choice is wrong. The far city's stand-ins took five rules in one night, each mending what the last one broke:
+
+- real geometry missing with the stand-ins gone;
+- stand-ins lying over real roads and buildings (z-fighting, bright blurred patches);
+- whole terrain tiles either standing through the real ground or leaving a hole in it.
+
+The last of them cannot be settled by any fixed choice: one threshold fixes one view and breaks another. Every piece is also
+resident at once: about 13.4 GB of VRAM, 92 % of the budget.
+
+**What the source's own data holds** (measured on 901,362 placed pieces round the district):
+
+- **Each piece has its own range:** a reference point and a streaming distance. The reference point is not its origin; one
+  stand-in's origin stood 1.6 km from its geometry, which is what misled the rules above.
+- **Stand-ins also have a near distance:** closer than that they are hidden.
+- **Real pieces name their stand-in:** 466,746 real pieces carry a link, and 99.5 % of the links resolve to a stand-in in the data.
+- **Pieces hand over in groups:** 22,147 stand-ins have linked pieces (464,203 of them), and within a group every piece has the same
+  streaming distance. That reach passes the stand-in's near distance by a median of 16 m (p10 6, p90 49), so both exist for a stretch.
+  Forty groups stop short by more than 5 m (signs and billboards capped near 512 m, the worst by 2 km): there neither would show.
+  The farthest of a group's reference points from its stand-in's is 0 m in the median group, 57 m at p90, 1.2 km at worst.
+- **Most stand-ins have no linked piece in the table:** 73,651 of 95,798. Some have their pieces in sectors not yet read; those of roads
+  and terrain carry no link at all.
+- **A camera needs little of it:** 7,272 to 23,931 real pieces are live at the cameras tried, out of 805,564, and at most 2,642
+  of 13,572 distinct meshes.
+
+**The rule, checked on the data at the owner's failing views:** a piece is live when the camera is within its streaming distance
+of its reference point; a stand-in also needs the camera beyond its near distance.
+
+| View | What went wrong | What the rule does |
+|---|---|---|
+| Street at the centre | three stand-ins over the road | all three hidden |
+| Tall building, from the street | upper floors missing | their stand-ins shown |
+| Beach and shore | terrain stand-ins through the ground, or a hole | nearest six each hidden; 28 and 16 real tiles live |
+
+These are checks of the rule against the data, not renders.
+
+**The design: the rule runs on the cell streamer's worker (D-096).**
+
+- **Cells stay the unit of reading and of mesh lifetime** (`SharedMeshes`). A cell's reach comes from its own pieces, the largest
+  streaming distance among them, in place of one reach per level (`StreamPolicy::rings`).
+- **Inside the loaded cells, each piece is tested on its own** as the camera moves. Pieces enter and leave the scene through the
+  same scene edits as a cell's instances.
+- **Rays and raster agree without further work,** since both draw from the scene's instances.
+- **A stand-in and its linked pieces swap as one group.** The group is live while any of its pieces is in range: all its pieces stay and
+  the stand-in waits. Out of range, the stand-in shows. No group is drawn in part or twice, and the forty short groups have no gap.
+- **A stand-in with no linked piece obeys its near distance,** as the source does.
+- **One table:** real pieces and stand-ins come from the same converter. The separate far-city list and its rules go, with the
+  district's fixed radius.
+
+**Left out, and why:**
+
+- **A distance test per instance in the GPU cull:** exact each frame, but the rays keep every piece, so a stand-in's shell would
+  shadow the real building inside it. Changing what the rays see means a top-level rebuild anyway, which the edits already do.
+- **Keeping a stand-in with no linked piece shown inside its near distance,** to avoid holes: the three over the road are of that kind,
+  and 104 to 199 of them per camera would come back. The holes to fear are pieces not yet read, which step 1 reads and counts.
+- **Cells alone, one reach per level:** ranges differ too much within a level (at the finest, 19 to 108 m from p10 to p90), and a whole cell cannot
+  swap with stand-ins that do not follow its edges. That is another fixed approximation.
+
+**Steps, each checked before the next** (the owner's six views, the tall building, `tools/baseline.sh compare`):
+
+1. **The data** (private; no picture changes): the range, near distance and link per piece, in one table. Read the 1,993 sectors
+   round the district not yet extracted. Then, before any engine work, count over a grid of cameras the stand-ins hidden by their
+   near distance with no real piece over their footprint: the holes to expect.
+2. **Pieces by their own range in the streamer,** with the district streamed. Measured: the views above, VRAM, the worker's time per
+   edit, and the 99th percentile at a walk and at 40 m/s.
+3. **The streamed path catches up with the resident one:** the crowd, the holograms, the rotating pieces and the lamp channels are
+   missing or simplified there today. Then it becomes the default.
+4. **Lamps and decals by their own ranges** (a lamp at the finest level hides at a median 30 m), measured for the frame's cost.
+5. **A fade across the hand-over,** if the walk shows pops: the 16 m overlap is where it would run.
+
+**Costs and risks:**
+
+- **Pops:** the swap is a hard cut until step 5, and the owner sees those at once.
+- **Edits at speed:** along a straight line 1,169 pieces a second change at a walk and 3,714 at 40 m/s, 8,256 at worst, counted
+  piece by piece: swapping by group will raise them somewhat. No edit load of that size has been measured; step 2 does.
+- **Memory:** the distinct meshes suggest a large cut in geometry (about a fifth of them live at the busiest camera), but meshes differ
+  in size, so it is a measure of step 2 and not a promise. Textures stay resident until D-105 is wired.
+- **A second reference point** in the data is not understood and is not used. A piece it matters for would show as a range error.
+- **Disk and time:** the conversion of about 2,000 more sectors, its meshes and textures.
+
+**Decided** (the owner, 2026-11-08):
+
+1. This design, starting with step 1.
+2. The area first: the district's present reach, about ±1,100 m. The whole city once step 2 is measured.
+3. The fade: after walking the hard swap, if it shows pops.
