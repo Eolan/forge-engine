@@ -12294,20 +12294,22 @@ choice is wrong. The far city's stand-ins took five rules in one night, each men
 The last of them cannot be settled by any fixed choice: one threshold fixes one view and breaks another. Every piece is also
 resident at once: about 13.4 GB of VRAM, 92 % of the budget.
 
-**What the source's own data holds** (measured on 901,362 placed pieces round the district):
+**What the source's own data holds** (the hand-over measured on the 1,834 sectors first read, the rest on the full table of step 1):
 
 - **Each piece has its own range:** a reference point and a streaming distance. The reference point is not its origin; one
   stand-in's origin stood 1.6 km from its geometry, which is what misled the rules above.
 - **Stand-ins also have a near distance:** closer than that they are hidden.
-- **Real pieces name their stand-in:** 466,746 real pieces carry a link, and 99.5 % of the links resolve to a stand-in in the data.
+- **Real pieces name their stand-in:** 1,597,131 placements carry a link, and 99.8 % of the links resolve to a stand-in in the data.
+  Terrain chains: a tile names its stand-in, and that one a coarser one. An entity's stand-in names its entity instead, with the distance
+  the entity attaches at.
 - **Pieces hand over in groups:** 22,147 stand-ins have linked pieces (464,203 of them), and within a group every piece has the same
   streaming distance. That reach passes the stand-in's near distance by a median of 16 m (p10 6, p90 49), so both exist for a stretch.
   Forty groups stop short by more than 5 m (signs and billboards capped near 512 m, the worst by 2 km): there neither would show.
   The farthest of a group's reference points from its stand-in's is 0 m in the median group, 57 m at p90, 1.2 km at worst.
-- **Most stand-ins have no linked piece in the table:** 73,651 of 95,798. Some have their pieces in sectors not yet read; those of roads
-  and terrain carry no link at all.
-- **A camera needs little of it:** 7,272 to 23,931 real pieces are live at the cameras tried, out of 805,564, and at most 2,642
-  of 13,572 distinct meshes.
+- **Some stand-ins have no linked piece:** 54,589 of 126,553, with every sector read: the roads', and the coarse hulls of whole
+  neighbourhoods.
+- **A camera needs little of it:** 29,107 to 70,787 placements are live at the cameras tried, out of 4.6 million, using 3,369 to 6,805
+  of 32,378 distinct meshes.
 
 **The rule, checked on the data at the owner's failing views:** a piece is live when the camera is within its streaming distance
 of its reference point; a stand-in also needs the camera beyond its near distance.
@@ -12353,6 +12355,13 @@ These are checks of the rule against the data, not renders.
    missing or simplified there today. Then it becomes the default.
 4. **Lamps and decals by their own ranges** (a lamp at the finest level hides at a median 30 m), measured for the frame's cost.
 5. **A fade across the hand-over,** if the walk shows pops: the 16 m overlap is where it would run.
+
+**Step 1, done (2026-11-08).** The private converter writes the range, near distance, link and owner per placement, stand-ins in the
+same table: 3,825 of 3,827 sectors (two cannot be converted, one small cell each at the area's north edge), 4.6 million placements. Over a
+grid of 529 cameras, a median of 146 stand-ins with no linked piece are hidden by their near distance (276 at most). Twenty of the 55,051
+such stand-ins ever lack real geometry under half their footprint, all neighbourhood hulls or coarse terrain 269 m to 8 km wide that finer
+stand-ins replace. What this table cannot judge, tall stand-ins whose top third the real pieces do not fill (83 per camera, mostly the
+same hulls), waits for step 2's pictures.
 
 **Costs and risks:**
 
