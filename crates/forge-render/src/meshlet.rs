@@ -144,6 +144,8 @@ const INSTANCE_VACANT: u32 = 2;
 /// `Instance::flags`: a dynamic scene's instance that dissolves in and out by distance (D-106,
 /// [`SceneEditor::set_instance_fade`], `INSTANCE_FADES` in the shader).
 const INSTANCE_FADES: u32 = 128;
+/// `Instance::flags`: a coarse stand-in ([`Visibility::coarse`], `INSTANCE_COARSE` in the shader).
+const INSTANCE_COARSE: u32 = 512;
 /// `Instance::flags`: an instance with a side it goes across (D-106, a stand-in): its shadow rays
 /// start clear of the pieces replacing it (`INSTANCE_GOES` in the shader).
 const INSTANCE_GOES: u32 = 256;
@@ -166,6 +168,10 @@ pub struct Visibility {
     /// Met by the mirror rays (the resolve's, the water's and the glass's), and their hits'
     /// shadow rays.
     pub mirrors: bool,
+    /// A coarse stand-in (D-106), a hollow shell: its surfaces keep the probes' light and take no
+    /// traced bounce, and a traced ray meeting its back takes the probes' light too. As anything
+    /// else, those rays' hits on backs came back black.
+    pub coarse: bool,
 }
 
 impl Visibility {
@@ -176,6 +182,7 @@ impl Visibility {
         far_shadows: true,
         probes: true,
         mirrors: true,
+        coarse: false,
     };
 
     /// Nothing sees it: hidden (#323, [`MeshletScene::set_static_visibility`]).
@@ -185,6 +192,7 @@ impl Visibility {
         far_shadows: false,
         probes: false,
         mirrors: false,
+        coarse: false,
     };
 
     /// Only the probes' rays meet it: a stand-in for their light (#297's crown proxies).
@@ -194,6 +202,7 @@ impl Visibility {
         far_shadows: false,
         probes: true,
         mirrors: false,
+        coarse: false,
     };
 
     /// Only the shadow rays from far points meet it (D-075 step 3): a tree's opaque proxy, its
@@ -204,6 +213,7 @@ impl Visibility {
         far_shadows: true,
         probes: false,
         mirrors: false,
+        coarse: false,
     };
 
     /// Its `Instance::flags` bits (`INSTANCE_NO_*` in the shader).
@@ -229,6 +239,7 @@ impl Visibility {
             } else {
                 INSTANCE_NO_MIRROR_RAYS
             })
+            | (if self.coarse { INSTANCE_COARSE } else { 0 })
     }
 }
 
@@ -265,6 +276,7 @@ fn ray_worlds(flags: u32) -> u32 {
 
 /// Every `Instance::flags` bit [`Visibility`] sets.
 const INSTANCE_VISIBILITY: u32 = INSTANCE_NO_RASTER
+    | INSTANCE_COARSE
     | INSTANCE_NO_SHADOW_RAYS
     | INSTANCE_NO_FAR_SHADOW_RAYS
     | INSTANCE_NO_PROBE_RAYS
@@ -802,7 +814,9 @@ struct GpuFrame {
     near_lamps: u64,
     /// What a diffuse ray meets of a glow, times this ([`MeshletRenderer::ray_glow`]).
     ray_glow: f32,
-    ray_glow_pad: u32,
+    /// Whether a traced ray's back-face hit takes the probes' light
+    /// ([`MeshletSceneBuilder::set_hollow_backs`]), 1, or black, 0.
+    hollow_backs: u32,
 }
 
 /// Where a frame slot's light lists start in its lamps' buffer, bytes: after the lamps.
@@ -1562,6 +1576,9 @@ pub struct MeshletSceneBuilder {
     instance_fades: bool,
     /// Where the far shadows start ([`MeshletSceneBuilder::set_far_shadows`]), 0: never.
     far_shadows: f32,
+    /// Whether a traced ray's back-face hit takes the probes' light
+    /// ([`MeshletSceneBuilder::set_hollow_backs`]).
+    hollow_backs: bool,
     /// What the scene keeps alive ([`MeshletSceneBuilder::keep`]).
     kept: Vec<Box<dyn std::any::Any + Send>>,
 }
@@ -2246,6 +2263,14 @@ impl MeshletSceneBuilder {
     /// proxy has no cut-out candidate to test. 0, the default: never.
     pub fn set_far_shadows(&mut self, start: f32) {
         self.far_shadows = start.max(0.0);
+    }
+
+    /// A world of one-sided shells: a traced ray meeting a surface's back takes the probes' light
+    /// instead of black. Black reads a back as a ray that started inside a solid, which holds in
+    /// a scene of closed objects; in an authored city most surfaces are open shells, and the
+    /// ground beside them came out black.
+    pub fn set_hollow_backs(&mut self, hollow: bool) {
+        self.hollow_backs = hollow;
     }
 
     /// What an instance of the mesh `info` can put in the work lists: its mesh's work and, on a
@@ -3052,6 +3077,7 @@ impl MeshletSceneBuilder {
             jelly,
             ladders: self.ladders,
             far_shadows: self.far_shadows,
+            hollow_backs: self.hollow_backs,
             ground_window: Cell::new(NO_GROUND_WINDOW),
             _kept: std::mem::take(&mut self.kept),
             planet: Cell::new(GpuPlanet::default()),
@@ -3287,6 +3313,9 @@ pub struct MeshletScene {
     ladders: bool,
     /// Where the far shadows start ([`MeshletSceneBuilder::set_far_shadows`]), 0: never.
     far_shadows: f32,
+    /// Whether a traced ray's back-face hit takes the probes' light
+    /// ([`MeshletSceneBuilder::set_hollow_backs`]).
+    hollow_backs: bool,
     /// The ground window (#197, [`Self::set_ground_window`]), as the frame block holds it.
     ground_window: Cell<[f32; 4]>,
     /// The planet ([`Self::set_planet`]), as the frame block holds it.
@@ -6054,7 +6083,7 @@ impl MeshletRenderer {
             exposure: params.exposure,
             sun_illuminance: self.sun_illuminance,
             ray_glow: self.ray_glow,
-            ray_glow_pad: 0,
+            hollow_backs: u32::from(scene.hollow_backs),
             sun_angular_radius: self.sun_angular_radius,
             clusters: scene.clusters[slot.index].address(),
             draws: 0,

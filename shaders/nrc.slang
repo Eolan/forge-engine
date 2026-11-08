@@ -174,8 +174,9 @@ void nrc_update_main(uint3 id : SV_DispatchThreadID)
     if (start)
     {
         s = pixel_surface(f, vis, pixel, p.width, p.height);
-        // A crown's leaf starts no path: its rays start inside its crown's proxy (D-075).
-        start = !s.foliage;
+        // A crown's leaf starts no path: its rays start inside its crown's proxy (D-075); nor does
+        // a coarse stand-in, a hollow shell (D-106).
+        start = !s.foliage && (s.inst.flags & INSTANCE_COARSE) == 0u;
     }
     if (!start)
     {

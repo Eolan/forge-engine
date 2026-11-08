@@ -194,7 +194,8 @@ void sharc_update_main(uint3 id : SV_DispatchThreadID)
     // `r.gi.cache auto` an outdoor pixel starts none either: of the voxels it would fill only
     // those its paths reach through a window or a door are read, and a voxel missing there gives
     // the probes' light (D-090).
-    if (s.foliage || !sharc_here(f, p.probes, to_scene(f, s.relative), s.g, normalize(-s.relative)))
+    // Nor does a coarse stand-in, a hollow shell its rays start in (D-106).
+    if (s.foliage || (s.inst.flags & INSTANCE_COARSE) != 0u || !sharc_here(f, p.probes, to_scene(f, s.relative), s.g, normalize(-s.relative)))
         return;
     g_ray_mask = shadow_world(f, s.relative, pixel);
     SharcParameters sharc = sharc_parameters(field);

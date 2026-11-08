@@ -187,6 +187,7 @@ static const uint INSTANCE_NO_PROBE_RAYS = 16; // Instance::flags: not met by th
 static const uint INSTANCE_NO_MIRROR_RAYS = 32; // Instance::flags: not met by the mirror rays (#301)
 static const uint INSTANCE_FADES = 128;        // Instance::flags: dissolves in and out by distance (D-106, `Frame::fades`)
 static const uint INSTANCE_GOES = 256;         // Instance::flags: a stand-in that goes as pieces come (D-106): its shadow rays start clear of them
+static const uint INSTANCE_COARSE = 512;       // Instance::flags: a coarse stand-in, a hollow shell (D-106): the probes' light on it, and on a traced ray meeting its back
 static const float STAND_IN_SHADOW_START = 4.0; // metres, for INSTANCE_GOES; only ever seen from afar
 static const uint INSTANCE_NO_FAR_SHADOW_RAYS = 64; // Instance::flags: not met by the shadow rays from far points (D-075 step 3, `shadow_world`)
 // The TLAS records' mask bits, one a world of rays (#301): an instance a kind of ray does not meet
@@ -596,7 +597,7 @@ public struct Frame
     public uint gi_reference;       // D-088's reference for the diffuse light (`r.gi.reference`, `near_field_reference`); 0: the probes
     public NearLamps* near_lamps;   // the frame's lamps by columns round the camera when none has regions (#386), null: none
     public float ray_glow;          // what a diffuse ray meets of a glow, times this (`MeshletRenderer::ray_glow`)
-    public uint ray_glow_pad;
+    public uint hollow_backs;       // not 0: a traced ray's back-face hit takes the probes' light (`set_hollow_backs`), a world of open shells
 };
 
 // Whether this thread's rays meet the movers: every pass's but the probes' unless their scene asks
@@ -9392,7 +9393,9 @@ void diffuse_trace_main(uint3 id : SV_DispatchThreadID)
     // A crown's leaf keeps the probes' light (the resolve takes no bounce there): far from the camera
     // its ray started inside its crown's opaque proxy and met it black, and the leaves' light is
     // the impostors' (D-075). Written here too, so that REBLUR does not blur black round a tree.
-    if (s.foliage)
+    // A coarse stand-in takes the same light: a hollow shell, whose rays met backs and came back
+    // black (D-106). The resolve reads this for it as a bounce, at the vertex normal.
+    if (s.foliage || (s.inst.flags & INSTANCE_COARSE) != 0u)
     {
 #ifdef FORGE_NRC
         if (p.nrc != nullptr)
@@ -9400,6 +9403,7 @@ void diffuse_trace_main(uint3 id : SV_DispatchThreadID)
 #endif
         float3 open_sky = sh_irradiance(p.sky, s.n);
         float3 leaf = p.probes != nullptr ? probe_irradiance(p.probes, to_scene(f, s.relative), s.n, s.n, normalize(-s.relative), open_sky) : open_sky;
+        leaf = any(isnan(leaf)) || any(isinf(leaf)) ? float3(0.0) : leaf;
         bounce[pixel] = float4(linear_to_ycocg(clamp(leaf, 0.0, 65504.0)), 1.0);
         return;
     }
@@ -9461,7 +9465,16 @@ void diffuse_trace_main(uint3 id : SV_DispatchThreadID)
             bool leaf = p.cache != nullptr && hit_foliage(f, c.instance, c.primitive);
             light = hit_radiance_cached(f, p.sky, p.probes, p.cache, hit, ray.Direction, leaf, seed ^ (f[0].noise_frame * 0x632BE5ABu)) + hit_lamps(f, hit, REGION_NONE, seed, false);
         }
-        back = hit.back;
+        // The back of a coarse stand-in, or of any surface in a world of open shells, is no sign of
+        // a ray started inside a solid: the probes' light here, not black (D-106: the roofs beside
+        // stand-ins, and the ground under one-sided pieces).
+        bool shell_back = hit.back && (f[0].hollow_backs != 0u || (f[0].instances[c.instance].flags & INSTANCE_COARSE) != 0u);
+        if (shell_back)
+        {
+            float3 open_sky = sh_irradiance(p.sky, s.n);
+            light = p.probes != nullptr ? probe_irradiance(p.probes, to_scene(f, s.relative), s.n, s.n, normalize(-s.relative), open_sky) : open_sky;
+        }
+        back = hit.back && !shell_back;
     }
 #ifdef FORGE_NRC
     if (p.nrc != nullptr && !queried)

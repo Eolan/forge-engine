@@ -12579,6 +12579,15 @@ base in while the pieces carrying its markings were out, and a road's two versio
 - **Measured** along the walk at 2560 x 1440, DLSS Quality, private district: the ring at 281 m against 450 m, frame time p50 20.5 ms both, p99 27.1 against 28.3 ms,
   geometry 6,606 against 7,239 MiB, video memory 89.7 against 91.8 %. At 1,000 m the walk ran out of video memory (108 %).
 
+**Amended 2026-11-08: stand-ins and open shells in the traced bounce (the owner: black roofs, black ground, "large dark area").**
+D-088's traced bounce returned black for a ray that met a surface's back: a ray that started inside a solid. In an authored city most surfaces are open shells, so the
+assumption fails, and it failed exactly where the owner saw it. Found by turning off one term at a time: with `r.gi.trace` off the black went, with AO or the probes off it stayed.
+- **`Visibility::coarse`:** a stand-in's pixel keeps the probes' light, as a leaf does, and starts no SHaRC or NRC path; a ray meeting its back takes the probes' light.
+- **`MeshletSceneBuilder::set_hollow_backs`:** in a world of open shells any back-face hit takes the probes' light. A scene of closed objects keeps black. Off by default, so every
+  other scene is unchanged.
+- **Measured, private district:** a roof in shade 14 times brighter, the darkest ground patch 7 times; a bar interior changes in 0.06 % of its pixels by over 12 codes; the walk's p50 19.9 ms, p99 26.1 ms.
+- **Left:** the probes still count back faces as being inside something, and the surface cache, SHaRC's and NRC's later bounces and the path reference still read a back as black.
+
 **Costs and risks:**
 
 - **Pops:** the swap is a hard cut until step 5, and the owner sees those at once.
