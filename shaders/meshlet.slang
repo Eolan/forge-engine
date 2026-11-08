@@ -5576,14 +5576,19 @@ LightInputs multilayer_light(Frame* f, Material mat, Surface s)
         uint2 size;
         uint levels;
         map.GetDimensions(0, size.x, size.y, levels);
-        uint2 mask_size;
-        g_sampled_images[NonUniformResourceIndex(mat.mask_textures_a.x)].GetDimensions(mask_size.x, mask_size.y);
+        // The masks at their full size, as the presence map was made from them: a streamed
+        // mask's image may hold only its coarser levels (D-105).
+        uint2 mask_size = size * 8u;
+        uint2 held_size;
+        g_sampled_images[NonUniformResourceIndex(mat.mask_textures_a.x)].GetDimensions(held_size.x, held_size.y);
         // The pixel's block of 8 x 8 mask texels, and the presence level whose texels (with the
         // blocks round them) span what a filtered sample of the masks reads: the footprint's
-        // texels, up to twice that from the level it blends towards.
-        float footprint = max(length(gx * float2(mask_size)), length(gy * float2(mask_size)));
+        // texels, up to twice that from the level it blends towards, and at least a texel of
+        // the image held.
+        float footprint = max(max(length(gx * float2(mask_size)), length(gy * float2(mask_size))),
+            float(mask_size.x) / float(max(held_size.x, 1u)));
         uint level = min(uint(max(ceil(log2(max(footprint, 1.0))) - 2.0, 0.0)), levels - 1u);
-        uint2 block = min(uint2(frac(s.uv) * float2(mask_size)) / 8u, size - 1u);
+        uint2 block = min(uint2(frac(s.uv) * float2(size)), size - 1u);
         uint2 texel = min(block >> level, max(size >> level, 1u) - 1u);
         present = map.Load(int3(texel, level));
     }

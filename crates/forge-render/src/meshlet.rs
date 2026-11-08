@@ -3789,12 +3789,38 @@ impl MeshletScene {
     /// Streams the scene's textures by need from now on (D-105): needs
     /// [`MeshletSceneBuilder::set_streamed_textures`], and the renderer's feedback
     /// ([`MeshletRenderer::enable_texture_feedback`]).
-    pub fn set_texture_stream(&mut self, mut stream: crate::texture_stream::TextureStream) {
+    pub fn set_texture_stream(
+        &mut self,
+        mut stream: crate::texture_stream::TextureStream,
+    ) -> Result<()> {
         if let Some(set) = &self.textures {
             stream.bind(set);
         }
         stream.keep_widely_used(|slot| self.texture_rows(slot));
+        stream.raise_widely_used(self)?;
         self.texture_stream = Some(stream);
+        Ok(())
+    }
+
+    /// Every frame slot's table written whole from the rows as they stand, for many rows moved
+    /// before the first frame ([`crate::texture_stream::TextureStream`]): nothing reads them yet.
+    pub(crate) fn write_streamed_rows(&mut self) {
+        let Some(motions) = self.motions.as_mut() else {
+            return;
+        };
+        let Some(all) = motions.all.as_mut() else {
+            return;
+        };
+        let all = all.get_mut();
+        self.materials.write(0, &all.rows);
+        for buffer in &motions.extra {
+            buffer.write(0, &all.rows);
+        }
+        let generation = all.generation;
+        for pending in &mut all.pending {
+            pending.clear();
+        }
+        all.written.fill(generation);
     }
 
     /// How many material rows name bindless `slot` (a streamed-texture scene's; else 0).

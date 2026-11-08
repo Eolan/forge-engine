@@ -23,8 +23,10 @@ pub mod motion;
 pub const PRESENCE_BLOCK: u32 = 8;
 
 /// A layered material's presence map (D-095, [`forge_core::material::Multilayer`]) from its
-/// `masks` (layers 1 on, `width × height` bytes each): per block of [`PRESENCE_BLOCK`] mask
-/// texels, bit `k` set where layer `k` (0, the base, always) is over zero in the block, then
+/// `masks` (layers 1 on, `width × height` bytes each): per block of about [`PRESENCE_BLOCK`] mask
+/// texels (the map's size is the masks' over that, rounded up, and a texel falls in the block of
+/// the same share of the map, so the map reads by texture coordinates alone, whatever levels of
+/// the masks are held), bit `k` set where layer `k` (0, the base, always) is over zero in the block, then
 /// the bits of the blocks round each (a filtered sample reads across a block's edge); each next
 /// level, half the size rounded down as Vulkan's levels are, the union of the texels under it
 /// (the last row and column of an odd size kept in the last), down to one texel. Its size at
@@ -41,7 +43,7 @@ pub fn layer_presence(masks: &[&[u8]], width: u32, height: u32) -> (u32, u32, Ve
         for y in 0..height {
             for x in 0..width {
                 if mask[(y * width + x) as usize] != 0 {
-                    let (bx, by) = (x / PRESENCE_BLOCK, y / PRESENCE_BLOCK);
+                    let (bx, by) = (x * bw / width, y * bh / height);
                     blocks[(by * bw + bx) as usize] |= bit;
                 }
             }

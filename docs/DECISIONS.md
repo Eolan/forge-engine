@@ -12347,6 +12347,31 @@ the private district's wide world, 2560 × 1440, DLSS Quality, the 5,000-frame w
   rarely wanted in the same frame and would evict each other in turn.
 - **A plan that can't be made** (out of memory, most likely) is put back and the next one waits 2 s; the textures stay as they are.
 
+**The masks too, and textures kept until the room is needed (2026-11-08).** The owner chose to stream the masks, and asked why a
+texture left the card while there was room. What changed:
+
+- **A texture no longer shrinks on its own.** Shrinking is not free (a smaller image, an upload, the rows moved), and turning
+  round pays it again. Room comes from the coldest, a level at a time, each losing its top level before any loses a second: a top
+  level is three quarters of a texture's bytes. The pool follows the memory the system gives the process (92 % of it, the free
+  space inside the allocator's blocks counted as free), up to 3 GiB.
+- **The presence map reads by texture coordinates alone.** It used the first mask's bound size, which a streamed mask no longer
+  has, and a shrunk mask would have looked up the wrong blocks. 39 % of the private district's setups have masks whose width
+  isn't a multiple of 8, so a mask texel now falls in the block of the same share of the map.
+- **What many rows name goes up whole before the first frame:** 1,569 textures, 463 MiB. Growing them later wrote up to 1.6
+  million rows in the frames the world is first seen. Those were the start-up hitches.
+
+The same walk at 1.5 times the source's distances, which the memory now allows (the previous table's numbers were at 1 time):
+
+| | maps streamed, 1 × | maps and masks, 1 × | maps and masks, 1.5 × |
+|---|---|---|---|
+| textures | 6,365 MiB | 2,197 MiB | 2,402 MiB |
+| VRAM | 96.2 % | 64.6 % | 76.8 % |
+| first 400 frames over 50 ms | not counted | not counted | 3 |
+| then p50 / p99 / worst | 19.2 / 34.8 / 165 ms | 19.3 / 29.1 / 89 ms | 20.0 / 25.3 / 31 ms |
+
+The first two columns moved the wide textures' rows during the walk, the last doesn't. Masks streamed against every texture
+resident, at two close views: at most 2.3 codes (of 255) in any 16-pixel tile, as for the maps alone.
+
 ## D-106 — An authored world shown by the camera: each piece's own range, real pieces and stand-ins in one table ✅ (accepted by the owner 2026-11-08; being built, step by step)
 
 **Why:** the private district draws a fixed set of pieces, chosen once for the whole run, and a free camera goes where that

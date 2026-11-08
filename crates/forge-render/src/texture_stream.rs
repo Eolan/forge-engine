@@ -3,17 +3,19 @@
 //!
 //! - **A texture keeps its levels from a top down,** whole levels (D-105's first point). Its
 //!   tail, the levels of [`TAIL_TEXELS`] and less, is always resident.
-//! - **Its target** is the finest level its samples wanted within the window (two seconds, as
+//! - **Its want** is the finest level its samples wanted within the window (two seconds, as
 //!   measured); once that want is older than the window, the level wanted last if it is within
-//!   it; else its tail.
-//! - **A plan** takes the textures down to their targets first (that frees bytes), then up,
-//!   the largest gap first, each as far as the pool allows. One plan uploads at most the bytes
-//!   it is given: a texture is remade whole ([`crate::material::TextureSet::remake`]), so a change
-//!   costs its new levels' bytes.
-//! - **Eviction by last use:** when a texture can't grow within the pool, textures wanted at
-//!   least [`EVICT_MARGIN_SECONDS`] longer ago drop to their tails, the oldest first, if that
-//!   makes room. The feedback looks at one pixel in 64 a frame, so two textures on screen together
-//!   are rarely wanted in the same frame: without the margin they would evict each other in turn.
+//!   it. A texture grows to its want; nothing shrinks it on its own.
+//! - **A texture keeps its levels until the room is needed.** Shrinking is not free: a smaller
+//!   image is made and uploaded and the rows moved, and going back pays it again. A plan grows
+//!   textures within the pool, the largest gap first, one plan's bytes at most.
+//! - **Room comes from the coldest, a level at a time,** among textures wanted at least
+//!   [`EVICT_MARGIN_SECONDS`] longer ago: each loses its top level before any loses a second, as
+//!   a texture's top level is three quarters of its bytes. The feedback looks at one pixel in 64
+//!   a frame, so two textures on screen together are rarely wanted in the same frame: without
+//!   the margin they would evict each other in turn.
+//! - **The pool follows the card:** [`TextureStream`] sets it from the memory the system gives
+//!   the process, so spare memory holds textures and other work gets it back.
 //!
 //! The levels here count in the texture's full chain: level 0 is its finest. The feedback counts
 //! from the image's current top, finer than it as negative levels, so a remade texture's wanted
@@ -87,23 +89,19 @@ struct Tracked {
     finest: Option<(usize, f64)>,
     /// The level wanted last, and when.
     latest: Option<(usize, f64)>,
-    /// It keeps the levels it has grown to ([`LevelPlanner::keep_levels`]).
+    /// It never gives its levels back ([`LevelPlanner::keep_levels`]).
     keeps: bool,
 }
 
 impl Tracked {
-    /// Its target at `now`: the finest level wanted within the window, else the level wanted
-    /// last if within it, else its tail; never coarser than its top if it keeps its levels.
+    /// What it should hold at `now`: the finest level wanted within the window, else the level
+    /// wanted last if within it; never coarser than what it holds.
     fn target(&self, now: f64, window: f64) -> usize {
         let within = |w: Option<(usize, f64)>| w.filter(|&(_, at)| now - at <= window);
-        let target = within(self.finest)
+        within(self.finest)
             .or(within(self.latest))
-            .map_or(self.tail, |(level, _)| level.min(self.tail));
-        if self.keeps {
-            target.min(self.top)
-        } else {
-            target
-        }
+            .map_or(self.top, |(level, _)| level.min(self.tail))
+            .min(self.top)
     }
 
     fn last_use(&self) -> f64 {
@@ -155,8 +153,8 @@ impl LevelPlanner {
         self.textures.len() - 1
     }
 
-    /// Texture `texture` only ever grows: it keeps the levels it has grown to, and no other's
-    /// growth takes them.
+    /// Texture `texture` never gives its levels back: moving it to a smaller image would be
+    /// dearer than the room it frees.
     pub fn keep_levels(&mut self, texture: usize) {
         if let Some(t) = self.textures.get_mut(texture) {
             t.keeps = true;
@@ -205,6 +203,19 @@ impl LevelPlanner {
         self.held
     }
 
+    /// The pool, bytes: the next plan gives levels back if more than this is resident.
+    pub fn set_pool(&mut self, pool: u64) {
+        self.pool = pool;
+    }
+
+    /// The bytes of every texture's tail: the least the pool can hold.
+    pub fn tails(&self) -> u64 {
+        self.textures
+            .iter()
+            .map(|t| t.texture.bytes_from(t.tail))
+            .sum()
+    }
+
     /// The bytes of texture `texture`'s levels from `level` down: what remaking it from there
     /// uploads.
     pub fn bytes_from(&self, texture: usize, level: usize) -> u64 {
@@ -241,35 +252,110 @@ impl LevelPlanner {
         }
     }
 
+    /// The textures that can give levels back, the coldest first; those that
+    /// [keep them](Self::keep_levels) only if `last_resort`, after all the others.
+    fn coldest_first(&self, last_resort: bool) -> Vec<usize> {
+        let mut order: Vec<usize> = (0..self.textures.len())
+            .filter(|&v| {
+                let t = &self.textures[v];
+                t.top < t.tail && (last_resort || !t.keeps)
+            })
+            .collect();
+        order.sort_by(|&a, &b| {
+            let (ta, tb) = (&self.textures[a], &self.textures[b]);
+            ta.keeps
+                .cmp(&tb.keeps)
+                .then(ta.last_use().total_cmp(&tb.last_use()))
+                .then(a.cmp(&b))
+        });
+        order
+    }
+
+    /// Who gives `need` bytes back, from `order` (the coldest first) among textures wanted at
+    /// least [`EVICT_MARGIN_SECONDS`] before `mine` and not in `changed`: a level each, then a
+    /// second each, and so on. The bytes found (less than `need` if there aren't enough) and
+    /// each giver with the top it is left with.
+    fn room(
+        &self,
+        order: &[usize],
+        need: u64,
+        mine: f64,
+        changed: &[bool],
+    ) -> (u64, Vec<(usize, usize)>) {
+        let mut freed = 0u64;
+        let mut givers: Vec<(usize, usize)> = Vec::new();
+        let mut at: std::collections::HashMap<usize, usize> = std::collections::HashMap::new();
+        // Each kind is sorted by itself: past its first warm texture, only the other kind is left.
+        let kept = order.partition_point(|&v| !self.textures[v].keeps);
+        let (others, keepers) = order.split_at(kept);
+        for pass in 0.. {
+            let mut any = false;
+            for part in [others, keepers] {
+                for &v in part {
+                    let t = &self.textures[v];
+                    if t.last_use() + EVICT_MARGIN_SECONDS > mine {
+                        break;
+                    }
+                    let level = t.top + pass;
+                    if changed[v] || level >= t.tail {
+                        continue;
+                    }
+                    any = true;
+                    freed += t.texture.bytes_from(level) - t.texture.bytes_from(level + 1);
+                    match at.get(&v) {
+                        Some(&k) => givers[k].1 = level + 1,
+                        None => {
+                            at.insert(v, givers.len());
+                            givers.push((v, level + 1));
+                        }
+                    }
+                    if freed >= need {
+                        return (freed, givers);
+                    }
+                }
+            }
+            if !any {
+                break;
+            }
+        }
+        (freed, givers)
+    }
+
     /// The changes at `now`, at most `upload` bytes of new levels between them (at least one
     /// change when any is due), applied to the planner's tops: the caller remakes each texture
-    /// from its `to` down. Down to the targets first; then up, the largest gap first, each as far
-    /// as the pool allows; a texture that can't grow at all makes room by sending textures wanted
-    /// strictly longer ago back to their tails, the oldest first, when that is enough.
+    /// from its `to` down. Above the pool (it shrank), the coldest give levels back; then each
+    /// texture grows to what it wants, the largest gap first, within the pool as far as it can,
+    /// and with room from the coldest ([`Self::room`]) for the rest.
     pub fn plan(&mut self, now: f64, upload: u64) -> Vec<LevelChange> {
         let window = self.window;
         let n = self.textures.len();
         let mut changes: Vec<LevelChange> = Vec::new();
         let mut changed = vec![false; n];
         let mut spent = 0u64;
-        // Within the bytes and the changes this plan may make: the first change always is.
+        // Within the changes this plan may make, and its bytes: the first change may go over
+        // those, or no texture larger than a plan's bytes would ever change.
         let most_changes = self.most_changes;
-        let fits = |spent: u64, cost: u64, changes: &[LevelChange]| {
-            changes.is_empty() || (spent + cost <= upload && changes.len() < most_changes)
+        let fits = |spent: u64, cost: u64, count: usize, changes: &[LevelChange]| {
+            changes.len() + count <= most_changes && (changes.is_empty() || spent + cost <= upload)
         };
-        // Down to the targets: textures no longer wanted as finely.
-        for (i, done) in changed.iter_mut().enumerate() {
-            let (to, top) = (self.textures[i].target(now, window), self.textures[i].top);
-            if to > top {
-                let cost = self.textures[i].texture.bytes_from(to);
-                if fits(spent, cost, &changes) {
-                    spent += cost;
-                    changes.push(self.set_top(i, to));
-                    *done = true;
+        let bytes = |t: &Tracked, level: usize| t.texture.bytes_from(level);
+        // Sorted the first time room is wanted: most plans don't need it.
+        let mut order: Option<Vec<usize>> = None;
+        if self.held > self.pool {
+            // The memory is wanted elsewhere: everything can be asked.
+            let list = self.coldest_first(true);
+            let (_, givers) = self.room(&list, self.held - self.pool, now, &changed);
+            for (v, to) in givers {
+                let cost = bytes(&self.textures[v], to);
+                if !fits(spent, cost, 1, &changes) {
+                    break;
                 }
+                spent += cost;
+                changes.push(self.set_top(v, to));
+                changed[v] = true;
             }
         }
-        // Up: the largest gap first, then the latest want, then the number (deterministic).
+        // The largest gap first, then the latest want, then the number (deterministic).
         let mut ups: Vec<(usize, usize)> = (0..n)
             .filter_map(|i| {
                 let target = self.textures[i].target(now, window);
@@ -286,23 +372,11 @@ impl LevelPlanner {
                 )
                 .then(a.cmp(&b))
         });
-        // The textures that may give their levels back, the least recently wanted first.
-        let mut victims: Vec<usize> = (0..n)
-            .filter(|&v| {
-                let t = &self.textures[v];
-                t.top < t.tail && !t.keeps && !changed[v]
-            })
-            .collect();
-        victims.sort_by(|&a, &b| {
-            self.textures[a]
-                .last_use()
-                .total_cmp(&self.textures[b].last_use())
-                .then(a.cmp(&b))
-        });
-        let mut next_victim = 0;
-        let bytes = |t: &Tracked, level: usize| t.texture.bytes_from(level);
         for (i, target) in ups {
-            // Sent back to its tail by an earlier growth of this plan: not grown again in it.
+            if changes.len() >= most_changes || (!changes.is_empty() && spent >= upload) {
+                break;
+            }
+            // It gave levels up earlier in this plan: not grown again in it.
             if changed[i] {
                 continue;
             }
@@ -316,54 +390,42 @@ impl LevelPlanner {
                 }
                 to = level;
             }
-            let mut evict = Vec::new();
-            if to == top {
+            let mut givers = Vec::new();
+            // Finer with room from the coldest: its want, or failing that up to two levels less.
+            if to != target {
                 let mine = self.textures[i].last_use();
-                let need = bytes(&self.textures[i], target) - bytes(&self.textures[i], top);
-                let mut freed = 0u64;
-                let mut k = next_victim;
-                while self.held - freed + need > self.pool && k < victims.len() {
-                    let v = victims[k];
-                    let t = &self.textures[v];
-                    if v == i || changed[v] || t.top >= t.tail {
-                        k += 1;
+                let list = order.get_or_insert_with(|| self.coldest_first(false));
+                for level in (target..to).take(3) {
+                    let need = bytes(&self.textures[i], level) - bytes(&self.textures[i], top);
+                    let short = (self.held + need).saturating_sub(self.pool);
+                    let (freed, found) = self.room(list, short, mine, &changed);
+                    if freed < short {
                         continue;
                     }
-                    if t.last_use() + EVICT_MARGIN_SECONDS > mine {
+                    let cost = found
+                        .iter()
+                        .map(|&(v, t)| bytes(&self.textures[v], t))
+                        .sum::<u64>()
+                        + bytes(&self.textures[i], level);
+                    if fits(spent, cost, found.len() + 1, &changes) {
+                        givers = found;
+                        to = level;
                         break;
                     }
-                    freed += bytes(t, t.top) - bytes(t, t.tail);
-                    evict.push(v);
-                    k += 1;
                 }
-                if self.held - freed + need > self.pool {
-                    continue;
-                }
-                let cost: u64 = evict
-                    .iter()
-                    .map(|&v| bytes(&self.textures[v], self.textures[v].tail))
-                    .sum::<u64>()
-                    + bytes(&self.textures[i], target);
-                if !fits(spent, cost, &changes) {
-                    continue;
-                }
-                next_victim = k;
-                for &v in &evict {
-                    let tail = self.textures[v].tail;
-                    spent += bytes(&self.textures[v], tail);
-                    changes.push(self.set_top(v, tail));
-                    changed[v] = true;
-                }
-                to = target;
             }
             if to == top {
                 continue;
             }
-            let cost = bytes(&self.textures[i], to);
-            if evict.is_empty() && !fits(spent, cost, &changes) {
+            if givers.is_empty() && !fits(spent, bytes(&self.textures[i], to), 1, &changes) {
                 continue;
             }
-            spent += cost;
+            for (v, t) in givers {
+                spent += bytes(&self.textures[v], t);
+                changes.push(self.set_top(v, t));
+                changed[v] = true;
+            }
+            spent += bytes(&self.textures[i], to);
             changes.push(self.set_top(i, to));
             changed[i] = true;
         }
@@ -402,19 +464,29 @@ fn from_level(texture: &CompressedTexture, top: usize) -> CompressedTexture {
 
 /// The most textures a [`TextureStream`] changes in one frame: each moves its rows and takes a
 /// slot, whatever its bytes.
-const MOST_CHANGES: usize = 96;
+const MOST_CHANGES: usize = 256;
 
 /// After a plan whose images could not be made (out of memory, most likely), the seconds before
 /// the next.
 const RETRY_SECONDS: f64 = 2.0;
 
-/// A texture named by more material rows than this only ever grows: moving it to a new slot
-/// writes every one of its rows, once per frame slot.
+/// A texture named by more material rows than this never gives its levels back: moving it to a
+/// new slot writes every one of its rows, once per frame slot.
 const MANY_ROWS: usize = 64;
 
 /// The rows a frame moves at most (one texture at least): the rest of a plan's images wait for
 /// the next frames.
 const MOST_ROWS_A_FRAME: usize = 16_384;
+
+/// The share of the memory the system gives the process that the pool may bring it up to.
+const BUDGET_SHARE: f64 = 0.92;
+
+/// Frames between two looks at the memory the system gives the process.
+const BUDGET_FRAMES: u64 = 60;
+
+/// How far the pool must be over what the memory allows before it is lowered, bytes: giving
+/// levels back takes frames to show.
+const BUDGET_SLACK: i64 = 128 << 20;
 
 /// One texture a [`TextureStream`] streams.
 struct StreamEntry {
@@ -501,6 +573,8 @@ pub struct TextureStream {
     textures: Vec<StreamEntry>,
     /// The bytes one plan may remake.
     upload: u64,
+    /// The pool at its largest, bytes.
+    most_pool: u64,
     start: Option<Instant>,
     uploader: Option<Uploader>,
     /// The plan the worker is on: one at a time.
@@ -538,6 +612,7 @@ impl TextureStream {
             planner,
             textures: Vec::new(),
             upload,
+            most_pool: pool,
             start: None,
             uploader: None,
             uploading: None,
@@ -632,6 +707,45 @@ impl TextureStream {
         );
     }
 
+    /// The textures that keep their levels ([`Self::keep_widely_used`]) go up whole before the
+    /// first frame: growing one later writes every row that names it, up to 1.6 million, in the
+    /// frames the world is first seen; here nothing is in flight to wait for.
+    pub(crate) fn raise_widely_used(&mut self, scene: &mut MeshletScene) -> Result<()> {
+        let raised: Vec<usize> = (0..self.textures.len())
+            .filter(|&t| self.planner.textures[t].keeps && self.planner.top(t) > 0)
+            .collect();
+        let Some(set) = scene.textures_mut() else {
+            return Ok(());
+        };
+        let data: Vec<CompressedTexture> = raised
+            .iter()
+            .map(|&t| from_level(&self.textures[t].source, 0))
+            .collect();
+        let device = set.device().clone();
+        let images = crate::material::upload_compressed(&device, &data)?;
+        let before = self.planner.resident();
+        let mut moved = Vec::with_capacity(raised.len());
+        for ((&t, (image, bytes)), texture) in raised.iter().zip(images).zip(&data) {
+            let entry = &mut self.textures[t];
+            let retired = set.replace_compressed(entry.id, image, bytes, texture)?;
+            entry.slot = set.sampled(entry.id);
+            entry.top = 0;
+            self.planner.set_top(t, 0);
+            moved.push((retired, entry.slot));
+        }
+        for (retired, new) in moved {
+            scene.remap_texture(retired.slot(), new);
+            drop(retired);
+        }
+        scene.write_streamed_rows();
+        tracing::info!(
+            textures = raised.len(),
+            mib = (self.planner.resident() - before) >> 20,
+            "the widely used textures whole from the start (D-105)"
+        );
+        Ok(())
+    }
+
     /// One frame's work: `wants`, the feedback read this frame, per bindless index, if any.
     pub(crate) fn step(
         &mut self,
@@ -652,6 +766,26 @@ impl TextureStream {
                     // it yet, whatever the planner's top says.
                     let wanted = entry.top as i64 + i64::from(level) - i64::from(NEED_BIAS);
                     self.planner.wanted(t, wanted.max(0) as usize, now);
+                }
+            }
+        }
+        if frame.is_multiple_of(BUDGET_FRAMES)
+            && let Some(set) = scene.textures_mut()
+        {
+            let report = set.device().memory_report();
+            if let Some((used, budget)) = report.device_local() {
+                // Spare memory holds textures; what the rest of the frame takes comes back. The
+                // free space inside the allocator's blocks counts as free: giving levels back
+                // makes holes there long before it empties a block.
+                let holes = report.reserved.saturating_sub(report.total_allocated());
+                let room =
+                    (budget as f64 * BUDGET_SHARE) as i64 - used.saturating_sub(holes) as i64;
+                let held = self.planner.resident() as i64;
+                let least = self.planner.tails() as i64 + (64 << 20);
+                let pool = (held + room).clamp(least, self.most_pool.max(least as u64) as i64);
+                let now_pool = self.planner.pool as i64;
+                if pool > now_pool || pool < now_pool - BUDGET_SLACK {
+                    self.planner.set_pool(pool as u64);
                 }
             }
         }
@@ -696,6 +830,7 @@ impl TextureStream {
                 frame,
                 textures = self.textures.len(),
                 held_mib = self.planner.resident() >> 20,
+                pool_mib = self.planner.pool >> 20,
                 remade = self.remade,
                 uploaded_mib = self.uploaded >> 20,
                 waiting = self.waiting.len() + self.dropping.len(),
@@ -831,9 +966,6 @@ mod tests {
         p.wanted(t, 0, 0.0);
         p.plan(0.0, u64::MAX);
         assert_eq!(p.top(t), 0);
-        // Long unwanted: an ordinary texture would be back at its tail.
-        assert!(p.plan(100.0, u64::MAX).is_empty());
-        assert_eq!(p.top(t), 0);
         // Another's growth can't take its levels.
         let mut q = LevelPlanner::new(
             square(512).bytes_from(0) + square(512).bytes_from(1),
@@ -861,33 +993,30 @@ mod tests {
     }
 
     #[test]
-    fn a_texture_not_wanted_for_a_window_goes_back_to_its_tail() {
+    fn a_texture_keeps_its_levels_until_the_room_is_needed() {
         let mut p = LevelPlanner::new(u64::MAX, WINDOW_SECONDS);
         let t = p.add(square(512));
         p.wanted(t, 0, 0.0);
         p.plan(0.0, u64::MAX);
         assert_eq!(p.top(t), 0);
-        // Wanted coarser since: its finest want holds for the window after it was made.
-        p.wanted(t, 1, 1.5);
-        assert!(p.plan(1.9, u64::MAX).is_empty());
-        // Once that is older than the window, the level wanted last.
-        assert_eq!(
-            p.plan(3.0, u64::MAX),
-            vec![LevelChange {
-                texture: t,
-                from: 0,
-                to: 1
-            }]
-        );
-        // Then nothing for longer than the window: back to its tail (level 2, 128 texels).
-        assert_eq!(
-            p.plan(3.6, u64::MAX),
-            vec![LevelChange {
-                texture: t,
-                from: 1,
-                to: 2
-            }]
-        );
+        // Long unwanted, with room to spare: nothing changes.
+        assert!(p.plan(100.0, u64::MAX).is_empty());
+        assert_eq!(p.top(t), 0);
+    }
+
+    #[test]
+    fn a_pool_made_smaller_takes_the_coldest_top_levels_first() {
+        let mut p = LevelPlanner::new(u64::MAX, WINDOW_SECONDS);
+        let (a, b) = (p.add(square(1024)), p.add(square(1024)));
+        p.wanted(a, 0, 0.0);
+        p.plan(0.0, u64::MAX);
+        p.wanted(b, 0, 5.0);
+        p.plan(5.0, u64::MAX);
+        assert_eq!((p.top(a), p.top(b)), (0, 0));
+        // A's top level alone is enough: B, wanted later, keeps all of its own.
+        p.set_pool(p.resident() - square(1024).levels[0]);
+        p.plan(9.0, u64::MAX);
+        assert_eq!((p.top(a), p.top(b)), (1, 0));
     }
 
     #[test]
@@ -932,6 +1061,36 @@ mod tests {
         assert!(p.plan(1.5, u64::MAX).is_empty());
         assert_eq!((p.top(a), p.top(b)), (3, 0));
         assert!(p.resident() <= full + tail);
+    }
+
+    #[test]
+    fn a_texture_grows_as_far_as_the_cold_ones_can_make_room() {
+        // One 1024 whole in the pool, and a colder one holding it: B can't have its want (a
+        // whole 2048) but a coarser level fits.
+        let full = square(1024).bytes_from(0);
+        let mut p = LevelPlanner::new(full + square(2048).bytes_from(4), WINDOW_SECONDS);
+        let (a, b) = (p.add(square(1024)), p.add(square(2048)));
+        p.wanted(a, 0, 0.0);
+        p.plan(0.0, u64::MAX);
+        assert_eq!(p.top(a), 0);
+        p.wanted(b, 0, 5.0);
+        p.plan(5.0, u64::MAX);
+        assert!(p.top(b) < 4, "{}", p.top(b));
+        assert!(p.resident() <= full + square(2048).bytes_from(4));
+    }
+
+    #[test]
+    fn a_pool_short_of_memory_takes_what_keeps_its_levels_last() {
+        let mut p = LevelPlanner::new(u64::MAX, WINDOW_SECONDS);
+        let (a, b) = (p.add(square(1024)), p.add(square(1024)));
+        p.keep_levels(a);
+        p.wanted(a, 0, 0.0);
+        p.wanted(b, 0, 0.0);
+        p.plan(0.0, u64::MAX);
+        // More than B can give: A's levels go too, B's first.
+        p.set_pool(square(1024).bytes_from(3) * 2);
+        p.plan(9.0, u64::MAX);
+        assert_eq!((p.top(a), p.top(b)), (3, 3));
     }
 
     #[test]
