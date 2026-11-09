@@ -315,6 +315,8 @@ pub(super) struct Applied {
     removed_meshes: Vec<u32>,
     promotions: Vec<Promotion>,
     demotions: Vec<u32>,
+    /// Where it changes what stands.
+    ring_changes: Vec<(DVec3, f64)>,
 }
 
 /// An instance promoted to a pool's mover by an edit (#338): the mover, the instance and its
@@ -338,6 +340,8 @@ pub(super) struct SceneDynamic {
     pub(super) this_frame: Vec<Applied>,
     /// What leaves, from which frame on.
     leaving: Vec<(u64, Leaving)>,
+    /// Where the edits changed what stands, for the shadow rings (D-108): bounding spheres.
+    pub(super) ring_changes: RefCell<Vec<(DVec3, f64)>>,
     /// The last frame begun.
     frame: u64,
     /// What the first editor starts from.
@@ -480,6 +484,7 @@ impl SceneDynamic {
             instances,
             staged: Vec::new(),
             this_frame: Vec::new(),
+            ring_changes: RefCell::new(Vec::new()),
             leaving: Vec::new(),
             frame: 0,
             // The editor's structure masks the movers' slots out (the movers' own structure holds
@@ -642,6 +647,8 @@ pub struct SceneEditor {
     added: Vec<u32>,
     /// Slots changed in place: moved, hidden or shown, retextured.
     modified: Vec<u32>,
+    /// Where the instances the edit moved stood.
+    moved_from: Vec<(DVec3, f64)>,
     kept: Vec<(u32, Box<dyn Any + Send>)>,
     removed_instances: Vec<u32>,
     removed_meshes: Vec<u32>,
@@ -676,6 +683,8 @@ pub struct SceneEdit {
     removed_meshes: Vec<u32>,
     promotions: Vec<Promotion>,
     demotions: Vec<u32>,
+    /// Where it changes what stands, for the shadow rings.
+    ring_changes: Vec<(DVec3, f64)>,
     /// Pages its new meshes' first view wants, loaded with them.
     pub preloaded: u32,
 }
@@ -947,6 +956,7 @@ impl SceneEditor {
         let position = position.normalized();
         let center = rotation * (Vec3::from(info.center) * scale * Vec3::from(record.stretch))
             + position.local;
+        self.moved_from.push(super::record_bounds(&record));
         self.instances[instance as usize] = GpuInstance {
             cell: position.cell.to_array(),
             local: position.local.to_array(),
@@ -1210,6 +1220,14 @@ impl SceneEditor {
             .collect();
         changed.sort_unstable();
         changed.dedup();
+        let mut ring_changes = std::mem::take(&mut self.moved_from);
+        ring_changes.extend(
+            changed
+                .iter()
+                .filter_map(|&slot| self.instances.get(slot as usize))
+                .map(super::record_bounds)
+                .filter(|&(_, radius)| radius > 0.0),
+        );
         let records_at = bytes.len() as u64;
         let table_at = records_at + changed.len() as u64 * instance_size;
         let new_pages: u64 = new_meshes.iter().map(|m| u64::from(m.ranges.pages.1)).sum();
@@ -1328,6 +1346,7 @@ impl SceneEditor {
             removed_meshes: std::mem::take(&mut self.removed_meshes),
             promotions: std::mem::take(&mut self.promotions),
             demotions: std::mem::take(&mut self.demotions),
+            ring_changes,
         })
     }
 }
@@ -1469,6 +1488,7 @@ impl MeshletScene {
             held,
             new_meshes: Vec::new(),
             modified: Vec::new(),
+            moved_from: Vec::new(),
             added: Vec::new(),
             kept: Vec::new(),
             removed_instances: Vec::new(),
@@ -1531,6 +1551,7 @@ impl MeshletScene {
             removed_meshes: edit.removed_meshes,
             promotions: edit.promotions,
             demotions: edit.demotions,
+            ring_changes: edit.ring_changes,
         });
         Ok(())
     }
@@ -1558,6 +1579,10 @@ impl MeshletScene {
             }
         };
         for mut applied in std::mem::take(&mut dynamic.staged) {
+            dynamic
+                .ring_changes
+                .get_mut()
+                .append(&mut applied.ring_changes);
             self.instance_count = self.instance_count.max(applied.instance_high);
             self.page_count = self.page_count.max(applied.page_high);
             for AddedMesh { slot, mesh, blas } in std::mem::take(&mut applied.meshes) {

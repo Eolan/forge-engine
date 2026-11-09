@@ -21,9 +21,11 @@ use std::sync::Arc;
 use forge_gpu::{
     Buffer, BufferDesc, Device, FRAMES_IN_FLIGHT, MemoryCategory, MemoryLocation, Result, vk,
 };
-use glam::{IVec3, Quat, Vec3, Vec4};
+use glam::{DVec3, IVec3, Quat, Vec3, Vec4};
 
-use super::{GpuInstance, GpuMesh, INSTANCE_VISIBILITY, MoverTransform, Visibility};
+use super::{
+    GpuInstance, GpuMesh, INSTANCE_VISIBILITY, MoverTransform, Visibility, record_bounds,
+};
 use crate::cells::CellPos;
 
 /// The most records a frame uploads; the rest wait for the next frames.
@@ -37,6 +39,8 @@ pub(super) struct StaticEdits {
     bounds: Vec<Vec4>,
     /// The records changed since a frame last uploaded them.
     dirty: RefCell<BTreeSet<u32>>,
+    /// Where something has changed since the shadow rings last asked, as bounding spheres.
+    changed: RefCell<Vec<(DVec3, f64)>>,
     /// Per frame slot, room for [`EDITS_PER_FRAME`] records the GPU copies from.
     staging: Vec<Buffer>,
 }
@@ -74,6 +78,7 @@ impl StaticEdits {
                 .map(|m| Vec3::from(m.center).extend(m.radius))
                 .collect(),
             dirty: RefCell::new(BTreeSet::new()),
+            changed: RefCell::new(Vec::new()),
             staging,
         })
     }
@@ -88,6 +93,7 @@ impl StaticEdits {
         let mut records = self.records.borrow_mut();
         let record = &mut records[instance as usize];
         let bounds = self.bounds[record.mesh as usize];
+        self.changed.borrow_mut().push(record_bounds(record));
         let position = origin.offset(transform.position);
         let center = transform.rotation
             * (bounds.truncate() * transform.scale * Vec3::from(record.stretch))
@@ -98,6 +104,7 @@ impl StaticEdits {
         record.rotation = transform.rotation.to_array();
         record.center = center.to_array();
         record.radius = bounds.w * transform.scale;
+        self.changed.borrow_mut().push(record_bounds(record));
         self.dirty.borrow_mut().insert(instance);
     }
 
@@ -111,7 +118,13 @@ impl StaticEdits {
         let mut records = self.records.borrow_mut();
         let record = &mut records[instance as usize];
         record.flags = (record.flags & !INSTANCE_VISIBILITY) | (bits & INSTANCE_VISIBILITY);
+        self.changed.borrow_mut().push(record_bounds(record));
         self.dirty.borrow_mut().insert(instance);
+    }
+
+    /// Where something has changed since the last call, as bounding spheres (D-108).
+    pub(super) fn take_changed(&self) -> Vec<(DVec3, f64)> {
+        std::mem::take(&mut self.changed.borrow_mut())
     }
 
     /// Static instance `instance`'s record as the edits leave it (#338's promotions).

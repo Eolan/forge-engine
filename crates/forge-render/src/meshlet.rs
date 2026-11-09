@@ -829,6 +829,15 @@ const OPTION_RING_MOVERS: u32 = 1 << 17;
 /// A frame's shadow-ring draws, at most: each has a frame block.
 const RING_CHAINS: u64 = 40;
 
+/// An instance record's bounding sphere, in the coordinates of [`CellPos::to_f64`].
+fn record_bounds(record: &GpuInstance) -> (DVec3, f64) {
+    let cell = IVec3::from_array(record.cell).as_dvec3() * f64::from(crate::cells::CELL_SIZE);
+    (
+        cell + Vec3::from_array(record.center).as_dvec3(),
+        f64::from(record.radius),
+    )
+}
+
 /// Mirrors `RingPush` in `meshlet.slang`.
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
@@ -3982,6 +3991,19 @@ impl MeshletScene {
         )
     }
 
+    /// What has changed among the casters that stay since the last call, as bounding spheres:
+    /// the shadow rings' tiles under them are to be drawn again (D-108).
+    fn take_ring_changes(&self) -> Vec<(DVec3, f64)> {
+        let mut changes = self
+            .static_edits
+            .as_ref()
+            .map_or(Vec::new(), |e| e.take_changed());
+        if let Some(dynamic) = &self.dynamic {
+            changes.append(&mut dynamic.ring_changes.borrow_mut());
+        }
+        changes
+    }
+
     /// The movers' transforms for the frame about to be drawn (#79), one per reserved mover
     /// ([`MeshletSceneBuilder::reserve_movers`]) in that order: written into the next slot of
     /// their ring, which the frame copies into the instance table before its culls. Call it
@@ -6858,7 +6880,8 @@ impl MeshletRenderer {
                 params.extent,
             );
         }
-        let sun_rings = self.shadow_ring_passes(graph, slot, &params, io, ring_base);
+        let ring_changes = scene.take_ring_changes();
+        let sun_rings = self.shadow_ring_passes(graph, slot, &params, io, ring_base, ring_changes);
         self.prev.set(match (occlusion, build) {
             (false, _) => None,
             (true, true) => Some(PrevCull {
@@ -7065,6 +7088,7 @@ impl MeshletRenderer {
         params: &DrawParams<'f>,
         io: MeshPassIo,
         base: GpuFrame,
+        changes: Vec<(DVec3, f64)>,
     ) -> Option<ImageHandle> {
         use crate::shadow_rings::{GpuRingSet, RING_COUNT, RING_TEXELS, RingMovers, TILE_TEXELS};
         let gpu = self.rings.as_ref().filter(|_| self.shadow_rings)?;
@@ -7079,14 +7103,18 @@ impl MeshletRenderer {
         let frame = self.ring_frame.get();
         self.ring_frame.set(frame + 1);
         let mut cache = self.ring_cache.borrow_mut();
-        for (center, radius) in self.ring_changes.borrow_mut().drain(..) {
+        for (center, radius) in self.ring_changes.borrow_mut().drain(..).chain(changes) {
             cache.mark_changed(center, radius);
         }
+        let mover_bounds: Vec<(DVec3, f64)> = scene.movers.as_ref().map_or(Vec::new(), |m| {
+            m.last.borrow().iter().map(record_bounds).collect()
+        });
         let plan = cache.plan(
             camera,
             self.sun_dir.as_dvec3(),
             self.ring_budget,
             movers,
+            &mover_bounds,
             frame,
         );
         let statics: Vec<ImageHandle> = gpu.statics.iter().map(|i| graph.import(i)).collect();
@@ -7235,12 +7263,12 @@ impl MeshletRenderer {
             chain(graph, block, statics[draw.ring], rect, true);
         }
         for ring in 0..RING_COUNT {
-            if !plan.compose[ring] {
+            if plan.compose[ring] == 0 {
                 continue;
             }
             let regions: Vec<_> = cache
                 .ring(ring)
-                .compose_copies()
+                .compose_copies(plan.compose[ring])
                 .iter()
                 .map(|c| {
                     (
