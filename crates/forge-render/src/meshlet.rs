@@ -493,7 +493,7 @@ const STAT_COUNT: usize = 18;
 const STATS_BYTES: u64 = (STAT_COUNT * 4) as u64;
 /// LOD levels a mesh may have on the GPU (mirrors `forge_geom::MAX_LEVELS`).
 const LOD_LEVELS: usize = forge_geom::MAX_LEVELS as usize;
-const FRAME_BLOCK_STRIDE: u64 = 1024;
+const FRAME_BLOCK_STRIDE: u64 = 1152;
 
 /// Mirrors `Mesh` in `meshlet.slang` (400 bytes).
 #[repr(C)]
@@ -822,8 +822,29 @@ struct GpuFrame {
     ring_mover_end: u32,
     /// The lamps' shadow atlas (D-108, `LampAtlasSet`), 0: none.
     lamp_atlas: u64,
+    /// The reflection cubes (D-108, `CubeSet`), 0: none.
+    reflection_cubes: u64,
+    /// From this view's camera to the camera the shadow rings were drawn for: a cube's face reads
+    /// the rings from elsewhere.
+    ring_offset: [f32; 3],
+    ring_offset_pad: u32,
 }
 
+/// `options`: the smooth rows' reflections come from the screen (`OPTION_SCREEN_REFLECTIONS`).
+const OPTION_SCREEN_REFLECTIONS: u32 = 2;
+/// Levels of the pyramid of the frame's nearest depth, at most.
+const REFLECTION_DEPTH_LEVELS: u32 = 8;
+/// Levels of the pyramid of the frame's colour.
+const REFLECTION_COLOUR_LEVELS: u32 = 5;
+/// `src_level` of a pyramid's level 0: it is read from the frame.
+const PYRAMID_FROM_THE_FRAME: u32 = u32::MAX;
+/// The chains of draws kept for the reflection cubes' faces, the last of [`RING_CHAINS`].
+const CUBE_CHAINS: u64 = 6;
+/// The LOD error a cube's face may show, texels.
+const CUBE_LOD_ERROR: f32 = 2.0;
+
+/// `options` of a reflection cube's face: it leaves out what moves (`OPTION_CUBE_FACE`).
+const OPTION_CUBE_FACE: u32 = 1 << 20;
 /// `options` of a shadow ring's draw: orthographic, its LOD by its texels (`OPTION_RING`).
 const OPTION_RING: u32 = 1 << 16;
 /// With [`OPTION_RING`]: it draws the movers, not the casters that stay.
@@ -890,6 +911,77 @@ pub struct RingFrame {
     set: u64,
     /// The lamps' atlas's composed layer, with the atlas on.
     atlas: Option<ImageHandle>,
+    /// Where the draws' culls count, which a cube's draws share.
+    stats: forge_gpu::BufferHandle,
+    /// With movers, the frame's instance table and its cells.
+    instances: Option<forge_gpu::BufferHandle>,
+    /// See `instances`.
+    cells: Option<forge_gpu::BufferHandle>,
+}
+
+/// The view [`MeshletRenderer::resolve_view`] shades.
+#[derive(Clone, Copy)]
+struct ResolveView<'f> {
+    /// Its frame block's address.
+    frame: u64,
+    /// Its tile lists and their dispatches.
+    tiles: &'f [GraphBuffer; 2],
+    /// The camera's: with the reflections' pass, the hashes and the texture feedback.
+    camera: bool,
+    /// `tiles` as this frame's graph knows them, where several views use the same ones.
+    imported: Option<[forge_gpu::BufferHandle; 2]>,
+    /// The lamps' atlas the view's shading reads, where it is not the camera's.
+    atlas: Option<ImageHandle>,
+}
+
+/// Mirrors `CubeFacePush` in `meshlet.slang`.
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+struct CubeFacePush {
+    frame: u64,
+    sky: u64,
+    colour_image: u32,
+    vis_image: u32,
+    atlas_image: u32,
+    face: u32,
+    tile: [u32; 2],
+    pad: [u32; 2],
+}
+
+/// Mirrors `Push` of `cube_prefilter_main` in `reflection_pyramid.slang`.
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+struct CubePrefilterPush {
+    src_image: u32,
+    dst_image: u32,
+    level: u32,
+    side: u32,
+    tile: [u32; 2],
+    pad: [u32; 2],
+}
+
+/// What the reflection cubes add (D-108, step 3).
+struct ReflectionCubes {
+    /// The octahedral tiles, `RGBA16F`, their mips the roughness.
+    atlas: GraphImage,
+    /// Per frame slot, the table the shading reads.
+    sets: Vec<Buffer>,
+    /// The tile lists of a face's resolve.
+    tiles: [GraphBuffer; 2],
+    /// A face's light into its part of a tile.
+    face: Pipeline,
+    /// A tile's mips.
+    prefilter: Pipeline,
+}
+
+/// What the screen's reflections add to the renderer (D-108, step 3).
+struct ScreenReflections {
+    /// `reflections_screen_main`.
+    reflections: Pipeline,
+    /// A level of the frame's nearest depth.
+    depth: Pipeline,
+    /// A level of the frame's colour.
+    colour: Pipeline,
 }
 
 /// D-108's shadow rings on the GPU, made when first asked for
@@ -969,6 +1061,8 @@ struct RingChain {
     clear: bool,
     /// The target's side, texels.
     area: u32,
+    /// With a reflection cube's face: its visibility target, drawn with the camera's pipelines.
+    capture: Option<ImageHandle>,
 }
 
 /// Where a frame slot's light lists start in its lamps' buffer, bytes: after the lamps.
@@ -5081,6 +5175,14 @@ pub struct MeshletRenderer {
     pipeline_resolve: [Pipeline; MATERIAL_CLASSES],
     /// The mirror rays of the smooth rows (issue #52): devices with ray queries only.
     pipeline_reflections: Option<Pipeline>,
+    /// The screen's reflections (D-108, step 3), made when first asked for.
+    screen_reflections: Option<ScreenReflections>,
+    /// Whether the smooth rows' reflections come from the screen (`r.reflections.mode`).
+    pub reflections_on_screen: bool,
+    /// The most steps a reflected ray takes over the screen (`r.reflections.screen_steps`).
+    pub screen_steps: u32,
+    /// How far behind a surface a reflected ray may be and meet it, metres (`r.reflections.thickness`).
+    pub screen_thickness: f32,
     /// The sun's shadow rays for SIGMA (#172): devices with ray queries only.
     pipeline_sun_shadow: Option<Pipeline>,
     /// D-088's diffuse bounce rays (`diffuse_trace_main`), with ray queries.
@@ -5110,6 +5212,20 @@ pub struct MeshletRenderer {
     ring_changes: RefCell<Vec<(DVec3, f64)>>,
     /// The rings' list capacities once a draw found the camera's too small: work, visible.
     ring_lists: Cell<[u32; 2]>,
+    /// The reflection cubes' GPU side, made when a scene first gives cubes.
+    cubes: Option<ReflectionCubes>,
+    /// The cubes' state.
+    cube_set: RefCell<crate::reflection_cubes::CubeSet>,
+    /// What changed in the scene since the cubes last looked, in the scene's frame.
+    cube_changes: RefCell<Vec<(Vec3, f32)>>,
+    /// Whether misses read the cubes (`r.reflections.cubes`).
+    pub cubes_on: bool,
+    /// The faces a frame may draw (`r.reflections.cube_budget`).
+    pub cube_budget: usize,
+    /// This frame's atlas in its graph, for the reflections' pass.
+    cube_atlas: Cell<Option<ImageHandle>>,
+    /// The frame's block for the shadow rings, which a cube's starts from; and the lists' sizes.
+    ring_base: Cell<Option<(GpuFrame, [u32; 2])>>,
     /// The lamps' shadow atlas (D-108).
     lamp_atlas: RefCell<crate::shadow_atlas::LampAtlas>,
     /// Whether the rings' mode shadows the lamps through it (`r.shadows.atlas`).
@@ -5769,6 +5885,10 @@ impl MeshletRenderer {
             pipeline_merge,
             pipeline_resolve,
             pipeline_reflections,
+            screen_reflections: None,
+            reflections_on_screen: false,
+            screen_steps: 64,
+            screen_thickness: 0.6,
             pipeline_sun_shadow,
             pipeline_diffuse_trace,
             pipeline_lamp_shadows,
@@ -5785,6 +5905,13 @@ impl MeshletRenderer {
             ring_frame: Cell::new(0),
             ring_changes: RefCell::new(Vec::new()),
             ring_lists: Cell::new([0; 2]),
+            cubes: None,
+            cube_set: RefCell::new(crate::reflection_cubes::CubeSet::new()),
+            cube_changes: RefCell::new(Vec::new()),
+            cubes_on: true,
+            cube_budget: 1,
+            cube_atlas: Cell::new(None),
+            ring_base: Cell::new(None),
             lamp_atlas: RefCell::new(crate::shadow_atlas::LampAtlas::new()),
             atlas_on: true,
             atlas_ran: Cell::new(false),
@@ -6358,7 +6485,19 @@ impl MeshletRenderer {
             skin_vertices: scene.skins.as_ref().map_or(0, SceneSkins::vertices_address),
             skin_joints: scene.skins.as_ref().map_or(0, SceneSkins::joints_address),
             movers_rays: scene.movers_rays(),
-            options: u32::from(self.decal_mirrors && scene.decals_smooth),
+            ring_offset: [0.0; 3],
+            ring_offset_pad: 0,
+            reflection_cubes: self
+                .cubes
+                .as_ref()
+                .filter(|_| self.cubes_live())
+                .map_or(0, |c| c.sets[slot.index].address()),
+            options: u32::from(self.decal_mirrors && scene.decals_smooth)
+                | if self.screen_reflections_on() {
+                    OPTION_SCREEN_REFLECTIONS
+                } else {
+                    0
+                },
             ground_window: scene.ground_window.get(),
             planet: scene.planet.get().camera,
             planet_axis: scene.planet.get().axis,
@@ -7081,6 +7220,584 @@ impl MeshletRenderer {
         })
     }
 
+    /// Whether this frame's smooth rows take their reflections from the screen.
+    fn screen_reflections_on(&self) -> bool {
+        self.reflections_on_screen && self.screen_reflections.is_some()
+    }
+
+    /// Makes what the screen's reflections need (D-108, step 3), and turns them on.
+    pub fn enable_screen_reflections(
+        &mut self,
+        device: &Arc<Device>,
+        shaders: &ShaderCompiler,
+    ) -> Result<()> {
+        self.reflections_on_screen = true;
+        if self.screen_reflections.is_some() {
+            return Ok(());
+        }
+        let make = |file: &str, entry: &'static str, bytes: usize, name: &'static str| {
+            let module = device
+                .create_shader_module(&shaders.compile(file, entry, ShaderStage::Compute)?, name)?;
+            let pipeline = device.create_compute_pipeline(&ComputePipelineDesc {
+                shader: (module, entry),
+                push_constant_bytes: bytes as u32,
+                name,
+            });
+            device.destroy_shader_module(module);
+            pipeline
+        };
+        let resolve = std::mem::size_of::<ResolvePush>();
+        let level = std::mem::size_of::<HzbPush>();
+        self.screen_reflections = Some(ScreenReflections {
+            reflections: make(
+                "meshlet.slang",
+                "reflections_screen_main",
+                resolve,
+                "screen reflections",
+            )?,
+            depth: make(
+                "reflection_pyramid.slang",
+                "reflection_depth_main",
+                level,
+                "reflection depth",
+            )?,
+            colour: make(
+                "reflection_pyramid.slang",
+                "reflection_colour_main",
+                level,
+                "reflection colour",
+            )?,
+        });
+        Ok(())
+    }
+
+    /// The two pyramids [`Self::resolve`]'s screen reflections read: the frame's nearest depth and
+    /// its colour, as the class passes left them.
+    fn reflection_pyramids<'f>(
+        &'f self,
+        graph: &mut FrameGraph<'f>,
+        gpu: &'f ScreenReflections,
+        depth: ImageHandle,
+        color: ImageHandle,
+        extent: vk::Extent2D,
+    ) -> [ImageHandle; 2] {
+        let compute = vk::PipelineStageFlags2::COMPUTE_SHADER;
+        let levels =
+            |limit: u32| (u32::BITS - extent.width.max(extent.height).leading_zeros()).min(limit);
+        let size = move |level: u32| {
+            (
+                (extent.width >> level).max(1),
+                (extent.height >> level).max(1),
+            )
+        };
+        let pyramid = |graph: &mut FrameGraph<'f>,
+                       name: &'static str,
+                       zone: &'static str,
+                       format: vk::Format,
+                       mips: u32,
+                       source: ImageHandle,
+                       depth_of_colour: Option<ImageHandle>,
+                       pipeline: &'f Pipeline| {
+            let image = graph.transient(TransientDesc {
+                name,
+                width: extent.width,
+                height: extent.height,
+                format,
+                usage: vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::STORAGE,
+                aspect: vk::ImageAspectFlags::COLOR,
+                mip_levels: mips,
+            });
+            for level in 0..mips {
+                let (width, height) = size(level);
+                let pass = graph.pass(zone);
+                let pass = if level == 0 {
+                    pass.image(source, ImageAccess::Sampled(compute)).with(
+                        |b| match depth_of_colour {
+                            Some(depth) => b.image(depth, ImageAccess::Sampled(compute)),
+                            None => b,
+                        },
+                    )
+                } else {
+                    pass.image_mip(image, level - 1, ImageAccess::Sampled(compute))
+                };
+                pass.image_mip(image, level, ImageAccess::StorageWrite(compute))
+                    .run(move |resources, commands| {
+                        let (src_image, src_level, (src_width, src_height)) = if level == 0 {
+                            (
+                                resources.sampled(source).0,
+                                PYRAMID_FROM_THE_FRAME,
+                                (width, height),
+                            )
+                        } else {
+                            (resources.sampled(image).0, level - 1, size(level - 1))
+                        };
+                        commands.bind_pipeline(pipeline);
+                        commands.push_constants(
+                            pipeline,
+                            &HzbPush {
+                                src_image,
+                                src_level,
+                                dst_image: resources.storage(image, level).0,
+                                dst_width: width,
+                                dst_height: height,
+                                pad: [
+                                    src_width,
+                                    src_height,
+                                    depth_of_colour.map_or(0, |d| resources.sampled(d).0),
+                                ],
+                            },
+                        );
+                        commands.dispatch(width.div_ceil(8), height.div_ceil(8), 1);
+                        Ok(())
+                    });
+            }
+            image
+        };
+        [
+            pyramid(
+                graph,
+                "reflection depth",
+                "shading/reflection depth",
+                vk::Format::R32_SFLOAT,
+                levels(REFLECTION_DEPTH_LEVELS),
+                depth,
+                None,
+                &gpu.depth,
+            ),
+            pyramid(
+                graph,
+                "reflection colour",
+                "shading/reflection colour",
+                vk::Format::R16G16B16A16_SFLOAT,
+                levels(REFLECTION_COLOUR_LEVELS),
+                color,
+                Some(depth),
+                &gpu.colour,
+            ),
+        ]
+    }
+
+    /// Makes what the reflection cubes need and gives them the scene's volumes, in the scene's
+    /// frame (D-108, step 3). Their faces are drawn with the shadow rings' chains, so they need
+    /// `r.shadows.mode rings`.
+    pub fn set_reflection_cubes(
+        &mut self,
+        device: &Arc<Device>,
+        shaders: &ShaderCompiler,
+        volumes: Vec<crate::reflection_cubes::CubeVolume>,
+    ) -> Result<()> {
+        use crate::reflection_cubes::{
+            CUBE_ATLAS_TEXELS, CUBE_FACE_TEXELS, CUBE_LEVELS, GpuCubeSet,
+        };
+        self.cube_set.get_mut().set_volumes(volumes);
+        if self.cubes.is_some() {
+            return Ok(());
+        }
+        let make = |file: &str, entry: &'static str, bytes: usize, name: &'static str| {
+            let module = device
+                .create_shader_module(&shaders.compile(file, entry, ShaderStage::Compute)?, name)?;
+            let pipeline = device.create_compute_pipeline(&ComputePipelineDesc {
+                shader: (module, entry),
+                push_constant_bytes: bytes as u32,
+                name,
+            });
+            device.destroy_shader_module(module);
+            pipeline
+        };
+        let sets = (0..FRAMES_IN_FLIGHT)
+            .map(|_| {
+                device.create_buffer(BufferDesc {
+                    size: std::mem::size_of::<GpuCubeSet>() as u64,
+                    usage: vk::BufferUsageFlags::STORAGE_BUFFER
+                        | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS,
+                    location: MemoryLocation::CpuToGpu,
+                    category: MemoryCategory::Frame,
+                    name: "reflection cube table",
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        self.cubes = Some(ReflectionCubes {
+            atlas: GraphImage::new(
+                device,
+                ImageDesc {
+                    width: CUBE_ATLAS_TEXELS,
+                    height: CUBE_ATLAS_TEXELS,
+                    format: vk::Format::R16G16B16A16_SFLOAT,
+                    usage: vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::STORAGE,
+                    aspect: vk::ImageAspectFlags::COLOR,
+                    mip_levels: CUBE_LEVELS,
+                    name: "reflection cubes",
+                },
+            )?,
+            sets,
+            tiles: create_shading_tiles(
+                device,
+                vk::Extent2D {
+                    width: CUBE_FACE_TEXELS,
+                    height: CUBE_FACE_TEXELS,
+                },
+            )?,
+            face: make(
+                "meshlet.slang",
+                "cube_face_main",
+                std::mem::size_of::<CubeFacePush>(),
+                "reflection cube face",
+            )?,
+            prefilter: make(
+                "reflection_pyramid.slang",
+                "cube_prefilter_main",
+                std::mem::size_of::<CubePrefilterPush>(),
+                "reflection cube prefilter",
+            )?,
+        });
+        Ok(())
+    }
+
+    /// Whether this frame's misses read the cubes.
+    fn cubes_live(&self) -> bool {
+        self.cubes_on
+            && self.cubes.is_some()
+            && self.screen_reflections_on()
+            && self.shadow_rings
+            && !self.cube_set.borrow().is_empty()
+    }
+
+    /// Draws this frame's faces of the reflection cubes (D-108, step 3), before the camera's
+    /// resolve. Each face: the rings' chain of culls with a visibility target, the sun's shadow
+    /// from the rings, the same resolve as the camera's, then its light into its part of the
+    /// cube's octahedral tile. A cube's mips are made when its six faces are new.
+    pub fn capture_reflection_cubes<'f>(
+        &'f self,
+        graph: &mut FrameGraph<'f>,
+        slot: FrameSlot,
+        scene: &'f MeshletScene,
+        targets: DrawTargets,
+        ambient: &AmbientLight,
+    ) {
+        use crate::reflection_cubes::{CUBE_FACE_TEXELS, CUBE_LEVELS, CUBE_TILE_TEXELS};
+        self.cube_atlas.set(None);
+        if !self.cubes_live() {
+            return;
+        }
+        let changes = std::mem::take(&mut *self.cube_changes.borrow_mut());
+        let (Some(cubes), Some(gpu), Some(rings), Some((base, lists)), Some(sky)) = (
+            self.cubes.as_ref(),
+            self.rings.as_ref(),
+            targets.rings,
+            self.ring_base.get(),
+            ambient.sky,
+        ) else {
+            return;
+        };
+        let compute = vk::PipelineStageFlags2::COMPUTE_SHADER;
+        let camera = Vec3::new(
+            base.camera_in_scene[0],
+            base.camera_in_scene[1],
+            base.camera_in_scene[2],
+        );
+        let sun = Vec3::from_array(base.sun_dir).normalize_or_zero();
+        let mut set = self.cube_set.borrow_mut();
+        let plan = set.plan(
+            camera,
+            sun,
+            &changes,
+            self.cube_budget.min(CUBE_CHAINS as usize),
+        );
+        let atlas = graph.import(&cubes.atlas);
+        self.cube_atlas.set(Some(atlas));
+        cubes.sets[slot.index].write(0, &[set.table(cubes.atlas.sampled().0)]);
+        drop(set);
+
+        let extent = vk::Extent2D {
+            width: CUBE_FACE_TEXELS,
+            height: CUBE_FACE_TEXELS,
+        };
+        let face_image = |graph: &mut FrameGraph<'f>,
+                          name: &'static str,
+                          format: vk::Format,
+                          usage: vk::ImageUsageFlags,
+                          aspect: vk::ImageAspectFlags| {
+            graph.transient(TransientDesc {
+                name,
+                width: CUBE_FACE_TEXELS,
+                height: CUBE_FACE_TEXELS,
+                format,
+                usage,
+                aspect,
+                mip_levels: 1,
+            })
+        };
+        use vk::ImageAspectFlags as A;
+        use vk::ImageUsageFlags as U;
+        let vis = face_image(
+            graph,
+            "cube visibility",
+            vk::Format::R32_UINT,
+            U::COLOR_ATTACHMENT | U::SAMPLED,
+            A::COLOR,
+        );
+        let depth = face_image(
+            graph,
+            "cube depth",
+            vk::Format::D32_SFLOAT,
+            U::DEPTH_STENCIL_ATTACHMENT | U::SAMPLED,
+            A::DEPTH,
+        );
+        let shadow = face_image(
+            graph,
+            "cube sun shadow",
+            vk::Format::R32_SFLOAT,
+            U::STORAGE | U::SAMPLED,
+            A::COLOR,
+        );
+        let colour = face_image(
+            graph,
+            "cube colour",
+            vk::Format::R16G16B16A16_SFLOAT,
+            U::STORAGE | U::SAMPLED,
+            A::COLOR,
+        );
+        let io = self.ring_lists_for(
+            graph,
+            scene,
+            lists,
+            (base.flags & FLAG_INSTANCE_CELLS) != 0,
+            rings.stats,
+            targets.pages,
+            targets.page_table,
+            rings.instances,
+            rings.cells,
+        );
+        // Every frame, however many faces it draws: see `RingIo::transients`.
+        let bracket = |graph: &mut FrameGraph<'f>, access: BufferAccess| {
+            let mut pass = graph.pass("reflections/cube clears");
+            for buffer in io.transients() {
+                pass = pass.buffer(buffer, access);
+            }
+            pass.image(vis, ImageAccess::ColorAttachment)
+                .image(depth, ImageAccess::DepthAttachment)
+                .image(shadow, ImageAccess::StorageWrite(compute))
+                .image(colour, ImageAccess::StorageWrite(compute))
+                .run(|_, _| Ok(()));
+        };
+        bracket(graph, BufferAccess::TransferDst);
+        let side = CUBE_FACE_TEXELS as f32;
+        let keep = CullFlags::FRUSTUM | CullFlags::LOD | CullFlags::GROUP_WINDOW_OFF;
+        let shading = CullFlags::SHADOWS
+            | CullFlags::SKY_REFLECTIONS
+            | CullFlags::SINGLE_SCATTER
+            | CullFlags::INDOORS;
+        let [work, visible] = lists;
+        let face_tiles = [
+            graph.import_buffer(&cubes.tiles[0]),
+            graph.import_buffer(&cubes.tiles[1]),
+        ];
+        // What moves is left out: a cube is kept, and what moved on would stay in it.
+        let (mover_first, mover_end) = scene
+            .movers
+            .as_ref()
+            .map_or((0, 0), |m| (m.first, m.first + m.len() as u32));
+        for (k, draw) in plan.draws.iter().enumerate() {
+            let index = RING_CHAINS - CUBE_CHAINS + k as u64;
+            let position = scene.origin.offset(draw.center);
+            let mut planes = frustum_planes(draw.view_proj);
+            planes[5] = [
+                -draw.forward.x,
+                -draw.forward.y,
+                -draw.forward.z,
+                draw.reach,
+            ];
+            let block = GpuFrame {
+                view_proj: draw.view_proj.to_cols_array(),
+                cull_view_proj: draw.view_proj.to_cols_array(),
+                cull_view: draw.view.to_cols_array(),
+                planes,
+                camera_cell: position.cell.extend(0).to_array(),
+                camera_in_scene: [draw.center.x, draw.center.y, draw.center.z, 0.0],
+                camera_local: position.local.to_array(),
+                flags: (base.flags
+                    & (keep | FLAG_STREAMING | FLAG_INSTANCE_CELLS | FLAG_CUTOUTS | shading))
+                    | CullFlags::FRUSTUM,
+                pass: PASS_SINGLE,
+                p00: draw.scale,
+                p11: draw.scale,
+                viewport_height: side,
+                znear: draw.near,
+                lod_threshold: CUBE_LOD_ERROR,
+                target_width: CUBE_FACE_TEXELS,
+                target_height: CUBE_FACE_TEXELS,
+                work_capacity: work,
+                visible_capacity: visible,
+                cluster_groups: cull_groups(work),
+                page_need: 0,
+                ladder: 0,
+                options: OPTION_CUBE_FACE,
+                ring_mover_first: mover_first,
+                ring_mover_end: mover_end,
+                tlas: 0,
+                rt_scene: 0,
+                tlas_movers: 0,
+                movers_rays: 0,
+                reflection_cubes: 0,
+                ring_offset: (draw.center - camera).to_array(),
+                ..base
+            };
+            let rect = vk::Rect2D {
+                offset: vk::Offset2D::default(),
+                extent,
+            };
+            self.ring_chain(
+                graph,
+                gpu,
+                slot,
+                scene,
+                io,
+                RingChain {
+                    block,
+                    index,
+                    target: depth,
+                    rect,
+                    clear: true,
+                    area: CUBE_FACE_TEXELS,
+                    capture: Some(vis),
+                },
+            );
+            let frame = gpu.blocks[slot.index].address() + index * FRAME_BLOCK_STRIDE;
+            // The sun's shadow, as for the camera without a denoiser.
+            let pipeline = &gpu.sample;
+            let set = rings.set;
+            let mut builder = graph
+                .pass("reflections/cube shadow")
+                .image(vis, ImageAccess::Sampled(compute))
+                .image(depth, ImageAccess::Sampled(compute))
+                .image(shadow, ImageAccess::StorageWrite(compute))
+                .buffer(io.visible, BufferAccess::ShaderRead(compute))
+                .buffer(io.pool, BufferAccess::ShaderRead(compute))
+                .buffer(io.page_table, BufferAccess::ShaderRead(compute))
+                .buffer_if(io.instances, BufferAccess::ShaderRead(compute));
+            for image in rings.composed {
+                builder = builder.image(image, ImageAccess::Sampled(compute));
+            }
+            builder.run(move |resources, commands| {
+                commands.bind_pipeline(pipeline);
+                commands.push_constants(
+                    pipeline,
+                    &RingPush {
+                        frame,
+                        set,
+                        vis_image: resources.sampled(vis).0,
+                        out_image: resources.storage(shadow, 0).0,
+                        width: CUBE_FACE_TEXELS,
+                        height: CUBE_FACE_TEXELS,
+                        depth_image: resources.sampled(depth).0,
+                        pad: [0; 3],
+                    },
+                );
+                commands.dispatch(
+                    CUBE_FACE_TEXELS.div_ceil(8),
+                    CUBE_FACE_TEXELS.div_ceil(8),
+                    1,
+                );
+                Ok(())
+            });
+            self.resolve_view(
+                graph,
+                slot,
+                ResolveView {
+                    frame,
+                    tiles: &cubes.tiles,
+                    camera: false,
+                    imported: Some(face_tiles),
+                    atlas: rings.atlas,
+                },
+                DrawTargets {
+                    depth,
+                    visibility: vis,
+                    visible_list: io.visible,
+                    pages: targets.pages,
+                    page_table: targets.page_table,
+                    movers: targets.movers,
+                    sun_rings: None,
+                    rings: None,
+                },
+                colour,
+                extent,
+                Some([0.0, 0.0, 0.0, 0.0]),
+                AmbientLight {
+                    sky: ambient.sky,
+                    occlusion: None,
+                    probes: ambient.probes,
+                    wet_ground: None,
+                    movers: targets.movers,
+                    clouds: ambient.clouds,
+                    sun_shadow: Some(shadow),
+                    diffuse_bounce: None,
+                    reflection_history: None,
+                    lamp_shadows: LampShadows::default(),
+                },
+            );
+            let pipeline = &cubes.face;
+            let (face, tile) = (draw.face, draw.tile);
+            let sky_address = sky.address;
+            graph
+                .pass("reflections/cube face")
+                .image(colour, ImageAccess::Sampled(compute))
+                .image(vis, ImageAccess::Sampled(compute))
+                .image_mip(atlas, 0, ImageAccess::StorageWrite(compute))
+                .buffer(sky.buffer, BufferAccess::ShaderRead(compute))
+                .image(sky.table, ImageAccess::Sampled(compute))
+                .run(move |resources, commands| {
+                    commands.bind_pipeline(pipeline);
+                    commands.push_constants(
+                        pipeline,
+                        &CubeFacePush {
+                            frame,
+                            sky: sky_address,
+                            colour_image: resources.sampled(colour).0,
+                            vis_image: resources.sampled(vis).0,
+                            atlas_image: resources.storage(atlas, 0).0,
+                            face,
+                            tile,
+                            pad: [0; 2],
+                        },
+                    );
+                    commands.dispatch(
+                        CUBE_TILE_TEXELS.div_ceil(8),
+                        CUBE_TILE_TEXELS.div_ceil(8),
+                        1,
+                    );
+                    Ok(())
+                });
+        }
+        bracket(graph, BufferAccess::TransferSrc);
+        let prefilter = &cubes.prefilter;
+        for tile in plan.finished {
+            for level in 1..CUBE_LEVELS {
+                let side = CUBE_TILE_TEXELS >> level;
+                graph
+                    .pass("reflections/cube prefilter")
+                    .image_mip(atlas, 0, ImageAccess::Sampled(compute))
+                    .image_mip(atlas, level, ImageAccess::StorageWrite(compute))
+                    .run(move |resources, commands| {
+                        commands.bind_pipeline(prefilter);
+                        commands.push_constants(
+                            prefilter,
+                            &CubePrefilterPush {
+                                src_image: resources.sampled(atlas).0,
+                                dst_image: resources.storage(atlas, level).0,
+                                level,
+                                side,
+                                tile,
+                                pad: [0; 2],
+                            },
+                        );
+                        commands.dispatch(side.div_ceil(8), side.div_ceil(8), 1);
+                        Ok(())
+                    });
+            }
+        }
+    }
+
     /// Makes the shadow rings' images and pipelines (D-108) if they are not there, and turns the
     /// rings on: about 160 MB. Not made in a scene that has no use for them.
     pub fn enable_shadow_rings(
@@ -7440,75 +8157,27 @@ impl MeshletRenderer {
         let texels = |slots: u32| slots * TILE_TEXELS;
         let extent_height = params.extent.height as f32;
         let cells = (base.flags & FLAG_INSTANCE_CELLS) != 0;
-        let ring_io = {
-            let storage = vk::BufferUsageFlags::STORAGE_BUFFER;
-            let args = storage | vk::BufferUsageFlags::INDIRECT_BUFFER;
-            let buffer = |graph: &mut FrameGraph<'f>, name: &'static str, size: u64, usage| {
-                graph.transient_buffer(TransientBufferDesc { name, size, usage })
-            };
-            let room = transient_instances(scene.instance_count).div_ceil(64);
-            RingIo {
-                work: buffer(graph, "ring work list", u64::from(work) * 8, storage),
-                roots: buffer(graph, "ring root list", u64::from(work) * 8, storage),
-                cluster_lookback: buffer(
-                    graph,
-                    "ring cluster status words",
-                    cull_lookback_bytes(work),
-                    storage,
-                ),
-                lookback: buffer(
-                    graph,
-                    "ring instance status words",
-                    LOOKBACK_RUNS * room * 8,
-                    storage,
-                ),
-                indirect: buffer(
-                    graph,
-                    "ring cull grid",
-                    std::mem::size_of_val(&INDIRECT_START) as u64,
-                    args,
-                ),
-                clusters: buffer(
-                    graph,
-                    "ring draw grids",
-                    std::mem::size_of_val(&CLUSTER_ARGS_START) as u64,
-                    args,
-                ),
-                cell_list: cells.then(|| {
-                    buffer(
-                        graph,
-                        "ring cell lists",
-                        4 * (CELL_LIST_WORDS + 2 * room.max(1)),
-                        args,
-                    )
-                }),
-                draws: (self.path == GeometryPath::IndirectCount).then(|| {
-                    buffer(
-                        graph,
-                        "ring cluster draws",
-                        2 * u64::from(visible) * u64::from(DRAW_COMMAND_BYTES),
-                        args,
-                    )
-                }),
-                visible: buffer(
-                    graph,
-                    "ring visible clusters",
-                    u64::from(visible) * 8,
-                    storage,
-                ),
-                raster: buffer(
-                    graph,
-                    "ring raster lists",
-                    2 * u64::from(visible) * 4,
-                    storage,
-                ),
-                stats: graph.import_buffer(counters),
-                pool: io.pool,
-                page_table: io.page_table,
-                instances: io.instances,
-                cells: io.cells,
-            }
-        };
+        let stats = graph.import_buffer(counters);
+        let ring_io = self.ring_lists_for(
+            graph,
+            scene,
+            [work, visible],
+            cells,
+            stats,
+            io.pool,
+            io.page_table,
+            io.instances,
+            io.cells,
+        );
+        self.ring_base.set(Some((base, [work, visible])));
+        if self.cubes_live() {
+            let origin = scene.origin.to_f64();
+            self.cube_changes.borrow_mut().extend(
+                atlas_changes
+                    .iter()
+                    .map(|(c, r)| ((*c - origin).as_vec3(), *r as f32)),
+            );
+        }
         // Every frame, however many draws it makes: see `RingIo::transients`.
         let mut opening = graph.pass("shadow/ring clears");
         for buffer in ring_io.transients() {
@@ -7516,9 +8185,10 @@ impl MeshletRenderer {
         }
         opening.run(|_, _| Ok(()));
         let index = Cell::new(0u64);
+        let chains_for_shadows = RING_CHAINS - if self.cubes_live() { CUBE_CHAINS } else { 0 };
         let chain = |graph: &mut FrameGraph<'f>, block, target, rect, clear, area| {
             let at = index.get();
-            if at < RING_CHAINS {
+            if at < chains_for_shadows {
                 self.ring_chain(
                     graph,
                     gpu,
@@ -7532,6 +8202,7 @@ impl MeshletRenderer {
                         rect,
                         clear,
                         area,
+                        capture: None,
                     },
                 );
                 index.set(at + 1);
@@ -7635,7 +8306,7 @@ impl MeshletRenderer {
                 atlas.refresh_turn();
             }
             // Within the chains the rings left: a static face takes one, and its laying another.
-            let left = (RING_CHAINS - index.get()) as usize;
+            let left = (chains_for_shadows - index.get()) as usize;
             let atlas_statics = self.atlas_budget.min(left / 2);
             let atlas_movers = self.atlas_mover_budget.min(left - 2 * atlas_statics);
             let atlas_plan = atlas.plan(
@@ -7810,6 +8481,9 @@ impl MeshletRenderer {
             composed: std::array::from_fn(|i| composed[i]),
             set: gpu.sets[slot.index].address(),
             atlas: atlas_handle,
+            stats: ring_io.stats,
+            instances: ring_io.instances,
+            cells: ring_io.cells,
         };
         if self.ring_denoised {
             return Some((None, ring_frame));
@@ -7859,6 +8533,89 @@ impl MeshletRenderer {
             Ok(())
         });
         Some((Some(output), ring_frame))
+    }
+
+    /// The transients one frame's chain of draws (a ring's, a lamp's, a cube's) share.
+    #[allow(clippy::too_many_arguments)]
+    fn ring_lists_for<'f>(
+        &'f self,
+        graph: &mut FrameGraph<'f>,
+        scene: &'f MeshletScene,
+        [work, visible]: [u32; 2],
+        cells: bool,
+        stats: forge_gpu::BufferHandle,
+        pool: forge_gpu::BufferHandle,
+        page_table: forge_gpu::BufferHandle,
+        instances: Option<forge_gpu::BufferHandle>,
+        cell_table: Option<forge_gpu::BufferHandle>,
+    ) -> RingIo {
+        let storage = vk::BufferUsageFlags::STORAGE_BUFFER;
+        let args = storage | vk::BufferUsageFlags::INDIRECT_BUFFER;
+        let buffer = |graph: &mut FrameGraph<'f>, name: &'static str, size: u64, usage| {
+            graph.transient_buffer(TransientBufferDesc { name, size, usage })
+        };
+        let room = transient_instances(scene.instance_count).div_ceil(64);
+        RingIo {
+            work: buffer(graph, "ring work list", u64::from(work) * 8, storage),
+            roots: buffer(graph, "ring root list", u64::from(work) * 8, storage),
+            cluster_lookback: buffer(
+                graph,
+                "ring cluster status words",
+                cull_lookback_bytes(work),
+                storage,
+            ),
+            lookback: buffer(
+                graph,
+                "ring instance status words",
+                LOOKBACK_RUNS * room * 8,
+                storage,
+            ),
+            indirect: buffer(
+                graph,
+                "ring cull grid",
+                std::mem::size_of_val(&INDIRECT_START) as u64,
+                args,
+            ),
+            clusters: buffer(
+                graph,
+                "ring draw grids",
+                std::mem::size_of_val(&CLUSTER_ARGS_START) as u64,
+                args,
+            ),
+            cell_list: cells.then(|| {
+                buffer(
+                    graph,
+                    "ring cell lists",
+                    4 * (CELL_LIST_WORDS + 2 * room.max(1)),
+                    args,
+                )
+            }),
+            draws: (self.path == GeometryPath::IndirectCount).then(|| {
+                buffer(
+                    graph,
+                    "ring cluster draws",
+                    2 * u64::from(visible) * u64::from(DRAW_COMMAND_BYTES),
+                    args,
+                )
+            }),
+            visible: buffer(
+                graph,
+                "ring visible clusters",
+                u64::from(visible) * 8,
+                storage,
+            ),
+            raster: buffer(
+                graph,
+                "ring raster lists",
+                2 * u64::from(visible) * 4,
+                storage,
+            ),
+            stats,
+            pool,
+            page_table,
+            instances,
+            cells: cell_table,
+        }
     }
 
     /// One draw of a ring: its culls, as the camera's with the ring's block, then its depth.
@@ -7986,8 +8743,17 @@ impl MeshletRenderer {
             Ok(())
         });
 
-        let solid = &gpu.solid;
-        let cutouts = scene.cutout_raster().then_some(&gpu.cutouts);
+        let capture = chain.capture;
+        let solid = if capture.is_some() {
+            &self.pipeline_solid
+        } else {
+            &gpu.solid
+        };
+        let cutouts = scene.cutout_raster().then_some(if capture.is_some() {
+            &self.pipeline_cutouts
+        } else {
+            &gpu.cutouts
+        });
         let triangles: &'f Buffer = &scene.pool;
         let capacity = block.visible_capacity;
         let fragment = if cutouts.is_some() {
@@ -8035,6 +8801,10 @@ impl MeshletRenderer {
         };
         builder
             .image(target, ImageAccess::DepthAttachment)
+            .with(|b| match capture {
+                Some(vis) => b.image(vis, ImageAccess::ColorAttachment),
+                None => b,
+            })
             .run(move |resources, commands| {
                 let push = self.push(address);
                 let depth = vk::RenderingAttachmentInfo::default()
@@ -8042,6 +8812,21 @@ impl MeshletRenderer {
                     .image_layout(vk::ImageLayout::DEPTH_ATTACHMENT_OPTIMAL)
                     .load_op(vk::AttachmentLoadOp::LOAD)
                     .store_op(vk::AttachmentStoreOp::STORE);
+                let colours: Vec<vk::RenderingAttachmentInfo> = capture
+                    .map(|vis| {
+                        vk::RenderingAttachmentInfo::default()
+                            .image_view(resources.view(vis))
+                            .image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
+                            .load_op(vk::AttachmentLoadOp::CLEAR)
+                            .store_op(vk::AttachmentStoreOp::STORE)
+                            .clear_value(vk::ClearValue {
+                                color: vk::ClearColorValue {
+                                    uint32: [u32::MAX; 4],
+                                },
+                            })
+                    })
+                    .into_iter()
+                    .collect();
                 let info = vk::RenderingInfo::default()
                     .render_area(vk::Rect2D {
                         offset: vk::Offset2D::default(),
@@ -8051,9 +8836,15 @@ impl MeshletRenderer {
                         },
                     })
                     .layer_count(1)
+                    .color_attachments(&colours)
                     .depth_attachment(&depth);
                 commands.begin_rendering(&info);
-                commands.set_viewport_rect(rect);
+                if capture.is_some() {
+                    // The camera's pipelines, whose faces wind as the camera's flipped view has them.
+                    commands.set_viewport_full(rect.extent);
+                } else {
+                    commands.set_viewport_rect(rect);
+                }
                 if clear {
                     commands.clear_depth_rect(rect, 0.0);
                 }
@@ -8583,26 +9374,64 @@ impl MeshletRenderer {
         background: Option<[f32; 4]>,
         ambient: AmbientLight,
     ) {
-        debug_assert!(tile_count(extent) <= tile_count(self.extent));
+        let view = ResolveView {
+            frame: self.frame_buffers[slot.index].address(),
+            tiles: &self.shading_tiles,
+            camera: true,
+            imported: None,
+            atlas: None,
+        };
+        self.resolve_view(
+            graph, slot, view, targets, color, extent, background, ambient,
+        );
+    }
+
+    /// [`Self::resolve`] for the view `view` names: the camera's, or a reflection cube's face.
+    #[allow(clippy::too_many_arguments)]
+    fn resolve_view<'f>(
+        &'f self,
+        graph: &mut FrameGraph<'f>,
+        slot: FrameSlot,
+        view: ResolveView<'f>,
+        targets: DrawTargets,
+        color: ImageHandle,
+        extent: vk::Extent2D,
+        background: Option<[f32; 4]>,
+        ambient: AmbientLight,
+    ) {
+        let hasher = self.resolve_hasher.as_ref().filter(|_| view.camera);
+        debug_assert!(!view.camera || tile_count(extent) <= tile_count(self.extent));
         debug_assert!(
             background.is_none_or(|b| b[3] >= 0.0),
             "a background's alpha is ≥ 0"
         );
-        if let Some(h) = &self.resolve_hasher {
+        if let Some(h) = hasher {
             self.hash_resolve_inputs(h, graph, slot, &targets, &ambient);
         }
         let compute = vk::PipelineStageFlags2::COMPUTE_SHADER;
-        let [tiles_buffer, args_buffer]: &'f [GraphBuffer; 2] = &self.shading_tiles;
-        let tiles = graph.import_buffer(tiles_buffer);
-        let args = graph.import_buffer(args_buffer);
+        let [tiles_buffer, args_buffer]: &'f [GraphBuffer; 2] = view.tiles;
+        let [tiles, args] = view.imported.unwrap_or_else(|| {
+            [
+                graph.import_buffer(tiles_buffer),
+                graph.import_buffer(args_buffer),
+            ]
+        });
         // The mirror rays' requests (issue #52): the resolve writes them for the smooth rows, the
-        // reflection pass reads them. Only under a sky, on devices with ray queries. Twice the
-        // frame's height: each pixel's direction and weight, and below them their colour (a
-        // metal's tint, which a smooth gold ball's reflection lost).
-        let reflections = self
-            .pipeline_reflections
+        // reflection pass reads them. Only under a sky, on devices with ray queries or with the
+        // screen's reflections on (D-108). Twice the frame's height: each pixel's direction and
+        // weight, and below them their colour (a metal's tint, which a smooth gold ball's
+        // reflection lost).
+        let screen = self
+            .screen_reflections
             .as_ref()
-            .filter(|_| ambient.sky.is_some());
+            .filter(|_| self.reflections_on_screen && ambient.sky.is_some() && view.camera);
+        let reflections = match screen {
+            Some(gpu) => Some(&gpu.reflections),
+            None => self
+                .pipeline_reflections
+                .as_ref()
+                .filter(|_| ambient.sky.is_some() && view.camera),
+        };
         let request = reflections.map(|_| {
             graph.transient(TransientDesc {
                 name: "mirror ray requests",
@@ -8614,7 +9443,7 @@ impl MeshletRenderer {
                 mip_levels: 1,
             })
         });
-        let frame_address = self.frame_buffers[slot.index].address();
+        let frame_address = view.frame;
         let push = move |resources: &forge_gpu::Resources<'_>| ResolvePush {
             frame: frame_address,
             tiles: tiles_buffer.address(),
@@ -8669,6 +9498,10 @@ impl MeshletRenderer {
             .buffer(targets.pages, BufferAccess::ShaderRead(compute))
             .buffer(targets.page_table, BufferAccess::ShaderRead(compute))
             .with(|b| MoversFrame::declare(targets.movers, b, compute, true))
+            .with(|b| match view.atlas {
+                Some(atlas) => b.image(atlas, ImageAccess::Sampled(compute)),
+                None => b,
+            })
             .buffer(tiles, BufferAccess::ShaderWrite(compute))
             .buffer(args, BufferAccess::ShaderReadWrite(compute));
         if let Some(sky) = ambient.sky {
@@ -8714,12 +9547,12 @@ impl MeshletRenderer {
             Ok(())
         });
         let hash = |graph: &mut FrameGraph<'f>| {
-            if let Some(h) = &self.resolve_hasher {
+            if let Some(h) = hasher {
                 h.add(graph, color, crate::debug_hash::HashKind::Float4, extent);
             }
         };
         hash(graph);
-        if let Some(h) = &self.resolve_hasher {
+        if let Some(h) = hasher {
             h.add_tiles(graph, color, extent);
         }
         for class in &ShadingClass::ALL[1..] {
@@ -8738,6 +9571,10 @@ impl MeshletRenderer {
                 .buffer(targets.pages, BufferAccess::ShaderRead(compute))
                 .buffer(targets.page_table, BufferAccess::ShaderRead(compute))
                 .with(|b| MoversFrame::declare(targets.movers, b, compute, true))
+                .with(|b| match view.atlas {
+                    Some(atlas) => b.image(atlas, ImageAccess::Sampled(compute)),
+                    None => b,
+                })
                 .buffer(tiles, BufferAccess::ShaderRead(compute))
                 .buffer(args, BufferAccess::IndirectArgsAndShaderRead(compute));
             if let Some(sky) = ambient.sky {
@@ -8791,10 +9628,25 @@ impl MeshletRenderer {
         }
         // The mirror rays over the tiles holding smooth rows (issue #52).
         if let (Some(pipeline), Some(request), Some(sky)) = (reflections, request, ambient.sky) {
+            let pyramids = screen
+                .map(|gpu| self.reflection_pyramids(graph, gpu, targets.depth, color, extent));
+            let screen_settings = [self.screen_steps as f32, self.screen_thickness, 0.0, 0.0];
             // It reads back the colour the class passes wrote, behind a full barrier (#349).
             let mut builder = graph
                 .pass("shading/reflections")
                 .full_barrier()
+                .with(|b| match pyramids {
+                    Some([depth, colour]) => b
+                        .image(depth, ImageAccess::Sampled(compute))
+                        .image(colour, ImageAccess::Sampled(compute)),
+                    None => b,
+                })
+                .with(
+                    |b| match self.cube_atlas.get().filter(|_| screen.is_some()) {
+                        Some(atlas) => b.image(atlas, ImageAccess::Sampled(compute)),
+                        None => b,
+                    },
+                )
                 .image(targets.visibility, ImageAccess::Sampled(compute))
                 .image(color, ImageAccess::StorageReadWrite(compute))
                 .image(request, ImageAccess::StorageRead(compute))
@@ -8857,16 +9709,27 @@ impl MeshletRenderer {
                     ao_image: motion.map_or(u32::MAX, |m| resources.storage(m, 0).0),
                     ..push(resources)
                 };
+                // The screen's pass takes no shadow and no bounce: their slots carry its pyramids
+                // and the background its settings (`screen_reflection`).
+                let push = match pyramids {
+                    Some([depth, colour]) => ResolvePush {
+                        sun_shadow: resources.sampled(depth).0,
+                        diffuse_bounce: resources.sampled(colour).0,
+                        background: screen_settings,
+                        ..push
+                    },
+                    None => push,
+                };
                 commands.push_constants(pipeline, &push);
                 commands.dispatch_indirect(args_buffer, REFLECTION_LIST * 16);
                 Ok(())
             });
         }
         hash(graph);
-        if let Some(h) = &self.resolve_hasher {
+        if let Some(h) = hasher {
             h.finish(graph);
         }
-        if let Some(feedback) = &self.texture_feedback {
+        if let Some(feedback) = self.texture_feedback.as_ref().filter(|_| view.camera) {
             feedback.record(graph, slot, frame_address, targets.visibility, extent);
         }
     }

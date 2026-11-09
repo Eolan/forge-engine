@@ -224,6 +224,9 @@ command line": `--no-ao` and `--set r.ao=0` give the same image to the pixel.
 | `r.reflections.sky`, `r.reflections.rays` | the sky's reflection, mirror rays | 0, 1 | 1, 1 |
 | `r.reflections.motion` | the smooth surfaces' motion vectors moved towards what they reflect, so the upscaler follows the reflections (off: the surfaces) | 0, 1 | 1 |
 | `r.reflections.decals` | mirror rays from the surfaces decals make smooth, a puddle on rough ground (off: their sky's light alone; #395) | 0, 1 | 1 |
+| `r.reflections.mode` | the smooth surfaces' reflections by rays, or from the screen (D-108), which needs none | rays, screen | rays, or screen on a device without ray queries |
+| `r.reflections.screen_steps`, `r.reflections.thickness` | screen reflections: the most steps a ray takes, and how far behind a surface it may be and meet it, metres | 8 to 256, 0.02 to 8 | 64, 0.6 |
+| `r.reflections.cubes`, `r.reflections.cube_budget` | screen reflections: a miss reads the scene's reflection cubes (they need `r.shadows.mode rings`), and the faces a frame may draw | 0, 1; 0 to 6 | 1; 1 |
 | `r.sun.disc` | the sun's disc at its true size | 0, 1 | 1 |
 | `r.sky.real` | at night, the catalogue's stars and the Moon's albedo (D-046), where the night has them | 0, 1 | 0 |
 | `r.cull.occlusion` | occlusion culling | 0, 1 | 1 |

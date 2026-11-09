@@ -245,6 +245,8 @@ public struct CellBounds
 // `Frame::options` of a shadow ring's draw (D-108): an orthographic view whose LOD goes by its
 // texels, and which layer it draws: the casters that stay, or with OPTION_RING_MOVERS the movers.
 static const uint OPTION_RING = 1u << 16;
+// A reflection cube's face (D-108): it takes only what stays, like a ring's static layer.
+static const uint OPTION_CUBE_FACE = 1u << 20;
 static const uint OPTION_RING_MOVERS = 1u << 17;
 // With OPTION_RING: a ring past the scene's far shadows, whose casters are the far shadow rays' world.
 static const uint OPTION_RING_FAR = 1u << 18;
@@ -609,6 +611,9 @@ public struct Frame
     public uint ring_mover_first;   // a shadow ring's draw (OPTION_RING, D-108): the movers' first instance
     public uint ring_mover_end;     // and the one after their last
     public LampAtlasSet* lamp_atlas; // the lamps' shadow atlas (D-108), or null
+    public CubeSet* reflection_cubes; // the reflection cubes (D-108), or null
+    public float3 ring_offset;        // from this view's camera to the one the rings were drawn for
+    public uint ring_offset_pad;
 };
 
 // Whether this thread's rays meet the movers: every pass's but the probes' unless their scene asks
@@ -2797,7 +2802,7 @@ void append_instance_work(Frame* f, uint64_t* status, uint ticket, uint groups, 
 // Whether a shadow ring's draw takes instance `index` (D-108): every other view takes them all.
 bool ring_layer_holds(Frame* f, uint index)
 {
-    if ((f[0].options & OPTION_RING) == 0)
+    if ((f[0].options & (OPTION_RING | OPTION_CUBE_FACE)) == 0)
         return true;
     bool mover = index >= f[0].ring_mover_first && index < f[0].ring_mover_end;
     return mover == ((f[0].options & OPTION_RING_MOVERS) != 0);
@@ -2806,7 +2811,7 @@ bool ring_layer_holds(Frame* f, uint index)
 // Whether it takes any of cell `cell`'s 64 instances.
 bool ring_layer_holds_cell(Frame* f, uint cell)
 {
-    if ((f[0].options & OPTION_RING) == 0)
+    if ((f[0].options & (OPTION_RING | OPTION_CUBE_FACE)) == 0)
         return true;
     uint first = cell * 64;
     uint end = first + 64;
@@ -4497,6 +4502,23 @@ void lamps_at<let SHADOWS : int>(Frame* f, ProbeField* probes, float3 world, uin
             float3 reaching = g_sampled_images[NonUniformResourceIndex(share)].Load(int3(pixel, 0)).rgb;
             g_lamp_diffuse *= reaching;
             g_lamp_specular *= reaching;
+        }
+        else if ((f[0].options & OPTION_CUBE_FACE) != 0u)
+        {
+            // A reflection cube's face, drawn once and kept: every lamp of the place, none picked
+            // by a noise that would stay in it, through the atlas where the lamp has a slot.
+            for (uint r = 0u; r < 3u; r++)
+            {
+                for (uint e = place.runs.run[r].x; e < place.runs.run[r].y; e++)
+                {
+                    uint i = lamp_at(f, place.runs, e);
+                    if (!lamp_counted(f, place.runs, r, i) || lamp_weight_in(f[0].lamps[i], world, n, place.region, place.other, place.channels) <= 0.0)
+                        continue;
+                    float seen = atlas_seen(f, f[0].lamps[i], i, world, n, bias, float2(0.0));
+                    if (seen > 0.0)
+                        lamp_add<0>(f, f[0].lamps[i], i, seen, world, n, shading_n, view, specular_power, specular_weight, f0, bias, float2(0.0));
+                }
+            }
         }
         else
         {
@@ -8329,13 +8351,17 @@ static const uint UNASKED_BIT = 0x200u;
 // roughness map: only then do its standard pixels write a request of none and `reflections_main`
 // read theirs, so that a scene without one draws as before.
 static const uint OPTION_DECAL_MIRRORS = 1u;
+// `Frame::options`: the smooth rows' reflections come from the screen (D-108, step 3,
+// `r.reflections.mode`): `reflections_screen_main` in place of the rays' pass.
+static const uint OPTION_SCREEN_REFLECTIONS = 2u;
 
 // Whether the frame traces mirror rays from the pixels of `mat`, however smooth: under a sky, with
 // a scene structure and both reflection flags.
 bool mirror_rays_on<let SHADOWS : int>(Frame* f, Material mat)
 {
     const uint flags = FLAG_SKY_REFLECTIONS | FLAG_RAY_REFLECTIONS;
-    return SHADOWS != 0 && f[0].tlas != 0 && f[0].rt_scene != nullptr && resolve_push.sky != nullptr
+    bool rays = SHADOWS != 0 && f[0].tlas != 0 && f[0].rt_scene != nullptr;
+    return (rays || (f[0].options & OPTION_SCREEN_REFLECTIONS) != 0u) && resolve_push.sky != nullptr
         && (f[0].flags & flags) == flags
         && mat.class_index != MATERIAL_CLASS_JELLY // it traces its own, from its surface (#180)
         && (f[0].flags & FLAG_SHOW_GI) == 0;
@@ -8945,9 +8971,290 @@ float3 seen_clouds(Frame* f, float4* sky, float3 direction, float2 size)
 // pass traces the ray and adds W × T × what it met (the sky on a miss): the same sum as tracing
 // inside the resolve, without the sky added and taken off again through the half-float colour
 // (D-098's last paragraph).
+// What a smooth pixel sees across the frame (D-108, step 3): its reflected ray, walked up and down
+// the pyramid of the frame's nearest depth (`reflection_depth_main`; the published hierarchical
+// march, written here). In screen space depth is linear along the ray. A cell's nearest depth that
+// the ray stays in front of lets it go to the cell's edge and a level up, one it would pass goes a
+// level down, and at the finest level a surface it is behind by no more than `thickness` is met.
+// rgb: what is there (this frame's colour, before the exposure), the level by the roughness alone;
+// a: how far that is to be trusted, the rest being the miss's light. Every ray is walked alike,
+// wherever it heads.
+float4 screen_reflection(Frame* f, float3 start, float3 n, float3 dir, float rough, float2 size, out float distance, out bool mover)
+{
+    distance = -1.0;
+    mover = false;
+    uint depth_image = resolve_push.sun_shadow;
+    uint source_image = resolve_push.diffuse_bounce;
+    uint steps = uint(resolve_push.background.x);
+    float thickness = resolve_push.background.y;
+    uint width = uint(size.x);
+    uint height = uint(size.y);
+
+    float4 c0 = mul(f[0].view_proj, float4(start, 1.0));
+    float seg = 4096.0;
+    float4 c1 = mul(f[0].view_proj, float4(start + dir * seg, 1.0));
+    float limit = max(f[0].znear, 1e-3);
+    if (c1.w < limit)
+    {
+        // The end of the segment before the camera's plane.
+        float k = (limit - c0.w) / (c1.w - c0.w);
+        c1 = c0 + (c1 - c0) * k;
+        seg *= k;
+    }
+    float3 a = float3(float2(0.5, -0.5) * c0.xy / c0.w + 0.5, c0.z / c0.w);
+    float3 b = float3(float2(0.5, -0.5) * c1.xy / c1.w + 0.5, c1.z / c1.w);
+    float3 d = b - a;
+    float2 sgn = float2(d.x >= 0.0 ? 1.0 : -1.0, d.y >= 0.0 ? 1.0 : -1.0);
+    float2 inv = float2(abs(d.x) > 1e-9 ? 1.0 / d.x : 1e12 * sgn.x, abs(d.y) > 1e-9 ? 1.0 / d.y : 1e12 * sgn.y);
+    float2 screen_out = (float2(0.5) + 0.5 * sgn - a.xy) * inv;
+    float t_end = min(1.0, min(screen_out.x, screen_out.y));
+    // A texel away from its own.
+    float t = 1.01 / max(length(d.xy * size), 1.0);
+    int top = int(min(7u, firstbithigh(max(width, height))));
+    int level = 0;
+    uint i = 0u;
+    bool found = false;
+    float near = f[0].znear;
+    float dn = dot(dir, n);
+    Texture2D<float> pyramid = g_sampled_images_r[NonUniformResourceIndex(depth_image)];
+    for (; i < steps; i++)
+    {
+        if (t >= t_end)
+            break;
+        float3 p = a + d * t;
+        uint2 dim = max(uint2(width, height) >> uint(level), uint2(1u));
+        float2 dim_f = float2(dim);
+        // As the pyramid nests: a cell holds its pixels by index, the last row and column what is
+        // left over.
+        int2 cell = clamp(int2(floor(p.xy * size)) >> level, int2(0), int2(dim) - int2(1));
+        float surface = pyramid.Load(int3(cell, level));
+        float2 low = float2(cell << level) / size;
+        float2 high = float2(cell.x + 1 >= int(dim.x) ? 1.0 : float((cell.x + 1) << level) / size.x,
+                             cell.y + 1 >= int(dim.y) ? 1.0 : float((cell.y + 1) << level) / size.y);
+        float2 edge = float2(sgn.x > 0.0 ? high.x : low.x, sgn.y > 0.0 ? high.y : low.y);
+        float2 across = (edge - a.xy) * inv;
+        float leave = min(across.x, across.y);
+        // A thousandth of a texel of this level past the cell's edge.
+        float nudge = 1e-3 / max(max(abs(d.x) * dim_f.x, abs(d.y) * dim_f.y), 1e-6);
+        if (p.z > surface)
+        {
+            float meet = abs(d.z) > 1e-12 ? (surface - a.z) / d.z : -1.0;
+            if (!(meet > t && meet < leave))
+            {
+                t = leave + nudge;
+                level = min(level + 1, top);
+                continue;
+            }
+            t = meet;
+            if (level > 0)
+            {
+                level -= 1;
+                continue;
+            }
+            p = a + d * t;
+        }
+        else if (level > 0)
+        {
+            level -= 1;
+            continue;
+        }
+        // The finest level: it is at or behind what the pixel shows.
+        float s_here = t * c0.w / ((1.0 - t) * c1.w + t * c0.w);
+        float behind = near / max(p.z, 1e-9) - near / max(surface, 1e-9);
+        // Off its own plane: a floor must not see itself along its own length.
+        float rise = s_here * seg * dn;
+        if (surface > 0.0 && behind <= thickness + 0.01 * near / surface && rise > 0.02 + 0.001 * near / surface)
+        {
+            found = true;
+            distance = s_here * seg;
+            break;
+        }
+        t = leave + nudge;
+    }
+    if (!found)
+        return float4(0.0);
+    float2 uv = (a + d * t).xy;
+    float2 border = min(uv, float2(1.0) - uv);
+    float confidence = smoothstep(0.0, 0.06, min(border.x, border.y));
+    confidence *= saturate((1.0 - float(i) / float(steps)) / 0.25);
+    ReflectionHistory* history = resolve_push.reflection_history;
+    if (history != nullptr)
+    {
+        uint vis = g_sampled_images_u32[NonUniformResourceIndex(resolve_push.vis_image)].Load(int3(int2(uv * size), 0));
+        if (vis != VISIBILITY_EMPTY && !is_grass(vis))
+        {
+            uint hit_slot = vis >> VISIBILITY_TRIANGLE_BITS;
+            mover = (f[0].visible[hit_slot].x & ~INSTANCE_HIDDEN_BIT) - history[0].first_mover < history[0].mover_count;
+        }
+    }
+    float mip = saturate((rough - 0.08) / 0.34) * 3.0;
+    float4 there = g_sampled_images[NonUniformResourceIndex(source_image)].SampleLevel(g_samplers[SAMPLER_LINEAR_CLAMP], uv, mip);
+    if (there.a < 1e-3)
+        return float4(0.0);
+    float3 light = there.rgb / there.a;
+    return float4(light / max(f[0].sun_illuminance * f[0].exposure / 3.14159265, 1e-9), confidence * saturate(there.a * 2.0));
+}
+
+
+// ------------------------------------------------------------ the reflection cubes (D-108) ---
+
+// Mirrors `GpuCube`, `GpuCubeSet`.
+public struct Cube
+{
+    public float4 center; // the point its faces were drawn from, in the scene frame
+    public float4 lo;     // its lowest corner
+    public float4 hi;     // its highest corner
+    public uint4 tile;    // its tile, in tiles
+};
+
+public struct CubeSet
+{
+    public uint image;
+    public uint count;
+    public uint2 pad;
+    public Cube cubes[32]; // `CUBE_LIST`, the nearest first
+};
+
+static const uint CUBE_TILES = 8u;        // `reflection_cubes::CUBE_TILES`
+static const uint CUBE_TILE_TEXELS = 256u;
+static const float CUBE_LAST_LEVEL = 4.0; // `CUBE_LEVELS` - 1
+static const float CUBE_ROUGHEST = 0.42;  // where a row stops asking for this reflection
+static const float CUBE_PAST_ITS_WALLS = 1.0; // metres a cube is read beyond its volume
+
+// Where direction `d` falls in a tile, as fractions of the tile, the level's texel and a half kept
+// clear of its edge. `cube_prefilter_main` has the same.
+float2 cube_in_tile(float3 d, uint level)
+{
+    float2 p = oct_encode(d) * 0.5 + float2(0.5);
+    float inset = 1.5 / float(CUBE_TILE_TEXELS >> level);
+    return float2(inset) + p * (1.0 - 2.0 * inset);
+}
+
+// What the cubes show a ray from `p` (the scene frame) along `r`: rgb, and how much of the point
+// they cover, 0 outside every volume. The ray goes to the volume's walls, and from the cube's point
+// to there. Its level is its roughness.
+float4 cube_light(Frame* f, float3 p, float3 r, float rough)
+{
+    CubeSet* set = f[0].reflection_cubes;
+    if (set == nullptr)
+        return float4(0.0);
+    float level = saturate(rough / CUBE_ROUGHEST) * CUBE_LAST_LEVEL;
+    uint below = uint(floor(level));
+    float3 toward = float3(abs(r.x) > 1e-6 ? r.x : 1e-6, abs(r.y) > 1e-6 ? r.y : 1e-6, abs(r.z) > 1e-6 ? r.z : 1e-6);
+    // The two volumes it is deepest in, whatever their order: across a wall shared by two rooms,
+    // the room it is in counts most.
+    uint found[2] = { set[0].count, set[0].count };
+    float depth[2] = { 0.0, 0.0 };
+    for (uint i = 0u; i < set[0].count; i++)
+    {
+        // It reaches past its walls a little: what hangs on them, or stands in a doorway.
+        float3 inside = min(p - set[0].cubes[i].lo.xyz, set[0].cubes[i].hi.xyz - p) + float3(CUBE_PAST_ITS_WALLS);
+        float edge = min(inside.x, min(inside.y, inside.z));
+        if (edge > depth[0])
+        {
+            found[1] = found[0];
+            depth[1] = depth[0];
+            found[0] = i;
+            depth[0] = edge;
+        }
+        else if (edge > depth[1])
+        {
+            found[1] = i;
+            depth[1] = edge;
+        }
+    }
+    float3 sum = float3(0.0);
+    float total = 0.0;
+    for (uint k = 0u; k < 2u; k++)
+    {
+        if (found[k] >= set[0].count)
+            continue;
+        Cube c = set[0].cubes[found[k]];
+        float3 from_inside = clamp(p, c.lo.xyz, c.hi.xyz);
+        float3 a = (c.hi.xyz - from_inside) / toward;
+        float3 b = (c.lo.xyz - from_inside) / toward;
+        float3 far_side = max(a, b);
+        float t = min(far_side.x, min(far_side.y, far_side.z));
+        float3 d = normalize(from_inside + r * t - c.center.xyz);
+        float2 uv = (float2(c.tile.xy) + cube_in_tile(d, below)) / float(CUBE_TILES);
+        float w = saturate(depth[k] / 0.5);
+        sum += w * g_sampled_images[NonUniformResourceIndex(set[0].image)].SampleLevel(g_samplers[SAMPLER_LINEAR_CLAMP], uv, level).rgb;
+        total += w;
+    }
+    return float4(total > 0.0 ? sum / total : float3(0.0), saturate(total));
+}
+
+struct CubeFacePush
+{
+    Frame* frame;
+    float4* sky;
+    uint colour_image;
+    uint vis_image;
+    uint atlas_image;
+    uint face;
+    uint2 tile;
+    uint2 pad;
+};
+
+[[vk::push_constant]]
+CubeFacePush cube_face_push;
+
+// A face's light into the part of the tile it stands for, in the reflections' units (before the
+// exposure); where the face saw nothing, the sky.
+[shader("compute")]
+[numthreads(8, 8, 1)]
+void cube_face_main(uint3 id : SV_DispatchThreadID)
+{
+    CubeFacePush p = cube_face_push;
+    if (id.x >= CUBE_TILE_TEXELS || id.y >= CUBE_TILE_TEXELS)
+        return;
+    float inset = 1.5 / float(CUBE_TILE_TEXELS);
+    float2 in_tile = (float2(id.xy) + float2(0.5)) / float(CUBE_TILE_TEXELS);
+    float2 o = saturate((in_tile - float2(inset)) / (1.0 - 2.0 * inset));
+    float3 d = oct_decode(o * 2.0 - float2(1.0));
+    float3 m = abs(d);
+    uint face = m.x >= m.y && m.x >= m.z ? (d.x >= 0.0 ? 0u : 1u)
+        : m.y >= m.z ? (d.y >= 0.0 ? 2u : 3u)
+        : (d.z >= 0.0 ? 4u : 5u);
+    if (face != p.face)
+        return;
+    Frame* f = p.frame;
+    float4 clip = mul(f[0].view_proj, float4(d, 1.0));
+    float2 uv = float2(0.5, -0.5) * clip.xy / clip.w + float2(0.5);
+    float size = 256.0;
+    uint vis = g_sampled_images_u32[NonUniformResourceIndex(p.vis_image)].Load(int3(clamp(int2(uv * size), int2(0), int2(255)), 0));
+    float3 light;
+    if (vis == VISIBILITY_EMPTY)
+    {
+        float4* sky = p.sky;
+        float4 up_table = sky[SH_COEFFICIENTS];
+        light = sky_view_luminance(uint(up_table.w + 0.5), up_table.xyz, sky[SH_COEFFICIENTS + 1].xyz, d) * 3.14159265;
+    }
+    else
+    {
+        float3 lit = g_sampled_images[NonUniformResourceIndex(p.colour_image)].SampleLevel(g_samplers[SAMPLER_LINEAR_CLAMP], uv, 0.0).rgb;
+        light = lit / max(f[0].sun_illuminance * f[0].exposure / 3.14159265, 1e-9);
+    }
+    uint2 texel = p.tile * CUBE_TILE_TEXELS + id.xy;
+    g_storage_images_rgba16f[NonUniformResourceIndex(p.atlas_image)][texel] = float4(light, 1.0);
+}
+
 [shader("compute")]
 [numthreads(8, 8, 1)]
 void reflections_main(uint3 group : SV_GroupID, uint3 thread : SV_GroupThreadID)
+{
+    reflections_of<0>(group, thread);
+}
+
+// The same over the screen (D-108, step 3): no ray is traced, and the pass needs no ray queries.
+[shader("compute")]
+[numthreads(8, 8, 1)]
+void reflections_screen_main(uint3 group : SV_GroupID, uint3 thread : SV_GroupThreadID)
+{
+    reflections_of<1>(group, thread);
+}
+
+void reflections_of<let SCREEN : int>(uint3 group, uint3 thread)
 {
     g_ray_mask = RAY_MIRROR;
     uint tile_index = group.y * TILE_GROUPS_X + group.x;
@@ -8972,9 +9279,9 @@ void reflections_main(uint3 group : SV_GroupID, uint3 thread : SV_GroupThreadID)
     Material mat = f[0].materials[inst.material + triangle_section(m, tri)];
     // A smooth row's pixel, or a standard row's its decals may have smoothed (#395): its request
     // says (every such pixel writes one, none where no ray is asked), with the decals' roughness.
-    bool row_traced = wants_mirror_ray<1>(f, mat);
+    bool row_traced = SCREEN != 0 ? wants_mirror_ray<0>(f, mat) : wants_mirror_ray<1>(f, mat);
     if (!row_traced && !((f[0].options & OPTION_DECAL_MIRRORS) != 0u && mat.class_index == MATERIAL_CLASS_STANDARD
-        && mirror_rays_on<1>(f, mat)))
+        && (SCREEN != 0 ? mirror_rays_on<0>(f, mat) : mirror_rays_on<1>(f, mat))))
     {
         carry_reflection(pixel);
         return;
@@ -9021,7 +9328,15 @@ void reflections_main(uint3 group : SV_GroupID, uint3 thread : SV_GroupThreadID)
     float spread = f[0].texture_lod_scale / (f[0].p11 * 0.5 * f[0].viewport_height);
     float travelled = length(mul(frame, object_position) + relative);
     float rough = laid_roughness > 0.0 ? laid_roughness : sqrt(sqrt(2.0 / (mat.specular_power + 2.0)));
-    float4 hit = trace_reflection_seen(f, sky, resolve_push.probes, world + n * 0.05, request.xyz, uint(pixel.x) * 0x8DA6B343u ^ uint(pixel.y) * 0xD8163841u, mirror_start(f, inst, m), spread, travelled, 2.0 * rough * rough, distance, mover);
+    float4 hit;
+    if (SCREEN != 0)
+    {
+        // The side it leaves from: a double-sided row seen from behind asked about its turned normal.
+        float3 leaving = dot(n, request.xyz) >= 0.0 ? n : -n;
+        hit = screen_reflection(f, mul(frame, object_position) + relative + leaving * 0.02, leaving, request.xyz, rough, size, distance, mover);
+    }
+    else
+        hit = trace_reflection_seen(f, sky, resolve_push.probes, world + n * 0.05, request.xyz, uint(pixel.x) * 0x8DA6B343u ^ uint(pixel.y) * 0xD8163841u, mirror_start(f, inst, m), spread, travelled, 2.0 * rough * rough, distance, mover);
     ReflectionHistory* history = resolve_push.reflection_history;
     // The pixel's motion vector moved towards its reflection's virtual point (`r.reflections.motion`,
     // the motion vectors' index in the ambient occlusion's slot, which this pass never reads): on
@@ -9057,7 +9372,14 @@ void reflections_main(uint3 group : SV_GroupID, uint3 thread : SV_GroupThreadID)
     // reflections as pale streaks, and a blue band opened under the quay (the owner, 2026-10-28).
     float4 up_table = sky[SH_COEFFICIENTS];
     float3 mirror = sky_view_luminance(uint(up_table.w + 0.5), up_table.xyz, sky[SH_COEFFICIENTS + 1].xyz, request.xyz) * 3.14159265;
-    float3 reflected = hit.w > 0.0 ? hit.xyz : mirror + seen_clouds(f, sky, request.xyz, size);
+    float3 reflected;
+    if (SCREEN != 0)
+    {
+        float4 cube = cube_light(f, world, request.xyz, rough);
+        reflected = lerp(lerp(mirror, cube.rgb, cube.a), hit.xyz, hit.w);
+    }
+    else
+        reflected = hit.w > 0.0 ? hit.xyz : mirror + seen_clouds(f, sky, request.xyz, size);
     if (history != nullptr)
         reflected = steadied_reflection(history, f, pixel, size, mul(frame, object_position) + relative, record.x, reflected, mirror_image_distance(hit.w > 0.0 ? distance : -1.0, curvature), mover);
     // At the request's weight and colour (`g_reflection_tint`, the image's lower half).
@@ -9441,8 +9763,9 @@ struct RingQuery
 // The finest ring holding `relative` (a surface of normal `g` facing the sun) and what its filter
 // reads, and the search for what stands between it and the sun. `extra` is a further bias in
 // metres, for what the surface's own LOD may have moved it.
-RingQuery ring_query(Frame* f, RingSet* set, float3 relative, float3 g, float extra, uint2 pixel)
+RingQuery ring_query(Frame* f, RingSet* set, float3 view_relative, float3 g, float extra, uint2 pixel)
 {
+    float3 relative = view_relative + f[0].ring_offset;
     RingQuery q = {};
     float2 noise = spatio_temporal_noise(pixel, f[0].noise_frame);
     ShadowRing r = set[0].rings[0];
@@ -9508,8 +9831,9 @@ RingQuery ring_query(Frame* f, RingSet* set, float3 relative, float3 g, float ex
 }
 
 // The finest ring that holds `relative`, for its texel's size.
-ShadowRing ring_at(Frame* f, RingSet* set, float3 relative)
+ShadowRing ring_at(Frame* f, RingSet* set, float3 view_relative)
 {
+    float3 relative = view_relative + f[0].ring_offset;
     ShadowRing last = set[0].rings[RING_COUNT - 1u];
     for (uint i = 0u; i < RING_COUNT; i++)
     {

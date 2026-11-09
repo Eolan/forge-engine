@@ -49,6 +49,7 @@ pub mod placement;
 pub mod precision;
 pub mod probes;
 pub mod raytrace;
+pub mod reflection_cubes;
 pub mod reflection_history;
 pub mod restir;
 pub mod settings;

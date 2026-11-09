@@ -536,6 +536,11 @@ soft edges, their pixel-wide minimum, their reactive mask and their hash:
   and penumbra estimate of Percentage-Closer Soft Shadows (Randima Fernando, 2005); receiver plane depth bias (John
   Isidoro, 2006); normal offset shadows (Daniel Holbert, 2011); the clipmap's toroidal update of a nested window (Tanner,
   Migdal and Jones, 1998).
+- **The screen's reflections and their cubes (D-108):** the hierarchical march through a depth pyramid (Yasin Uludag, "Hi-Z
+  Screen-Space Cone-Traced Reflections", GPU Pro 5, 2014; Morgan McGuire and Michael Mara, "Efficient GPU Screen-Space Ray
+  Tracing", JCGT 2014), written here from those papers; box-projected cubes (Kevin Bjorke, GPU Gems, 2004; Sébastien Lagarde and
+  Antoine Zanuttini, "Local Image-based Lighting With Parallax-corrected Cubemap", 2012); octahedral maps (Cigolle et al., JCGT
+  2014); the GGX prefilter of the split sum (Brian Karis, 2013, above).
 - **A bulb's colour from its temperature:** Tanner Helland's fit of the blackbody locus in sRGB,
   "How to Convert Temperature (K) to RGB", 2012
   (<https://tannerhelland.com/2012/09/18/convert-temperature-rgb-algorithm-code.html>),

@@ -61,6 +61,16 @@ pub(crate) struct RenderVars {
     shadow_history: Option<Var<i64>>,
     /// The sun's shadow by rays or by the shadow rings (`r.shadows.mode`, D-108).
     shadow_mode: Var<usize>,
+    /// The smooth rows' reflections by rays or from the screen (`r.reflections.mode`, D-108).
+    reflection_mode: Var<usize>,
+    /// The most steps a reflected ray takes over the screen.
+    screen_steps: Var<i64>,
+    /// How far behind a surface a reflected ray may be and meet it, metres.
+    screen_thickness: Var<f64>,
+    /// Whether a screen reflection's miss reads the cubes.
+    reflection_cubes: Var<bool>,
+    /// The faces of the cubes a frame may draw.
+    cube_budget: Var<i64>,
     /// The rings' filter and cost (`r.shadows.*`, D-108).
     ring_search_taps: Var<i64>,
     ring_filter_taps: Var<i64>,
@@ -336,6 +346,35 @@ impl Gallery {
                 let history = forge_render::sun_shadow::SHADOW_HISTORY as i64;
                 s.add(rs::shadow_history(history))
             }),
+            reflection_mode: s.add(Spec::choice(
+                "r.reflections.mode",
+                REFLECTION_MODES,
+                usize::from(self.scene.rays().is_none()),
+                "The smooth surfaces' reflections by rays, or from the screen (D-108), which needs none.",
+            )),
+            screen_steps: s.add(Spec::int(
+                "r.reflections.screen_steps",
+                i64::from(self.renderer.screen_steps),
+                8..=256,
+                "Screen reflections: the most steps a ray takes.",
+            )),
+            screen_thickness: s.add(Spec::float(
+                "r.reflections.thickness",
+                f64::from(self.renderer.screen_thickness),
+                0.02..=8.0,
+                "Screen reflections: how far behind a surface a ray may be and meet it, metres.",
+            )),
+            reflection_cubes: s.add(Spec::bool(
+                "r.reflections.cubes",
+                self.renderer.cubes_on,
+                "Screen reflections: a miss reads the scene's reflection cubes, else the sky.",
+            )),
+            cube_budget: s.add(Spec::int(
+                "r.reflections.cube_budget",
+                self.renderer.cube_budget as i64,
+                0..=6,
+                "Reflection cubes: the faces a frame may draw.",
+            )),
             shadow_mode: s.add(Spec::choice(
                 "r.shadows.mode",
                 SHADOW_MODES,
@@ -458,6 +497,32 @@ impl Gallery {
         let Some(v) = &self.vars else {
             return;
         };
+        let on_screen = REFLECTION_MODES[s.get(v.reflection_mode)] == "screen";
+        if on_screen {
+            if let Err(error) = self
+                .renderer
+                .enable_screen_reflections(&ctx.device, &ctx.shaders)
+            {
+                tracing::error!(%error, "the screen's reflections could not be made");
+                self.renderer.reflections_on_screen = false;
+            }
+        } else {
+            self.renderer.reflections_on_screen = false;
+        }
+        if on_screen && !self.cubes_given && !self.cube_volumes.is_empty() {
+            self.cubes_given = true;
+            if let Err(error) = self.renderer.set_reflection_cubes(
+                &ctx.device,
+                &ctx.shaders,
+                self.cube_volumes.clone(),
+            ) {
+                tracing::error!(%error, "the reflection cubes could not be made");
+            }
+        }
+        self.renderer.cubes_on = s.get(v.reflection_cubes);
+        self.renderer.cube_budget = s.get(v.cube_budget) as usize;
+        self.renderer.screen_steps = s.get(v.screen_steps) as u32;
+        self.renderer.screen_thickness = s.get(v.screen_thickness) as f32;
         let rings = SHADOW_MODES[s.get(v.shadow_mode)] == "rings";
         if rings && !self.renderer.shadow_rings {
             if let Err(error) = self.renderer.enable_shadow_rings(&ctx.device, &ctx.shaders) {
@@ -727,6 +792,9 @@ impl Gallery {
         }
     }
 }
+
+/// `r.reflections.mode`'s choices (D-108).
+const REFLECTION_MODES: &[&str] = &["rays", "screen"];
 
 /// `r.shadows.mode`'s choices (D-108).
 const SHADOW_MODES: &[&str] = &["rays", "rings"];

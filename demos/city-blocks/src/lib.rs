@@ -712,6 +712,10 @@ pub struct Args {
     /// D-050): to compare with.
     #[arg(long)]
     no_reflection_history: bool,
+    /// A reflection cube (D-108), given by hand: its centre and half-sizes in the world frame,
+    /// `x,y,z,hx,hy,hz`, as often as wanted. A scene's rooms are given one each besides.
+    #[arg(long = "reflection-cube")]
+    reflection_cube: Vec<String>,
     /// Hard sun shadows: one ray to the sun's centre instead of its disc (Z toggles them).
     #[arg(long)]
     hard_shadows: bool,
@@ -965,6 +969,10 @@ struct Gallery {
     view_reach: forge_render::ViewReach,
     /// The mirror rays' history (#176, D-050): the glass's reflections settled before TAA.
     reflection_history: forge_render::ReflectionHistory,
+    /// The cubes misses read (D-108), which the screen's reflections are given when first on.
+    cube_volumes: Vec<forge_render::reflection_cubes::CubeVolume>,
+    /// Whether the renderer has them.
+    cubes_given: bool,
     /// The mirrors' motion vectors moved towards their reflections (`r.reflections.motion`): DLSS
     /// follows a mirror's surface, and moving sideways it dragged the water's reflections at the
     /// surface's speed (the owner, 2026-10-28).
@@ -1657,6 +1665,57 @@ impl Gallery {
         let mut cell_rooms = None;
         // The rooms, for the exposure's test of the camera standing indoors.
         let mut exposure_rooms = Vec::new();
+        // The cubes the screen's reflections read on a miss (D-108): by hand, and the scene's rooms.
+        let cube_volumes = {
+            use forge_render::reflection_cubes::CubeVolume;
+            let origin = scene.origin();
+            let to_scene = |p: glam::DVec3| forge_render::CellPos::from_f64(p).relative_to(origin);
+            let mut volumes: Vec<CubeVolume> = args
+                .reflection_cube
+                .iter()
+                .filter_map(|text| {
+                    let v: Vec<f64> = text.split(',').filter_map(|n| n.parse().ok()).collect();
+                    let [x, y, z, hx, hy, hz] = v[..] else {
+                        tracing::warn!(text, "a reflection cube is x,y,z,hx,hy,hz");
+                        return None;
+                    };
+                    let center = glam::DVec3::new(x, y, z);
+                    let half = glam::DVec3::new(hx, hy, hz);
+                    Some(CubeVolume {
+                        center: to_scene(center),
+                        min: to_scene(center - half),
+                        max: to_scene(center + half),
+                    })
+                })
+                .collect();
+            let rooms = running.as_ref().filter(|_| !args.no_regions);
+            volumes.extend(rooms.into_iter().flat_map(|running| {
+                running
+                    .probe_regions()
+                    .into_iter()
+                    .filter(|v| v.kind == forge_render::RegionKind::Room)
+                    .map(|v| {
+                        let (lo, hi) = v.corners.iter().fold(
+                            (glam::Vec2::splat(f32::MAX), glam::Vec2::splat(f32::MIN)),
+                            |(lo, hi), c| (lo.min(*c), hi.max(*c)),
+                        );
+                        let min =
+                            glam::DVec3::new(f64::from(lo.x), f64::from(v.floor), f64::from(lo.y));
+                        let max = glam::DVec3::new(
+                            f64::from(hi.x),
+                            f64::from(v.ceiling),
+                            f64::from(hi.y),
+                        );
+                        CubeVolume {
+                            center: to_scene((min + max) * 0.5),
+                            min: to_scene(min),
+                            max: to_scene(max),
+                        }
+                    })
+                    .collect::<Vec<_>>()
+            }));
+            volumes
+        };
         let mut probes = if ctx.device.features().ray_query && scene.rays().is_some() {
             // The scene's rooms (D-068), from the world frame to the scene's.
             let scene_regions = running.as_ref().filter(|_| !args.no_regions);
@@ -2443,6 +2502,8 @@ impl Gallery {
             probe_ahead: PROBE_AHEAD,
             probe_focus: 0.0,
             view_reach: forge_render::ViewReach::new(&ctx.device, &ctx.shaders)?,
+            cube_volumes,
+            cubes_given: false,
             reflection_history,
             reflection_motion: true,
             sun_scale,
@@ -3904,7 +3965,7 @@ impl Demo for Gallery {
             && !in_space
             && self.flags.has(CullFlags::SKY_REFLECTIONS)
             && self.flags.has(CullFlags::RAY_REFLECTIONS)
-            && self.scene.rays().is_some();
+            && (self.scene.rays().is_some() || self.renderer.reflections_on_screen);
         // The motion vectors before the resolve when the denoiser reprojects through them or the
         // reflections pass moves them towards its reflections (`r.reflections.motion`, which did
         // nothing without a denoiser until the review of 2026-10-28), else after it (they are
@@ -4274,6 +4335,25 @@ impl Demo for Gallery {
         }
         // REBLUR's history starts over after a frame it did not denoise.
         self.diffuse_was_on = denoised;
+        let ambient = AmbientLight {
+            sky: (self.sky_light && !in_space).then_some(scene_light),
+            occlusion,
+            probes,
+            wet_ground,
+            movers: targets.movers,
+            clouds: cloud_shadow,
+            sun_shadow,
+            diffuse_bounce,
+            reflection_history,
+            lamp_shadows,
+        };
+        self.renderer.capture_reflection_cubes(
+            &mut frame.graph,
+            frame.slot,
+            &self.scene,
+            targets,
+            &ambient,
+        );
         self.renderer.resolve(
             &mut frame.graph,
             frame.slot,
@@ -4281,18 +4361,7 @@ impl Demo for Gallery {
             taa_frame.color,
             extent,
             None,
-            AmbientLight {
-                sky: (self.sky_light && !in_space).then_some(scene_light),
-                occlusion,
-                probes,
-                wet_ground,
-                movers: targets.movers,
-                clouds: cloud_shadow,
-                sun_shadow,
-                diffuse_bounce,
-                reflection_history,
-                lamp_shadows,
-            },
+            ambient,
         );
         // The scene colour as the resolve left it, before the sky's compose (#277).
         if let Some(h) = hasher {
