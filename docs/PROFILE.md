@@ -3071,6 +3071,26 @@ step 5), geometry the same.
 frame went from 17.10 to 17.43 ms over one run. What it measures is in
 `docs/research/memory-streaming.md`, "the textures' feedback".
 
+## The sun's shadow rings (D-108 step 1, 2026-11-09)
+
+RTX 5070 Ti. `r.shadows.mode rings` against `rays`, milliseconds of GPU time per frame over the run; both with SIGMA, the
+rings writing what `shadow/trace` writes. Without ray queries they are the sun's only shadow.
+
+| Pass | The city, moving 12 m/s, 1600 x 900 DLAA | A private district's walk, 5,000 frames, 2560 x 1440 DLSS Quality |
+|---|---|---|
+| `shadow/ring samples`: a blocker search and a point of the sun's disc, per pixel | 0.121 | 0.134 |
+| `shadow/ring cull` | 0.070 | 0.131 |
+| `shadow/ring draw` | 0.073 | 0.065 |
+| `shadow/ring compose`: tiles laid again from the static layer | 0.017 | 0.253 |
+| `shadow/ring clears` | 0.004 | 0.076 |
+| All of them | 0.285 | 0.659 |
+| `shadow/trace` in their place, with rays | 0.127 | 0.280 |
+
+The walk's frame: p50 18.21 ms and p99 21.28 against 18.05 and 20.08 with rays. Its compose is the movers': about 4,000 of
+them move every frame there, and a mover's tile is laid again. A sun turning over a 20 s day redraws a ring a frame:
+`shadow/ring draw` 1.65 and `shadow/ring cull` 1.02 over the city's million instances. Memory: 160 MB (five rings, two layers,
+2048 x 2048 `D32_SFLOAT`), made when the rings are first turned on.
+
 ## Not measured yet
 
 - **Streaming**: residency pools, request queue depth, drive and decompression throughput.

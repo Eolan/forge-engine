@@ -7109,7 +7109,14 @@ impl MeshletRenderer {
             push_constant_bytes: std::mem::size_of::<RingTracePush>() as u32,
             name: "shadow rings' sun samples",
         })?;
-        for m in [geometry, fragment, cut_geometry, cut_fragment, sample, trace] {
+        for m in [
+            geometry,
+            fragment,
+            cut_geometry,
+            cut_fragment,
+            sample,
+            trace,
+        ] {
             device.destroy_shader_module(m);
         }
         self.rings = Some(ShadowRingsGpu {
@@ -7122,8 +7129,7 @@ impl MeshletRenderer {
             )?,
             stats: GraphBuffer::new(device.create_buffer(BufferDesc {
                 size: STATS_BYTES,
-                usage: vk::BufferUsageFlags::STORAGE_BUFFER
-                    | vk::BufferUsageFlags::TRANSFER_DST,
+                usage: vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_DST,
                 location: MemoryLocation::GpuOnly,
                 category: MemoryCategory::Frame,
                 name: "shadow ring counters",
@@ -7147,6 +7153,7 @@ impl MeshletRenderer {
 
     /// Draws what the shadow rings need this frame (D-108) and shades the frame's pixels from
     /// them. `None` with the rings off.
+    #[allow(clippy::too_many_arguments)]
     fn shadow_ring_passes<'f>(
         &'f self,
         graph: &mut FrameGraph<'f>,
@@ -7232,8 +7239,18 @@ impl MeshletRenderer {
             };
             let room = transient_instances(scene.instance_count).div_ceil(64);
             RingIo {
-                work: buffer(graph, "ring work list", u64::from(self.work_target) * 8, storage),
-                roots: buffer(graph, "ring root list", u64::from(self.work_target) * 8, storage),
+                work: buffer(
+                    graph,
+                    "ring work list",
+                    u64::from(self.work_target) * 8,
+                    storage,
+                ),
+                roots: buffer(
+                    graph,
+                    "ring root list",
+                    u64::from(self.work_target) * 8,
+                    storage,
+                ),
                 cluster_lookback: buffer(
                     graph,
                     "ring cluster status words",

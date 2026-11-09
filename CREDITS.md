@@ -532,6 +532,10 @@ soft edges, their pixel-wide minimum, their reactive mask and their hash:
   ramp from red to yellow-white is our own.
 
 **Lamps** (`forge_render::lamps`, D-065 steps 1–3, #270):
+- **The sun's shadow rings (D-108):** percentage-closer filtering (Reeves, Salesin and Cook, 1987); the blocker search
+  and penumbra estimate of Percentage-Closer Soft Shadows (Randima Fernando, 2005); receiver plane depth bias (John
+  Isidoro, 2006); normal offset shadows (Daniel Holbert, 2011); the clipmap's toroidal update of a nested window (Tanner,
+  Migdal and Jones, 1998).
 - **A bulb's colour from its temperature:** Tanner Helland's fit of the blackbody locus in sRGB,
   "How to Convert Temperature (K) to RGB", 2012
   (<https://tannerhelland.com/2012/09/18/convert-temperature-rgb-algorithm-code.html>),

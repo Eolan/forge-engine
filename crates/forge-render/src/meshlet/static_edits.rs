@@ -23,9 +23,7 @@ use forge_gpu::{
 };
 use glam::{DVec3, IVec3, Quat, Vec3, Vec4};
 
-use super::{
-    GpuInstance, GpuMesh, INSTANCE_VISIBILITY, MoverTransform, Visibility, record_bounds,
-};
+use super::{GpuInstance, GpuMesh, INSTANCE_VISIBILITY, MoverTransform, Visibility, record_bounds};
 use crate::cells::CellPos;
 
 /// The most records a frame uploads; the rest wait for the next frames.

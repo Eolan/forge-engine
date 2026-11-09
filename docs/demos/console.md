@@ -210,6 +210,12 @@ command line": `--no-ao` and `--set r.ao=0` give the same image to the pixel.
 | `r.probes` | the probes' diffuse light | 0, 1 | 1 |
 | `r.sky_light` | the sky's light | 0, 1 | 1 |
 | `r.shadows` | the sun's ray-traced shadows | 0, 1 | 1 |
+| `r.shadows.mode` | the sun's shadow by rays or by the cached shadow rings (D-108), which need no ray | rays, rings | rays, or rings on a device without ray queries |
+| `r.shadows.budget` | rings: rectangles a frame may draw for moves and changes | 0 to 32 | 6 |
+| `r.shadows.lod` | rings: the casters' LOD error, texels | 0.25 to 8 | 1 |
+| `r.shadows.search_taps`, `r.shadows.filter_taps` | rings: taps of the blocker search and of the filter (the filter without a denoiser) | 1 to 64 | 12, 12 |
+| `r.shadows.max_radius`, `r.shadows.search_reach` | rings: the widest filter, texels, and how far along the sun the search looks, metres | 1 to 64, 1 to 1000 | 24, 64 |
+| `r.shadows.bias`, `r.shadows.normal_offset` | rings: depth bias and normal offset, texels | 0 to 16 | 1.5, 2 |
 | `r.shadows.denoiser` | their denoiser, where there is one | sigma, ffx, none | sigma where NRD is, else ffx |
 | `r.shadows.history` | the frames SIGMA steadies the shadows over: fewer keep a moving caster's shadow from trailing behind it (#337), more steady a still penumbra | 0..7 | 7 |
 | `r.reflections.sky`, `r.reflections.rays` | the sky's reflection, mirror rays | 0, 1 | 1, 1 |

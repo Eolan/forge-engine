@@ -12717,6 +12717,54 @@ in stops, stills side by side), the moving-camera shimmer of D-107, GPU timings 
 **For the owner to decide:** T0 as a player's tier (D-008); this order; rings before virtual maps;
 D-097 in place of the SDF updater for authored worlds; and step 1, its addendum being the section above.
 
+**Amended 2026-11-09: step 1 built** (the owner accepted step 1, 2026-11-08; the rest of D-108 stays
+proposed). Code in `crates/forge-render/src/shadow_rings.rs`, the passes in `meshlet.rs`, `shaders/meshlet.slang`.
+`r.shadows.mode` picks rays or rings; rays stay the default wherever the device has them.
+
+What building it changed from the text above:
+
+- **Tiles keep keys.** Each ring is an 8 x 8 grid of 256-texel tiles. A tile of the image holds the key of the
+  world tile it was drawn from, and a frame draws the tiles whose key is not the one their place in the ring asks
+  for. Where a ring stands is a function of where the camera is now and nothing else; nothing remembers where it
+  was. A ring that cannot draw what a move uncovers within `r.shadows.budget` stays where it is, whole, until it can.
+- **The depth range is not the camera's.** A cached tile must hold whatever the next view needs, so each ring holds
+  ±4,096 m along the sun, centred on multiples of 1,024 m; a caster beyond it lies flat on its end and still casts.
+- **The composed layer is unwrapped,** so the shading reads plain coordinates. It is laid again whole only when the
+  ring moved. Otherwise only the tiles a mover left or entered, or a static edit changed, are copied: a whole ring's
+  copy cost 0.15 ms and most tiles have nothing moving in them.
+- **What casts is what the shadow rays meet,** drawn in the picture or not; a ring past the scene's far shadows casts
+  the far rays' world. Faces are not culled: the worlds' shells are open, and a shell's far side casts. Glass does
+  not cast, as with the rays' opaque world. The ladders' crossings and fades are the camera's and are ignored: a
+  ring draws an instance's own mesh, its LOD by the ring's texels.
+- **The denoisers read the rings.** The filter alone left grain in wide penumbrae that DLSS kept. With a denoiser on,
+  a pixel tests one point of the sun's disc on the ring and writes what a shadow ray would have (`shadow/ring samples`
+  in `shadow/trace`'s place), so SIGMA or FidelityFX runs unchanged and D-088's guides stay. With none, a filter of
+  `r.shadows.filter_taps` taps, twice that in a penumbra, half inside a shadow.
+- **Not built:** culling by cones and by a ring's own previous pyramid, and `r.shadows.mover_cull`. They wait for a
+  frame that shows they pay.
+
+**Measured** (RTX 5070 Ti, validation clean on the mesh and the fallback paths, against the rays at a fixed exposure):
+
+| View | Pixels over 2 codes | ꟻLIP mean |
+|---|---|---|
+| The city, 1,000,000 instances, sun at 35°, 1600 x 900 DLAA | 1.4 % | 0.005 |
+| The same street, sun at 12° | 7.4 % | 0.019 |
+| The island, sun at 25° | 0.36 % | 0.004 |
+| The city, 12 m/s along a street, 12 frames apart, largest | 4.5 % | 0.012 |
+
+No frame of the moving view stands out from its neighbours (0.17 to 0.20 ꟻLIP from one to the next for both shadows).
+Below 2 codes the difference is the rays' finer contacts. `docs/PROFILE.md` has the costs.
+
+**What it still misses:**
+
+- **A thin ledge on a wall turned from the sun,** where the ledge stands out less than the ring's bias: far from the
+  camera it catches light the rays do not give it. That is step 2's contact march.
+- **Grass casts nothing.** Particles and the fog's sun still go by the rays where there are rays, and by nothing
+  without: step 5's.
+- **Rings do not ask for cluster pages:** a caster the camera does not see stays at the detail it has.
+- **A turning sun redraws one ring a frame:** 2.7 ms at 20 s a day over the city's million instances, and at a game's
+  sun a ring every few seconds.
+
 ## D-109 — Clear glass in a streamed world, near the camera only 🟡 (proposed 2026-11-08, waiting for the owner)
 
 **The problem.** In the private district the glass chunks are left out since 2026-11-05: drawn opaque they were near-black mirrors. So a façade's windows read as missing (the owner, 2026-11-08). The
