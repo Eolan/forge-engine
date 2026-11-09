@@ -826,6 +826,8 @@ struct GpuFrame {
 const OPTION_RING: u32 = 1 << 16;
 /// With [`OPTION_RING`]: it draws the movers, not the casters that stay.
 const OPTION_RING_MOVERS: u32 = 1 << 17;
+/// With [`OPTION_RING`]: a ring past the scene's far shadows, casting what the far rays meet.
+const OPTION_RING_FAR: u32 = 1 << 18;
 /// A frame's shadow-ring draws, at most: each has a frame block.
 const RING_CHAINS: u64 = 40;
 
@@ -850,6 +852,32 @@ struct RingPush {
     height: u32,
 }
 
+/// Mirrors `RingTracePush` in `meshlet.slang`.
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+struct RingTracePush {
+    view_z: [f32; 4],
+    frame: u64,
+    set: u64,
+    vis_image: u32,
+    penumbra_image: u32,
+    normal_image: u32,
+    view_z_image: u32,
+    width: u32,
+    height: u32,
+    closest: u32,
+    pad: u32,
+}
+
+/// What a frame's passes after the draw read of the shadow rings (D-108).
+#[derive(Clone, Copy, Debug)]
+pub struct RingFrame {
+    /// The rings' composed layers, which this frame drew.
+    composed: [ImageHandle; crate::shadow_rings::RING_COUNT],
+    /// The `RingSet` the shading reads.
+    set: u64,
+}
+
 /// D-108's shadow rings on the GPU, made when first asked for
 /// ([`MeshletRenderer::enable_shadow_rings`]).
 struct ShadowRingsGpu {
@@ -866,6 +894,8 @@ struct ShadowRingsGpu {
     solid: Pipeline,
     cutouts: Pipeline,
     sample: Pipeline,
+    /// What the sun's denoisers read, from the rings (`sun_shadow_ring_trace_main`).
+    trace: Pipeline,
 }
 
 /// The transients one frame's ring draws share, one after the other.
@@ -1486,9 +1516,12 @@ pub struct DrawTargets {
     /// With movers (#79): what this frame wrote of them, which the passes after the draw
     /// declare.
     pub movers: Option<MoversFrame>,
-    /// With the shadow rings on (D-108): the sun's shadow they give, as the denoiser's would be
-    /// ([`Ambient::sun_shadow`]).
+    /// With the shadow rings on and no denoiser asked for them (D-108): the sun's shadow they
+    /// give, as the denoiser's would be ([`Ambient::sun_shadow`]).
     pub sun_rings: Option<ImageHandle>,
+    /// With the shadow rings on: what [`MeshletRenderer::trace_sun_shadow`] reads in the rays'
+    /// place.
+    pub rings: Option<RingFrame>,
 }
 
 /// A frame's movers as the passes after the draw read them (#79): the instance table this frame
@@ -5022,6 +5055,9 @@ pub struct MeshletRenderer {
     ring_changes: RefCell<Vec<(DVec3, f64)>>,
     /// Whether the shadow rings give the sun's shadow (`r.shadows.mode`).
     pub shadow_rings: bool,
+    /// Whether a denoiser reads them through [`Self::trace_sun_shadow`]: else they filter it
+    /// themselves.
+    pub ring_denoised: bool,
     /// Their filter (`r.shadows.*`).
     pub ring_filter: crate::shadow_rings::RingFilter,
     /// How many rectangles a frame may draw of them for moves and changes.
@@ -5680,6 +5716,7 @@ impl MeshletRenderer {
             ring_frame: Cell::new(0),
             ring_changes: RefCell::new(Vec::new()),
             shadow_rings: false,
+            ring_denoised: false,
             ring_filter: crate::shadow_rings::RingFilter::default(),
             ring_budget: 6,
             ring_lod: 1.0,
@@ -6892,15 +6929,17 @@ impl MeshletRenderer {
             .movers
             .as_ref()
             .map_or(Vec::new(), |m| std::mem::take(&mut m.moved.borrow_mut()));
-        let sun_rings = self.shadow_ring_passes(
-            graph,
-            slot,
-            &params,
-            io,
-            ring_base,
-            ring_changes,
-            ring_moved,
-        );
+        let (sun_rings, rings) = self
+            .shadow_ring_passes(
+                graph,
+                slot,
+                &params,
+                io,
+                ring_base,
+                ring_changes,
+                ring_moved,
+            )
+            .map_or((None, None), |(image, frame)| (image, Some(frame)));
         self.prev.set(match (occlusion, build) {
             (false, _) => None,
             (true, true) => Some(PrevCull {
@@ -6945,6 +6984,7 @@ impl MeshletRenderer {
                 _ => None,
             },
             sun_rings,
+            rings,
         })
     }
 
@@ -7016,6 +7056,7 @@ impl MeshletRenderer {
         let cut_geometry = module(cutout_geometry, stage)?;
         let cut_fragment = module(cutout_fragment, ShaderStage::Fragment)?;
         let sample = module("sun_shadow_ring_main", ShaderStage::Compute)?;
+        let trace = module("sun_shadow_ring_trace_main", ShaderStage::Compute)?;
         let path = self.path;
         let depth_only = |g: (vk::ShaderModule, &str), f: (vk::ShaderModule, &str), name: &str| {
             let push_constant_bytes = std::mem::size_of::<Push>() as u32;
@@ -7063,7 +7104,12 @@ impl MeshletRenderer {
             push_constant_bytes: std::mem::size_of::<RingPush>() as u32,
             name: "shadow rings' shading",
         })?;
-        for m in [geometry, fragment, cut_geometry, cut_fragment, sample] {
+        let trace_pipeline = device.create_compute_pipeline(&ComputePipelineDesc {
+            shader: (trace, "sun_shadow_ring_trace_main"),
+            push_constant_bytes: std::mem::size_of::<RingTracePush>() as u32,
+            name: "shadow rings' sun samples",
+        })?;
+        for m in [geometry, fragment, cut_geometry, cut_fragment, sample, trace] {
             device.destroy_shader_module(m);
         }
         self.rings = Some(ShadowRingsGpu {
@@ -7085,6 +7131,7 @@ impl MeshletRenderer {
             solid,
             cutouts,
             sample: sample_pipeline,
+            trace: trace_pipeline,
         });
         tracing::info!("the sun's shadow rings are made (D-108)");
         Ok(())
@@ -7109,7 +7156,7 @@ impl MeshletRenderer {
         base: GpuFrame,
         changes: Vec<(DVec3, f64)>,
         moved: Vec<(DVec3, f64)>,
-    ) -> Option<ImageHandle> {
+    ) -> Option<(Option<ImageHandle>, RingFrame)> {
         use crate::shadow_rings::{GpuRingSet, RING_COUNT, RING_TEXELS, RingMovers, TILE_TEXELS};
         let gpu = self.rings.as_ref().filter(|_| self.shadow_rings)?;
         let compute = vk::PipelineStageFlags2::COMPUTE_SHADER;
@@ -7140,6 +7187,10 @@ impl MeshletRenderer {
         let keep = CullFlags::FRUSTUM | CullFlags::LOD | CullFlags::GROUP_WINDOW_OFF;
         let block_of = |ring: usize, tile: [i64; 2], tiles: [u32; 2], layer: u32| {
             let r = cache.ring(ring);
+            let far = scene.far_shadows > 0.0
+                && ring > 0
+                && cache.ring(ring - 1).width() * 0.5 >= f64::from(scene.far_shadows);
+            let layer = layer | if far { OPTION_RING_FAR } else { 0 };
             let view = r.clip_from_relative(camera, tile, tiles);
             let (first, end) = scene
                 .movers
@@ -7356,6 +7407,13 @@ impl MeshletRenderer {
                 pad: 0.0,
             }],
         );
+        let ring_frame = RingFrame {
+            composed: std::array::from_fn(|i| composed[i]),
+            set: gpu.sets[slot.index].address(),
+        };
+        if self.ring_denoised {
+            return Some((None, ring_frame));
+        }
         let extent = params.extent;
         let output = graph.transient(TransientDesc {
             name: "sun shadow of the rings",
@@ -7397,7 +7455,7 @@ impl MeshletRenderer {
             commands.dispatch(extent.width.div_ceil(8), extent.height.div_ceil(8), 1);
             Ok(())
         });
-        Some(output)
+        Some((Some(output), ring_frame))
     }
 
     /// One draw of a ring: its culls, as the camera's with the ring's block, then its depth.
@@ -7759,7 +7817,10 @@ impl MeshletRenderer {
         tan_radius: f32,
         closest: bool,
     ) -> Option<SunShadowRays> {
-        let pipeline = self.pipeline_sun_shadow.as_ref()?;
+        let ring_gpu = targets.rings.zip(self.rings.as_ref());
+        if ring_gpu.is_none() && self.pipeline_sun_shadow.is_none() {
+            return None;
+        }
         let compute = vk::PipelineStageFlags2::COMPUTE_SHADER;
         let image = |name: &'static str, format: vk::Format| TransientDesc {
             name,
@@ -7779,6 +7840,50 @@ impl MeshletRenderer {
             view_z: graph.transient(image("sun shadow view z", forge_gpu::nrd::VIEW_Z_FORMAT)),
         };
         let frame = self.frame_buffers[slot.index].address();
+        // The rings in the rays' place (D-108): the same images, the denoisers none the wiser.
+        if let Some((ring_frame, gpu)) = ring_gpu {
+            let pipeline = &gpu.trace;
+            let mut builder = graph
+                .pass("shadow/ring samples")
+                .image(targets.visibility, ImageAccess::Sampled(compute))
+                .image(rays.penumbra, ImageAccess::StorageWrite(compute))
+                .image(rays.normal_roughness, ImageAccess::StorageWrite(compute))
+                .image(rays.view_z, ImageAccess::StorageWrite(compute))
+                .buffer(targets.visible_list, BufferAccess::ShaderRead(compute))
+                .buffer(targets.pages, BufferAccess::ShaderRead(compute))
+                .buffer(targets.page_table, BufferAccess::ShaderRead(compute))
+                .buffer_if(
+                    targets.movers.map(|m| m.instances),
+                    BufferAccess::ShaderRead(compute),
+                );
+            for image in ring_frame.composed {
+                builder = builder.image(image, ImageAccess::Sampled(compute));
+            }
+            builder.run(move |resources, commands| {
+                commands.bind_pipeline(pipeline);
+                commands.push_constants(
+                    pipeline,
+                    &RingTracePush {
+                        view_z: view_z.to_array(),
+                        frame,
+                        set: ring_frame.set,
+                        vis_image: resources.sampled(targets.visibility).0,
+                        penumbra_image: resources.storage(rays.penumbra, 0).0,
+                        normal_image: resources.storage(rays.normal_roughness, 0).0,
+                        view_z_image: resources.storage(rays.view_z, 0).0,
+                        width: extent.width,
+                        height: extent.height,
+                        closest: closest as u32,
+                        pad: 0,
+                    },
+                );
+                commands.dispatch(extent.width.div_ceil(8), extent.height.div_ceil(8), 1);
+                Ok(())
+            });
+            let _ = tan_radius;
+            return Some(rays);
+        }
+        let pipeline = self.pipeline_sun_shadow.as_ref()?;
         graph
             .pass("shadow/trace")
             .image(targets.visibility, ImageAccess::Sampled(compute))

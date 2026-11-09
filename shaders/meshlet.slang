@@ -246,6 +246,8 @@ public struct CellBounds
 // texels, and which layer it draws: the casters that stay, or with OPTION_RING_MOVERS the movers.
 static const uint OPTION_RING = 1u << 16;
 static const uint OPTION_RING_MOVERS = 1u << 17;
+// With OPTION_RING: a ring past the scene's far shadows, whose casters are the far shadow rays' world.
+static const uint OPTION_RING_FAR = 1u << 18;
 public static const uint FLAG_FREEZE_CULLING = 1;
 public static const uint FLAG_CONE_CULLING = 2;
 public static const uint FLAG_FRUSTUM_CULLING = 4;
@@ -2841,7 +2843,11 @@ void cull_main(uint thread : SV_GroupThreadID)
         sphere_center = instance_center_relative(f, inst);
         sphere_radius = inst.radius;
         bool frustum = (f[0].flags & FLAG_FRUSTUM_CULLING) != 0;
-        visible = (inst.flags & (INSTANCE_VACANT | INSTANCE_NO_RASTER)) == 0
+        // A ring casts what the shadow rays meet, drawn in the picture or not.
+        uint left_out = (f[0].options & OPTION_RING) == 0
+            ? INSTANCE_NO_RASTER
+            : ((f[0].options & OPTION_RING_FAR) != 0 ? INSTANCE_NO_FAR_SHADOW_RAYS : INSTANCE_NO_SHADOW_RAYS);
+        visible = (inst.flags & (INSTANCE_VACANT | left_out)) == 0
             && (!frustum || sphere_in_frustum(f, sphere_center, sphere_radius))
             && ring_layer_holds(f, instance_index);
     }
@@ -9400,12 +9406,27 @@ float2 ring_disc(uint k, uint n, float radius, float turn)
     return float2(cos(a), sin(a)) * r;
 }
 
-// The share of the sun's disc that `relative` sees, on a surface of normal `g` facing it, by the
-// finest ring holding the point and what its filter reads: a search for what stands between it and
-// the sun, then a filter as wide as the disc and that distance ask. `extra` is a further bias in
-// metres, for what the surface's own LOD may have moved it.
-float ring_light(Frame* f, RingSet* set, float3 relative, float3 g, float extra, uint2 pixel)
+// What a ring's search found for a point: which ring, where the point is on it, and how much of
+// the sun's disc is in question.
+struct RingQuery
 {
+    bool found;       // a ring holds the point
+    ShadowRing r;
+    float2 at;        // the point on the ring, texels
+    float2 slope;     // its surface's height along the sun per texel across, in the ring's depth
+    float z;          // its height along the sun, in the ring's depth
+    float turn;       // the pixel's turn of the discs
+    uint blockers;    // of the search's taps, those something stood over
+    float metres;     // how far over the point they stood, on average
+    float radius;     // the penumbra's radius there, texels
+};
+
+// The finest ring holding `relative` (a surface of normal `g` facing the sun) and what its filter
+// reads, and the search for what stands between it and the sun. `extra` is a further bias in
+// metres, for what the surface's own LOD may have moved it.
+RingQuery ring_query(Frame* f, RingSet* set, float3 relative, float3 g, float extra, uint2 pixel)
+{
+    RingQuery q = {};
     float2 noise = spatio_temporal_noise(pixel, f[0].noise_frame);
     ShadowRing r = set[0].rings[0];
     float3 p = relative;
@@ -9430,40 +9451,64 @@ float ring_light(Frame* f, RingSet* set, float3 relative, float3 g, float extra,
         break;
     }
     if (found == RING_COUNT)
-        return 1.0;
-    float2 at = uv * RING_TEXELS;
+        return q;
+    q.found = true;
+    q.r = r;
+    q.at = uv * RING_TEXELS;
     // The receiver's plane: its height along the sun per texel across it.
     float across = max(dot(g, r.axis_s.xyz), 0.05);
-    float2 slope = clamp(float2(-dot(g, r.axis_u.xyz), -dot(g, r.axis_v.xyz)) / across, -8.0, 8.0) * r.texel * r.inv_range;
-    float z = (dot(r.axis_s.xyz, p) + r.axis_s.w + r.texel * set[0].bias + extra) * r.inv_range;
-    float turn = noise.y * 6.2831853;
+    q.slope = clamp(float2(-dot(g, r.axis_u.xyz), -dot(g, r.axis_v.xyz)) / across, -8.0, 8.0) * r.texel * r.inv_range;
+    q.z = (dot(r.axis_s.xyz, p) + r.axis_s.w + r.texel * set[0].bias + extra) * r.inv_range;
+    q.turn = noise.y * 6.2831853;
     // What stands in the way, within the widest penumbra asked for.
     float search = clamp(set[0].search_reach * set[0].tan_radius / r.texel, 1.0, set[0].max_radius);
-    uint blockers = 0;
     float over = 0.0;
     for (uint k = 0; k < set[0].search_taps; k++)
     {
-        float2 o = ring_disc(k, set[0].search_taps, search, turn);
-        int2 t = int2(floor(at + o));
+        float2 o = ring_disc(k, set[0].search_taps, search, q.turn);
+        int2 t = int2(floor(q.at + o));
         float d = g_sampled_images_r[NonUniformResourceIndex(r.image)].Load(int3(t, 0));
-        float here = z + dot(slope, o);
+        float here = q.z + dot(q.slope, o);
         if (d > here)
         {
-            blockers += 1;
+            q.blockers += 1;
             over += d - here;
         }
     }
-    if (blockers == 0)
-        return 1.0;
-    float metres = (over / float(blockers)) / r.inv_range;
-    float radius = clamp(metres * set[0].tan_radius / r.texel, 0.75, set[0].max_radius);
-    float lit = 0.0;
-    for (uint k = 0; k < set[0].filter_taps; k++)
+    if (q.blockers > 0)
     {
-        float2 o = ring_disc(k, set[0].filter_taps, radius, turn);
-        lit += ring_tap(r.image, at + o, z + dot(slope, o));
+        q.metres = (over / float(q.blockers)) / r.inv_range;
+        q.radius = clamp(q.metres * set[0].tan_radius / r.texel, 0.75, set[0].max_radius);
     }
-    return lit / float(set[0].filter_taps);
+    return q;
+}
+
+// The share of the sun's disc that `relative` sees: a filter as wide as the disc and the distance
+// to what stands in the way ask.
+float ring_light(Frame* f, RingSet* set, float3 relative, float3 g, float extra, uint2 pixel)
+{
+    RingQuery q = ring_query(f, set, relative, g, extra, pixel);
+    if (!q.found || q.blockers == 0)
+        return 1.0;
+    // The taps go where the noise would show: the penumbra, where the search met both light and
+    // shade, against the inside of a shadow.
+    uint taps = q.blockers == set[0].search_taps ? max(set[0].filter_taps / 2u, 1u) : set[0].filter_taps * 2u;
+    float lit = 0.0;
+    for (uint k = 0; k < taps; k++)
+    {
+        float2 o = ring_disc(k, taps, q.radius, q.turn);
+        lit += ring_tap(q.r.image, q.at + o, q.z + dot(q.slope, o));
+    }
+    return lit / float(taps);
+}
+
+// Where the point's taken for the surface it is on: the triangle's own normal where it faces the
+// sun and is known, else the shading's, and how much further off it the shadow's bias goes.
+void ring_surface(Frame* f, PixelSurface s, uint vis, float3 sun, out float3 g, out float extra)
+{
+    g = dot(s.g, sun) > 0.0 ? s.g : s.shadow_n;
+    // As far off a leaf card as the rays start: the crowns' cards stand in each other's light (#346).
+    extra = is_grass(vis) ? GRASS_SHADOW_BIAS : (s.foliage ? shadow_bias(f, s.inst, s.m) : s.m.self_error * s.inst.scale);
 }
 
 [shader("compute")]
@@ -9484,17 +9529,85 @@ void sun_shadow_ring_main(uint3 id : SV_DispatchThreadID)
     Frame* f = p.frame;
     PixelSurface s = pixel_surface(f, vis, pixel, p.width, p.height);
     float3 sun = normalize(f[0].sun_dir);
-    float3 n = s.shadow_n;
-    if (dot(n, sun) <= 0.0)
+    if (dot(s.shadow_n, sun) <= 0.0)
     {
         shadow[pixel] = 0.0;
         return;
     }
-    // The triangle's own normal where it faces the sun and is known, else the shading's.
-    float3 g = dot(s.g, sun) > 0.0 ? s.g : n;
-    // As far off a leaf card as the rays start: the crowns' cards stand in each other's light (#346).
-    float extra = is_grass(vis) ? GRASS_SHADOW_BIAS : (s.foliage ? shadow_bias(f, s.inst, s.m) : s.m.self_error * s.inst.scale);
+    float3 g;
+    float extra;
+    ring_surface(f, s, vis, sun, g, extra);
     shadow[pixel] = sqrt(saturate(ring_light(f, p.set, s.relative, g, extra, pixel)));
+}
+
+// What the sun's denoisers read (`SunShadowPush`), from the rings: as `sun_shadow_trace_main`, a
+// point of the sun's disc a pixel, tested on the ring against what stands in its way.
+struct RingTracePush
+{
+    float4 view_z;
+    Frame* frame;
+    RingSet* set;
+    uint vis_image;
+    uint penumbra_image;
+    uint normal_image;
+    uint view_z_image;
+    uint width;
+    uint height;
+    uint closest;
+    uint pad;
+};
+
+[[vk::push_constant]]
+RingTracePush ring_trace_push;
+
+[shader("compute")]
+[numthreads(8, 8, 1)]
+void sun_shadow_ring_trace_main(uint3 id : SV_DispatchThreadID)
+{
+    RingTracePush p = ring_trace_push;
+    if (id.x >= p.width || id.y >= p.height)
+        return;
+    uint2 pixel = id.xy;
+    RWTexture2D<float> penumbra = g_storage_images_r32f[NonUniformResourceIndex(p.penumbra_image)];
+    RWTexture2D<float4> normal = g_storage_images_rgba16f[NonUniformResourceIndex(p.normal_image)];
+    RWTexture2D<float> view_z = g_storage_images_r32f[NonUniformResourceIndex(p.view_z_image)];
+    uint vis = g_sampled_images_u32[NonUniformResourceIndex(p.vis_image)].Load(int3(pixel, 0));
+    if (vis == VISIBILITY_EMPTY)
+    {
+        penumbra[pixel] = NRD_MISS;
+        normal[pixel] = float4(0.0, 1.0, 0.0, 1.0);
+        view_z[pixel] = NOTHING_DRAWN_Z;
+        return;
+    }
+    Frame* f = p.frame;
+    PixelSurface s = pixel_surface(f, vis, pixel, p.width, p.height);
+    normal[pixel] = float4(s.n, 1.0);
+    view_z[pixel] = dot(p.view_z.xyz, s.relative) + p.view_z.w;
+    float3 sun = normalize(f[0].sun_dir);
+    if (dot(s.shadow_n, sun) <= 0.0)
+    {
+        penumbra[pixel] = 0.0;
+        return;
+    }
+    float3 g;
+    float extra;
+    ring_surface(f, s, vis, sun, g, extra);
+    RingQuery q = ring_query(f, p.set, s.relative, g, extra, pixel);
+    if (!q.found || q.blockers == 0)
+    {
+        penumbra[pixel] = NRD_MISS;
+        return;
+    }
+    // A point of the disc, uniform in area, as the ray's.
+    float2 u = spatio_temporal_noise(pixel, f[0].noise_frame);
+    float r = sqrt(u.x) * q.radius;
+    float a = 6.2831853 * u.y;
+    float2 o = float2(cos(a), sin(a)) * r;
+    bool blocked = ring_tap(q.r.image, q.at + o, q.z + dot(q.slope, o)) < 0.5;
+    if (!blocked)
+        penumbra[pixel] = NRD_MISS;
+    else
+        penumbra[pixel] = p.closest == 0 ? 0.0 : min(0.5 * q.metres * p.set[0].tan_radius, 32768.0);
 }
 
 // ------------------------------------------------------ the diffuse bounce (D-088) ---

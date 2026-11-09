@@ -3668,6 +3668,11 @@ impl Demo for Gallery {
             self.liquid_asked[frame.slot.index] = ask.then_some(now);
             liquid.simulate(&mut frame.graph, state, frame.slot, &steps, ask);
         }
+        // The shadow rings are denoised as the rays are, where a denoiser is on (D-108).
+        self.renderer.ring_denoised = self.renderer.shadow_rings
+            && self.sun_shadow_on.is_some()
+            && self.flags.has(CullFlags::SHADOWS)
+            && self.renderer.sun_angular_radius > 0.0;
         let targets = self.renderer.draw(
             &mut frame.graph,
             frame.slot,
@@ -3847,7 +3852,7 @@ impl Demo for Gallery {
         let denoising = self.sun_shadow_on.filter(|_| {
             self.flags.has(CullFlags::SHADOWS)
                 && self.renderer.sun_angular_radius > 0.0
-                && self.scene.rays().is_some()
+                && (self.scene.rays().is_some() || self.renderer.shadow_rings)
         });
         // Whether D-088's bounce lights the frame (below): its rays, REBLUR, and the guides the
         // sun's shadow rays write for it.
