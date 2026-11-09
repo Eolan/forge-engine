@@ -3686,6 +3686,8 @@ struct SceneMovers {
     written: Cell<u64>,
     /// The records written last, to tell the frames whose movers stand as they stood (#198).
     last: RefCell<Vec<GpuInstance>>,
+    /// Where movers stood and stand that moved since the shadow rings last asked (D-108).
+    moved: RefCell<Vec<(DVec3, f64)>>,
     /// Frames since the records last changed. From the first on, the table, the cells and the
     /// movers' structure already hold them, and the movers have no motion of their own: their
     /// passes are skipped (#198).
@@ -3787,6 +3789,7 @@ impl SceneMovers {
             previous: Cell::new(0),
             written: Cell::new(0),
             last: RefCell::new(Vec::new()),
+            moved: RefCell::new(Vec::new()),
             staged: RefCell::new(vec![
                 (
                     MoverTransform {
@@ -4089,11 +4092,15 @@ impl MeshletScene {
             movers.steady.set(movers.steady.get() + 1);
             return;
         }
+        let mut moved = movers.moved.borrow_mut();
         for &(a, b) in &runs {
             for k in a..b {
+                moved.push(record_bounds(&last[k]));
                 last[k] = self.mover_record(movers, k, staged[k]);
+                moved.push(record_bounds(&last[k]));
             }
         }
+        drop(moved);
         // The promoted movers' first shown records are written (each was marked): from the
         // next on, their motion is their own.
         if let Some(pool) = &movers.pool {
@@ -6881,7 +6888,19 @@ impl MeshletRenderer {
             );
         }
         let ring_changes = scene.take_ring_changes();
-        let sun_rings = self.shadow_ring_passes(graph, slot, &params, io, ring_base, ring_changes);
+        let ring_moved = scene
+            .movers
+            .as_ref()
+            .map_or(Vec::new(), |m| std::mem::take(&mut m.moved.borrow_mut()));
+        let sun_rings = self.shadow_ring_passes(
+            graph,
+            slot,
+            &params,
+            io,
+            ring_base,
+            ring_changes,
+            ring_moved,
+        );
         self.prev.set(match (occlusion, build) {
             (false, _) => None,
             (true, true) => Some(PrevCull {
@@ -7089,6 +7108,7 @@ impl MeshletRenderer {
         io: MeshPassIo,
         base: GpuFrame,
         changes: Vec<(DVec3, f64)>,
+        moved: Vec<(DVec3, f64)>,
     ) -> Option<ImageHandle> {
         use crate::shadow_rings::{GpuRingSet, RING_COUNT, RING_TEXELS, RingMovers, TILE_TEXELS};
         let gpu = self.rings.as_ref().filter(|_| self.shadow_rings)?;
@@ -7106,15 +7126,12 @@ impl MeshletRenderer {
         for (center, radius) in self.ring_changes.borrow_mut().drain(..).chain(changes) {
             cache.mark_changed(center, radius);
         }
-        let mover_bounds: Vec<(DVec3, f64)> = scene.movers.as_ref().map_or(Vec::new(), |m| {
-            m.last.borrow().iter().map(record_bounds).collect()
-        });
         let plan = cache.plan(
             camera,
             self.sun_dir.as_dvec3(),
             self.ring_budget,
             movers,
-            &mover_bounds,
+            &moved,
             frame,
         );
         let statics: Vec<ImageHandle> = gpu.statics.iter().map(|i| graph.import(i)).collect();
@@ -7301,15 +7318,21 @@ impl MeshletRenderer {
                     Ok(())
                 });
             if plan.movers[ring] {
+                // Over the tiles laid again: the movers elsewhere stand as they stood.
+                let [x, y, w, h] = crate::shadow_rings::Ring::tiles_bounds(plan.compose[ring]);
                 let rect = vk::Rect2D {
-                    offset: vk::Offset2D::default(),
+                    offset: vk::Offset2D {
+                        x: texels(x) as i32,
+                        y: texels(y) as i32,
+                    },
                     extent: vk::Extent2D {
-                        width: RING_TEXELS,
-                        height: RING_TEXELS,
+                        width: texels(w),
+                        height: texels(h),
                     },
                 };
-                let tiles = [texels(0) + 8, 8];
-                let block = block_of(ring, cache.ring(ring).window(), tiles, OPTION_RING_MOVERS);
+                let [wx, wy] = cache.ring(ring).window();
+                let first = [wx + i64::from(x), wy + i64::from(y)];
+                let block = block_of(ring, first, [w, h], OPTION_RING_MOVERS);
                 chain(graph, block, to, rect, false);
             }
         }

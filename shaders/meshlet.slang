@@ -9492,7 +9492,8 @@ void sun_shadow_ring_main(uint3 id : SV_DispatchThreadID)
     }
     // The triangle's own normal where it faces the sun and is known, else the shading's.
     float3 g = dot(s.g, sun) > 0.0 ? s.g : n;
-    float extra = is_grass(vis) ? 0.0 : s.m.self_error * s.inst.scale;
+    // As far off a leaf card as the rays start: the crowns' cards stand in each other's light (#346).
+    float extra = is_grass(vis) ? GRASS_SHADOW_BIAS : (s.foliage ? shadow_bias(f, s.inst, s.m) : s.m.self_error * s.inst.scale);
     shadow[pixel] = sqrt(saturate(ring_light(f, p.set, s.relative, g, extra, pixel)));
 }
 

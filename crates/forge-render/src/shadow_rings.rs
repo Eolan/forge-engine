@@ -34,7 +34,7 @@ pub const DEPTH_STEP: f64 = 1024.0;
 /// The cosine of the angle the sun may turn from a ring's before the ring is drawn again (0.1°).
 pub const SUN_TURN_COS: f64 = 0.999_998_476_9;
 /// Every how many frames a ring's movers are drawn: the far ones less often.
-pub const MOVER_PERIOD: [u64; RING_COUNT] = [1, 1, 2, 4, 8];
+pub const MOVER_PERIOD: [u64; RING_COUNT] = [1, 2, 2, 4, 8];
 
 /// The light's axes: `sun` towards the sun, `right` and `up` across it.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -141,8 +141,8 @@ pub struct Ring {
     full: bool,
     /// Tiles of the composed layer to lay again, as [`RingPlan::compose`].
     pending: u64,
-    /// The tiles the movers were last drawn over.
-    mover_tiles: u64,
+    /// Tiles of the composed layer that movers have left or entered since it was laid there.
+    mover_pending: u64,
 }
 
 impl Ring {
@@ -158,7 +158,7 @@ impl Ring {
             composed: false,
             full: false,
             pending: 0,
-            mover_tiles: 0,
+            mover_pending: 0,
         }
     }
 
@@ -314,8 +314,10 @@ impl Ring {
         let t = self.tile_metres();
         let tile = |x: f64| (x / t).floor() as i64;
         let mut mask = 0u64;
+        // A mover under two texels across leaves no shadow worth laying a tile for.
+        let least = self.texel();
         for &(center, radius) in movers {
-            if radius <= 0.0 {
+            if radius < least.min(0.5) || radius <= 0.0 {
                 continue;
             }
             let (u, v) = (center.dot(axes.right), center.dot(axes.up));
@@ -330,6 +332,23 @@ impl Ring {
             }
         }
         mask
+    }
+
+    /// The bounding rectangle of `tiles` of the composed layer: (first x, first y, width, height).
+    pub fn tiles_bounds(tiles: u64) -> [u32; 4] {
+        let n = RING_TILES as u32;
+        let (mut x0, mut y0, mut x1, mut y1) = (n, n, 0, 0);
+        for y in 0..n {
+            for x in 0..n {
+                if tiles & (1 << (y * n + x)) != 0 {
+                    x0 = x0.min(x);
+                    y0 = y0.min(y);
+                    x1 = x1.max(x + 1);
+                    y1 = y1.max(y + 1);
+                }
+            }
+        }
+        [x0, y0, x1.saturating_sub(x0), y1.saturating_sub(y0)]
     }
 
     /// The copies that lay `tiles` of the composed layer from the wrapped static layer, the
@@ -593,14 +612,15 @@ impl RingCache {
 
     /// This frame's work: which rectangles of the static layer to draw (at most `budget` for
     /// moves and changes, more for a ring that has nothing at all to show yet), what to compose
-    /// and over which rings to draw the movers, whose bounding spheres are `mover_bounds`.
+    /// and over which rings to draw the movers. `moved` holds a bounding sphere for where each
+    /// mover that moved since the last frame stood and for where it stands.
     pub fn plan(
         &mut self,
         camera: DVec3,
         sun: DVec3,
         budget: usize,
         movers: RingMovers,
-        mover_bounds: &[(DVec3, f64)],
+        moved: &[(DVec3, f64)],
         frame: u64,
     ) -> RingPlan {
         let now = SunAxes::new(sun);
@@ -675,28 +695,25 @@ impl RingCache {
             }
         }
         for (index, ring) in self.rings.iter_mut().enumerate() {
-            let present = movers != RingMovers::None;
-            let due = movers == RingMovers::Moving && frame % MOVER_PERIOD[index] == 0;
+            ring.mover_pending |= ring.movers_cover(moved);
+            let due = frame % MOVER_PERIOD[index] == 0;
             let whole = ring.full || !ring.composed;
-            let gone = !present && ring.mover_tiles != 0;
-            if !(whole || due || gone || ring.pending != 0) {
+            let mut tiles = ring.pending;
+            if due {
+                tiles |= ring.mover_pending;
+            }
+            if whole {
+                tiles = u64::MAX;
+            }
+            if tiles == 0 {
                 continue;
             }
-            // Laying a tile lifts the movers off it, so a ring laid at all has them drawn again,
-            // over every tile that held them and every tile that will.
-            let now = if present {
-                ring.movers_cover(mover_bounds)
-            } else {
-                0
-            };
-            let tiles = if whole {
-                u64::MAX
-            } else {
-                ring.pending | ring.mover_tiles | now
-            };
+            // Laying a tile lifts the movers off it: a ring laid at all has them drawn again.
             plan.compose[index] = tiles;
-            plan.movers[index] = now != 0;
-            ring.mover_tiles = now;
+            plan.movers[index] = movers != RingMovers::None;
+            if due || whole {
+                ring.mover_pending = 0;
+            }
             ring.pending = 0;
             ring.full = false;
             ring.composed = true;
@@ -898,7 +915,7 @@ mod tests {
         let mut c = RingCache::new();
         c.plan(DVec3::ZERO, sun(), 8, RingMovers::Moving, &MOVER, 0);
         let plan = c.plan(DVec3::ZERO, sun(), 8, RingMovers::Moving, &MOVER, 1);
-        assert_eq!(plan.movers, [true, true, false, false, false]);
+        assert_eq!(plan.movers, [true, false, false, false, false]);
         let plan = c.plan(DVec3::ZERO, sun(), 8, RingMovers::Moving, &MOVER, 2);
         assert_eq!(plan.movers, [true, true, true, false, false]);
         let plan = c.plan(DVec3::ZERO, sun(), 8, RingMovers::Moving, &MOVER, 8);
@@ -920,35 +937,39 @@ mod tests {
     }
 
     #[test]
-    fn a_mover_leaving_a_tile_lays_that_tile_again() {
+    fn a_ring_far_movers_skip_keeps_what_they_touched_for_its_turn() {
         let mut c = RingCache::new();
-        c.plan(DVec3::ZERO, sun(), 8, RingMovers::Moving, &MOVER, 0);
-        let axes = c.ring(0).axes().unwrap();
-        let away = [(axes.right * 5.0, 0.5)];
-        let first = c.plan(DVec3::ZERO, sun(), 8, RingMovers::Moving, &MOVER, 1).compose[0];
-        let then = c.plan(DVec3::ZERO, sun(), 8, RingMovers::Moving, &away, 2).compose[0];
-        assert_eq!(then & first, first, "where it stood");
-        assert!(then.count_ones() > first.count_ones(), "and where it stands");
+        c.plan(DVec3::ZERO, sun(), 8, RingMovers::Moving, &[], 0);
+        let plan = c.plan(DVec3::ZERO, sun(), 8, RingMovers::Moving, &MOVER, 1);
+        assert_eq!(plan.compose[1], 0, "not its frame");
+        let plan = c.plan(DVec3::ZERO, sun(), 8, RingMovers::Moving, &[], 2);
+        assert_ne!(plan.compose[1], 0, "its frame: what moved last frame too");
     }
 
     #[test]
-    fn standing_movers_cost_nothing_once_drawn() {
+    fn nothing_moved_lays_nothing() {
         let mut c = RingCache::new();
-        c.plan(DVec3::ZERO, sun(), 8, RingMovers::Moving, &MOVER, 0);
-        let plan = c.plan(DVec3::ZERO, sun(), 8, RingMovers::Standing, &MOVER, 1);
+        c.plan(DVec3::ZERO, sun(), 8, RingMovers::Moving, &[], 0);
+        let plan = c.plan(DVec3::ZERO, sun(), 8, RingMovers::Standing, &[], 1);
         assert_eq!(plan.compose, [0; RING_COUNT]);
         assert_eq!(plan.movers, [false; RING_COUNT]);
     }
 
     #[test]
-    fn movers_gone_compose_the_rings_once_more() {
+    fn a_static_tile_drawn_again_has_the_movers_drawn_over_it() {
         let mut c = RingCache::new();
-        c.plan(DVec3::ZERO, sun(), 8, RingMovers::Moving, &MOVER, 0);
-        let plan = c.plan(DVec3::ZERO, sun(), 8, RingMovers::None, &[], 1);
-        assert!(plan.compose.iter().all(|t| *t != 0));
-        assert_eq!(plan.movers, [false; RING_COUNT]);
-        let plan = c.plan(DVec3::ZERO, sun(), 8, RingMovers::None, &[], 2);
-        assert_eq!(plan.compose, [0; RING_COUNT]);
+        c.plan(DVec3::ZERO, sun(), 8, RingMovers::Standing, &[], 0);
+        c.mark_changed(DVec3::ZERO, 0.1);
+        let plan = c.plan(DVec3::ZERO, sun(), 8, RingMovers::Standing, &[], 1);
+        assert_ne!(plan.compose[0], 0);
+        assert!(plan.movers[0]);
+    }
+
+    #[test]
+    fn the_bounds_of_tiles() {
+        assert_eq!(Ring::tiles_bounds(u64::MAX), [0, 0, 8, 8]);
+        assert_eq!(Ring::tiles_bounds(1 << 9), [1, 1, 1, 1]);
+        assert_eq!(Ring::tiles_bounds((1 << 9) | (1 << 27)), [1, 1, 3, 3]);
     }
 
     #[test]
