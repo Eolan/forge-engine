@@ -3111,6 +3111,16 @@ zones hold the sun's rings and the atlas's chains together.
 A 25 s walk at 1280 x 720 DLSS Quality: p50 7.60 ms and p99 9.61 against 7.50 and 8.97 with rays. Memory: 134 MB for the atlas's two
 layers of 4096 x 4096 `D32_SFLOAT`, as soon as the rings are on, even with `r.shadows.atlas 0`.
 
+The screen's reflections (D-108, step 3). RTX 5070 Ti, milliseconds of GPU time per frame, `r.reflections.mode screen` against `rays`:
+
+| Pass | The city, 1600 x 900 DLAA | A private district's walk, 1280 x 720 DLSS Quality | Its bar, 2560 x 1440 DLSS Quality |
+|---|---|---|---|
+| `shading/reflections`: with the screen, the march, with rays, the rays | 0.225 against 0.333 | 0.027 against 0.065 | 0.121 |
+| `shading/reflection colour`, `shading/reflection depth`: the two pyramids | 0.031, 0.027 | 0.018, 0.010 | 0.036, 0.024 |
+| `reflections/cube prefilter`, over the frames | | 0.002 | 0.006 |
+
+The walk's frame: p50 7.32 ms and p99 9.17 against 7.33 and 9.21 with rays. A cube's face is drawn with a chain of the rings' culls (`shadow/ring cull`, `shadow/ring draw`), its other passes under "reflections/cube" and the camera's "shading/" names; at the default of one face a frame the bar's frame is 17.54 ms against 17.80 with the mirror rays. Memory: 45 MB for the atlas (2048 x 2048 `RGBA16F`, 5 levels), made when a scene gives cubes.
+
 ## Not measured yet
 
 - **Streaming**: residency pools, request queue depth, drive and decompression throughput.

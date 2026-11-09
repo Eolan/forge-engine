@@ -12737,6 +12737,45 @@ screen, kept until that is well off. A cone takes a slot; anything else six, a c
   what stands in the way, then one point of the lamp's disc, a penumbra as wide as the lamp's size and that distance ask. Devices
   without ray queries get the filter too. Long tubes shadow from their middle, and say so.
 
+**Step 3 in detail, before its code (the owner's go, 2026-11-09).** Two parts, in this order: the screen's own reflections, then cubes for what the screen cannot show.
+
+*Where it goes.* The smooth rows already ask for a mirror ray: the resolve writes a request (direction, weight, tint), the tile list names the tiles that hold one, and "shading/reflections" adds what the ray met. `r.reflections.mode screen` keeps all of that, and what the ray met comes from the screen; `rays` stays the default wherever the device has them, and its frame does not change. The share of a row that asks (`mirror_ray_share`, to roughness 0.42) stays too: a comparison with the rays stays a comparison of the same light.
+
+*The march, written here from the published method.* A pyramid of the frame's nearest depth, the maximum of reversed-Z, its level 0 at the frame's own resolution, built after the resolve ("shading/reflection depth"). The ray goes in screen space, where depth is linear along it, a level up while it stays in front of what the cell holds and a level down where it would pass behind. A hit must land within a thickness of the surface it found, in view depth.
+- **Confidence:** falls off at the screen's edges and as the steps run out. What is left of a pixel's share goes to the miss's light, so a reflection fades rather than cuts. Every ray is marched the same way, wherever it heads.
+- **What it reads:** this frame's colour as the class passes left it, copied first so that one pixel's write cannot reach another's read. Nothing is reprojected and the exposure is the frame's, so a moving object is where it is. A mirror seen in a mirror shows what it had without its own reflection. Fog and particles are not in it.
+- **Rough rows:** that colour's own pyramid, the level read a function of the row's roughness alone. One ray a pixel with no noise to clean, and no new denoiser. A reflection is as soft near its contact as far from it. The existing history (#176, `steadied_reflection`) and the motion vectors moved towards the reflection are used as they are.
+- **Who pays:** the march only runs in the tiles listed, so a scene without smooth rows pays the two pyramids.
+
+*What a miss reads.* Today, with no rays, a miss would read the open sky, which is wrong in any room: so the cubes.
+- **Where:** a cube per room the scene names (`RegionVolume`, the volumes the probes already take), or an authored list, in `set_reflection_cubes`. A point inside a volume reads its cube, blended across a margin at the volume's edge; a point in none reads the sky. Box projection against the volume's own faces, its sides as the room's.
+- **Stored:** an octahedral atlas of `RGBA16F`, one tile a cube, its mips the roughness: no new kind of binding in the bindless set.
+- **Drawn:** a cube's six faces with the shadows' chains (culls, clusters, LOD by the face's texels), each writing visibility, then shaded in compute from what the visibility names: albedo, the sun through the rings, lamps by the lists (the atlas's shadow where the lamp has a slot), the sky, what glows. No reflection in a reflection. A budget of faces a frame, the nearest cubes first; drawn again when the casters in their volume change, or the sun has moved past an angle.
+- **Prefiltered:** a GGX lobe per mip, in compute, the moment a cube's six faces are all there.
+- **Not yet:** D-097's item 4, cubes relit from stored normals and depth. A static cube goes stale with the time of day and a lamp switched off; this comes when a measurement shows that it matters.
+
+*Settings:* `r.reflections.mode`, `r.reflections.screen_steps`, `r.reflections.thickness`, `r.reflections.cubes`, `r.reflections.cube_budget`. Every pass a graph pass, in the profiler and `docs/PROFILE.md`.
+
+*Its check.* Against the mirror rays at a fixed exposure, on a flat mirror, a glossy floor, a wet street and the private district's bar; a moving camera for shimmer at the hits' edges and for what the screen uncovers; timings by alternating runs; 0 pixels with `rays`; validation; `FORGE_NO_RAY_QUERY=1`.
+
+**Amended 2026-11-09: step 3 built** (the owner's go for step 3; steps 4 and 5 stay proposed). The march and the cubes' shaders in `shaders/meshlet.slang`, the pyramids in `shaders/reflection_pyramid.slang`, the placement in `crates/forge-render/src/reflection_cubes.rs`, the passes in `meshlet.rs`. `r.reflections.mode rays` stays the default where the device has ray queries, and its frame is the base's: 0 pixels in the city, the gallery and the island. Cubes need `r.shadows.mode rings`, whose chains draw them.
+
+- **A face is shaded by the camera's own resolve,** run a second time on the face's visibility, so that every material class comes with no shading of its own (`resolve_view`). The sun is the rings' from where the face stands (`Frame::ring_offset`). It reads the frame's probes where there are any. Its lamps are all those of the place, each through the atlas where it has a slot, none picked by a noise that would stay in the cube. What moves is left out: a cube is kept, and what moved on would stay in it.
+- **Which faces:** the cube's within 96 m of the camera, the nearest first, one face a frame by default (`r.reflections.cube_budget`). A change in a volume, or the sun's turn past 5°, asks for a new round once the one under way is over and 240 frames have gone, so that what changes all the time neither stops a cube from being whole nor keeps it redrawing.
+- **Reading:** a volume counts a metre past its walls, for what hangs on them. The two volumes a point is deepest in are blended by that depth, whatever their order.
+- **A miss:** the cube's light, then the sky's table. Clouds are not in a miss.
+- **Results.** Against the mirror rays at one exposure:
+
+| | Pixels that differ | ꟻLIP |
+|---|---|---|
+| The city, its towers' glass (what it reflects is mostly off-screen) | 13.9 % | 0.036 |
+| The gallery | 0.54 % | 0.0015 |
+| A private district's bar, against the rays' reflections on the same shadows | 18.2 % | 0.038 |
+| The same bar, on the sky alone before the cubes | 58 % | 0.178 |
+
+  In the bar the screen's reflections read right on the floor and the counter; on the bottles and screens the cubes stand in. A walk of 25 s, frame to frame against the rays' reflections: mean step ꟻLIP 0.162 against 0.159, the largest excess 0.030 in the first frames, while the cubes fill, and under 0.015 from frame 36 (no jump). Costs in `docs/PROFILE.md`.
+- **Limits.** What the screen does not show and no volume covers is the sky. A cube is lit when it is drawn, so it goes stale with the time of day within the 5° and with a lamp switched off; D-097's item 4 is still to come. A redrawn cube's level 0 is new face by face, and its mips follow when the round ends. A reflection is as soft near its contact as far from it. Fog and particles are not in what the screen shows.
+
 **Amended 2026-11-09: step 2 built** (the owner's go for step 2; steps 3 to 5 stay proposed). Code in
 `crates/forge-render/src/shadow_atlas.rs`, the passes in `meshlet.rs`, the shading in `lamp_look<ATLAS>` of
 `shaders/meshlet.slang`. Both parts come with `r.shadows.mode rings`.
