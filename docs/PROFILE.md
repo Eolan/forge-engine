@@ -3090,6 +3090,27 @@ The walk's frame: p50 17.87 ms and p99 20.03 against 18.05 and 20.08 with rays, 
 elsewhere. Its compose is the movers': about 4,000 of them move every frame there, and a mover's tile is laid again.
 Memory: 160 MB (five rings, two layers, 2048 x 2048 `D32_SFLOAT`) when the rings are first turned on, and 18 MB of transients.
 
+The lamps' atlas (D-108, step 2). RTX 5070 Ti, a private district's room, 2560 x 1440 DLSS Quality, 203 lamps in the frame's list
+and 48 shadowed. `r.shadows.mode rings` against `rays`, without ReSTIR, milliseconds of GPU time per frame over 238 frames. The `shadow/ring`
+zones hold the sun's rings and the atlas's chains together.
+
+| Pass | Rings and atlas | Rays |
+|---|---|---|
+| `shadow/lamp rays`: with the atlas, its search and one tap | 0.890 | 1.339 |
+| `shadow/lamp filter` | 0.255 | 0.304 |
+| `shadow/lamp spread` | 0.155 | 0.179 |
+| `shadow/ring cull` | 1.165 | |
+| `shadow/ring draw` | 0.566 | |
+| `shadow/ring clears` | 0.240 | |
+| `shadow/ring compose` | 0.229 | |
+| `shadow/ring samples` | 0.166 | |
+| `shadow/atlas compose`: slots laid again from the static layer | 0.058 | |
+| `shadow/trace` | | 0.474 |
+| The frame | 17.80 | 17.44 |
+
+A 25 s walk at 1280 x 720 DLSS Quality: p50 7.60 ms and p99 9.61 against 7.50 and 8.97 with rays. Memory: 134 MB for the atlas's two
+layers of 4096 x 4096 `D32_SFLOAT`, as soon as the rings are on, even with `r.shadows.atlas 0`.
+
 ## Not measured yet
 
 - **Streaming**: residency pools, request queue depth, drive and decompression throughput.

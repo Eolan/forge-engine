@@ -12717,6 +12717,65 @@ in stops, stills side by side), the moving-camera shimmer of D-107, GPU timings 
 **For the owner to decide:** T0 as a player's tier (D-008); this order; rings before virtual maps;
 D-097 in place of the SDF updater for authored worlds; and step 1, its addendum being the section above.
 
+**Step 2 in detail, before its code (the owner's go, 2026-11-09).**
+
+*Contact.* A march of a few steps through the depth buffer along the sun, from each pixel the rings leave lit, as far as
+three of the ring's texels or at least 10 cm: what the ring's resolution and bias cannot see. A sample that lands behind what
+the depth buffer shows, by less than a thickness, is blocked. Its steps crowd towards the surface and start at a noise of the
+pixel's. It goes into the same one point of the sun's disc as the ring's test, so the denoiser sees one shadow. Leaves and
+blades take none. `r.shadows.contact`, `r.shadows.contact_steps`, `_reach`, `_thickness`, `_far`.
+
+*The lamps.* One atlas of 4096 x 4096 `D32_SFLOAT`, twice as for the rings: the casters that stay, and that layer copied with
+the movers over it. Slots by halving, 128 to 1024 texels a side, a slot's size by how large the lamp's reach stands on the
+screen, kept until that is well off. A cone takes a slot; anything else six, a cube's faces, those behind a flat piece left out.
+- **Which lamps:** of the frame's lamps, those whose light can reach the view, by their light on it, as many as fit. The others
+  are lit unshadowed, as the rays' budget leaves today's far lamps.
+- **Caching:** a slot holds the key of the lamp and face it was drawn for. A static edit within a lamp's reach redraws its faces.
+  A budget of faces a frame, the lamps that show most first; a lamp not drawn yet is lit unshadowed that frame.
+- **Drawing:** the rings' culls and raster with the lamp as the camera, reversed-Z in perspective, the LOD by the slot's texels.
+- **Shading:** `lamp_rays_main`'s choice of lamps and its filter stay. Where it traced a ray it reads the atlas: a short search for
+  what stands in the way, then one point of the lamp's disc, a penumbra as wide as the lamp's size and that distance ask. Devices
+  without ray queries get the filter too. Long tubes shadow from their middle, and say so.
+
+**Amended 2026-11-09: step 2 built** (the owner's go for step 2; steps 3 to 5 stay proposed). Code in
+`crates/forge-render/src/shadow_atlas.rs`, the passes in `meshlet.rs`, the shading in `lamp_look<ATLAS>` of
+`shaders/meshlet.slang`. Both parts come with `r.shadows.mode rings`.
+
+- **Contact: built and measured, off by default.** Against the rays it brought nothing, so `r.shadows.contact` is 0 and stays
+  a setting. With it off and on, the share of pixels that differ from the rays and their ꟻLIP: the city 1.39 → 1.51 %, 0.0047 → 0.0051;
+  a 12° sun 7.44 → 7.56 %, 0.0193 → 0.0199; the island unchanged. It cost 0.02 ms. A sweep of its reach and thickness found no
+  better setting.
+- **The lamps, where they moved from the design:**
+  - **At most 48 shadowed** (`MAX_SHADOWED_LAMPS`), the fit of 4096 x 4096 at slots a lamp can use. The private district's source
+    shadows about one light in twelve in its own raster mode, so this was sized to match it rather than to the rays' count.
+  - **Tubes and wedges shadow from their middle, as a cube**, all of them. Built first with long ones left out, 99 of the 203
+    lamps in the test room lit through walls.
+  - **Coming and going:** a shadow fades over 16 frames, from the lamp's unshadowed light to the shadowed one and back, when the
+    lamp joins or leaves the 48. A lamp whose slot must change size keeps the old one until the new one can be drawn within that
+    frame's budget, so it never goes a frame without its shadow. Lamps still without their shadow draw first, then the others' turns
+    go round.
+  - **Staying right:** a face is drawn again when the casters in its reach change, when its lamp moves or reaches past what was
+    drawn, when the lists of the rings' passes were too short, and, a lamp every fourth frame, for a while after cluster pages come in.
+    Turning `r.shadows.atlas` off and on starts it afresh.
+  - **Budgets:** 6 faces of static casters a frame (`r.shadows.atlas_budget`), the lamps that show most first, and 8 faces laid
+    again with movers (`r.shadows.atlas_movers`), the turns going round. A face's first laying is free: a lamp is read only when
+    all its faces are there.
+  - **A lamp's importance** is its luminance × reach / max(distance, reach ÷ 4, 0.5 m)². A slot is as large as the reach stands on the
+    screen, at most 1024 for a cone and 512 for a cube's face, shrunk, the least important first, to fit 90 % of the atlas.
+  - **Shading:** a search of 6 taps of the composed layer, then one tap at a disc point. The existing lamp filter and spread do the
+    rest.
+- **Results.** The private district's room, 203 lamps in the frame's list, 2560 x 1440 DLSS Quality, against the rays with the lamp filter
+  at one fixed exposure: 17.9 % of pixels differ, ꟻLIP 0.035, the atlas 0.08 EV brighter. Metered, each lands 0.2 EV under the source's
+  raster capture at that point of its path. A metered comparison of the two is not worth reading: a difference of a few frames in the
+  meter's start shifted the whole frame and moved the share of pixels from 21 to 34 %. A walk of 25 s, atlas against rays frame to
+  frame: mean step ꟻLIP 0.194 against 0.189, the largest excess of the atlas 0.015 after the first frames (no jump). Costs in
+  `docs/PROFILE.md`.
+- **Limits.** A lamp beyond the 48 is unshadowed. A tube's shadow starts from one point, so its length softens nothing. `shadow/ring cull`
+  is the atlas's largest cost (1.2 ms in the room, the sun's rings with it): each chain culls on its own. The first frames in a dense
+  place can grow the rings' lists once (a 110 ms frame in the walk). With `FORGE_NO_RAY_QUERY=1` the atlas's passes are clean, but the
+  `resolve_*_main` entries, without rays by name, still declare the ray-query capability (they did before this work): validation
+  reports three modules, and step 5 has to clear them.
+
 **Amended 2026-11-09: step 1 built** (the owner accepted step 1, 2026-11-08; the rest of D-108 stays
 proposed). Code in `crates/forge-render/src/shadow_rings.rs`, the passes in `meshlet.rs`, `shaders/meshlet.slang`.
 `r.shadows.mode` picks rays or rings; rays stay the default wherever the device has them.
