@@ -248,6 +248,8 @@ static const uint OPTION_RING = 1u << 16;
 static const uint OPTION_RING_MOVERS = 1u << 17;
 // With OPTION_RING: a ring past the scene's far shadows, whose casters are the far shadow rays' world.
 static const uint OPTION_RING_FAR = 1u << 18;
+// With OPTION_RING: orthographic, the LOD by its texels; without, a lamp's perspective (the atlas).
+static const uint OPTION_RING_ORTHO = 1u << 19;
 public static const uint FLAG_FREEZE_CULLING = 1;
 public static const uint FLAG_CONE_CULLING = 2;
 public static const uint FLAG_FRUSTUM_CULLING = 4;
@@ -606,6 +608,7 @@ public struct Frame
     public uint hollow_backs;       // not 0: a traced ray's back-face hit takes the probes' light (`set_hollow_backs`), a world of open shells
     public uint ring_mover_first;   // a shadow ring's draw (OPTION_RING, D-108): the movers' first instance
     public uint ring_mover_end;     // and the one after their last
+    public LampAtlasSet* lamp_atlas; // the lamps' shadow atlas (D-108), or null
 };
 
 // Whether this thread's rays meet the movers: every pass's but the probes' unless their scene asks
@@ -1749,7 +1752,7 @@ bool visible_last_frame(Frame* f, float3 world_center, float radius)
 // casts (D-108). Any other view's position, as it is.
 float4 ring_flattened(Frame* f, float4 clip)
 {
-    if ((f[0].options & OPTION_RING) != 0)
+    if ((f[0].options & OPTION_RING_ORTHO) != 0)
         clip.z = saturate(clip.z);
     return clip;
 }
@@ -1758,7 +1761,7 @@ float4 ring_flattened(Frame* f, float4 clip)
 // its LOD divides by 1 and `p11` holds its texels per metre. Any other view's, `distance`.
 float ring_or_distance(Frame* f, float distance)
 {
-    return (f[0].options & OPTION_RING) != 0 ? 1.0 : distance;
+    return (f[0].options & OPTION_RING_ORTHO) != 0 ? 1.0 : distance;
 }
 
 // Projected size in pixels of an object-space error `error` carried by a world-space sphere,
@@ -3435,9 +3438,7 @@ void ring_mesh_main(
     {
         PagedVertex v = paged_vertex(f, base, m, thread);
         float4 clip = mul(f[0].view_proj, float4(instance_point(f, inst, v.position), 1));
-        // A caster beyond the ring's depth range lies flat on its end: it still casts.
-        clip.z = saturate(clip.z);
-        verts[thread].position = clip;
+        verts[thread].position = ring_flattened(f, clip);
     }
     for (uint t = thread; t < triangle_count; t += MESH_GROUP_SIZE)
         tris[t] = uint3(paged_index(f, base, m, t, 0), paged_index(f, base, m, t, 1), paged_index(f, base, m, t, 2));
@@ -3453,8 +3454,7 @@ float4 ring_vertex_main(uint vertex_index : SV_VulkanVertexID, uint slot : SV_Vu
     uint base = payload_base(f, m);
     PagedVertex v = paged_vertex(f, base, m, vertex_index - base / PAGED_VERTEX_BYTES);
     float4 clip = mul(f[0].view_proj, float4(instance_point(f, inst, v.position), 1));
-    clip.z = saturate(clip.z);
-    return clip;
+    return ring_flattened(f, clip);
 }
 
 [shader("fragment")]
@@ -9379,7 +9379,10 @@ struct RingSet
     float search_reach; // metres along the sun: the widest penumbra the blocker search looks for
     float bias;         // texels
     float normal_offset;// texels
-    float pad;
+    uint contact_steps; // the contact march's (`ring_contact`), 0: none
+    float contact_reach;    // its length, the ring's texels
+    float contact_thickness;// how far behind what the depth buffer shows a step counts, metres
+    float contact_far;      // how far from the camera it goes on, metres
 };
 
 struct RingPush
@@ -9390,6 +9393,10 @@ struct RingPush
     uint out_image;   // storage (r32f): the square root of the share of the sun seen, as SIGMA's
     uint width;
     uint height;
+    uint depth_image; // sampled: the frame's depth, for the contact march
+    uint pad0;
+    uint pad1;
+    uint pad2;
 };
 
 [[vk::push_constant]]
@@ -9500,6 +9507,23 @@ RingQuery ring_query(Frame* f, RingSet* set, float3 relative, float3 g, float ex
     return q;
 }
 
+// The finest ring that holds `relative`, for its texel's size.
+ShadowRing ring_at(Frame* f, RingSet* set, float3 relative)
+{
+    ShadowRing last = set[0].rings[RING_COUNT - 1u];
+    for (uint i = 0u; i < RING_COUNT; i++)
+    {
+        ShadowRing r = set[0].rings[i];
+        if (r.image == 0xFFFFFFFFu)
+            continue;
+        float2 uv = float2(dot(r.axis_u.xyz, relative) + r.axis_u.w, dot(r.axis_v.xyz, relative) + r.axis_v.w) * r.inv_width;
+        if (all(uv > 0.15) && all(uv < 0.85))
+            return r;
+        last = r;
+    }
+    return last;
+}
+
 // The share of the sun's disc that `relative` sees: a filter as wide as the disc and the distance
 // to what stands in the way ask.
 float ring_light(Frame* f, RingSet* set, float3 relative, float3 g, float extra, uint2 pixel)
@@ -9517,6 +9541,43 @@ float ring_light(Frame* f, RingSet* set, float3 relative, float3 g, float extra,
         lit += ring_tap(q.r.image, q.at + o, max(q.z + dot(q.slope, o), 0.0));
     }
     return lit / float(taps);
+}
+
+// The contact march (D-108's step 2): how far along `dir` from `relative`, within what the ring
+// `r` cannot see, the depth buffer shows something in the way; negative: nothing. The steps crowd
+// towards the surface, and start at the pixel's own noise.
+float ring_contact(Frame* f, RingSet* set, ShadowRing r, uint depth_image, float3 relative, float3 dir, float noise, float width, float height)
+{
+    uint steps = set[0].contact_steps;
+    float view = length(relative);
+    if (steps == 0u || depth_image == 0xFFFFFFFFu || view > set[0].contact_far)
+        return -1.0;
+    float reach = clamp(set[0].contact_reach * r.texel, 0.1, 8.0);
+    float4 start = mul(f[0].view_proj, float4(relative, 1.0));
+    int2 own = int2((float2(0.5, -0.5) * start.xy / start.w + 0.5) * float2(width, height));
+    for (uint k = 0u; k < steps; k++)
+    {
+        float t = (float(k) + noise) / float(steps);
+        float along = reach * t * t;
+        float4 clip = mul(f[0].view_proj, float4(relative + dir * along, 1.0));
+        if (clip.w <= f[0].znear)
+            return -1.0;
+        float2 uv = float2(0.5, -0.5) * clip.xy / clip.w + 0.5;
+        if (any(uv < 0.0) || any(uv >= 1.0))
+            return -1.0;
+        int2 at = int2(uv * float2(width, height));
+        if (all(at == own))
+            continue; // its own pixel tells nothing
+        float stored = g_sampled_images_r[NonUniformResourceIndex(depth_image)].Load(int3(at, 0));
+        if (stored <= 0.0)
+            continue; // the sky
+        // Reversed-Z, infinite: the view depth is the near plane over the depth.
+        float behind = clip.w - f[0].znear / stored;
+        float nearest = 0.01 + 0.002 * clip.w;
+        if (behind > nearest && behind < max(set[0].contact_thickness, 0.02 * clip.w))
+            return along;
+    }
+    return -1.0;
 }
 
 // Where the point's taken for the surface it is on: the triangle's own normal where it faces the
@@ -9554,7 +9615,18 @@ void sun_shadow_ring_main(uint3 id : SV_DispatchThreadID)
     float3 g;
     float extra;
     ring_surface(f, s, vis, sun, g, extra);
-    shadow[pixel] = sqrt(saturate(ring_light(f, p.set, s.relative, g, extra, pixel)));
+    float lit = ring_light(f, p.set, s.relative, g, extra, pixel);
+    if (lit > 0.0 && !is_grass(vis) && !s.foliage)
+    {
+        float noise = spatio_temporal_noise(pixel, f[0].noise_frame).x;
+        ShadowRing finest = p.set[0].rings[0];
+        if (finest.image != 0xFFFFFFFFu && p.set[0].contact_steps != 0u)
+        {
+            if (ring_contact(f, p.set, ring_at(f, p.set, s.relative), p.depth_image, s.relative + g * 0.005, sun, noise, float(p.width), float(p.height)) >= 0.0)
+                lit = 0.0;
+        }
+    }
+    shadow[pixel] = sqrt(saturate(lit));
 }
 
 // What the sun's denoisers read (`SunShadowPush`), from the rings: as `sun_shadow_trace_main`, a
@@ -9571,7 +9643,7 @@ struct RingTracePush
     uint width;
     uint height;
     uint closest;
-    uint pad;
+    uint depth_image;    // sampled: the frame's depth, for the contact march
 };
 
 [[vk::push_constant]]
@@ -9610,21 +9682,39 @@ void sun_shadow_ring_trace_main(uint3 id : SV_DispatchThreadID)
     float extra;
     ring_surface(f, s, vis, sun, g, extra);
     RingQuery q = ring_query(f, p.set, s.relative, g, extra, pixel);
-    if (!q.found || q.blockers == 0)
+    if (!q.found)
     {
         penumbra[pixel] = NRD_MISS;
         return;
     }
     // A point of the disc, uniform in area, as the ray's.
     float2 u = spatio_temporal_noise(pixel, f[0].noise_frame);
-    float r = sqrt(u.x) * q.radius;
     float a = 6.2831853 * u.y;
-    float2 o = float2(cos(a), sin(a)) * r;
-    bool blocked = ring_tap(q.r.image, q.at + o, max(q.z + dot(q.slope, o), 0.0)) < 0.5;
-    if (!blocked)
-        penumbra[pixel] = NRD_MISS;
-    else
-        penumbra[pixel] = p.closest == 0 ? 0.0 : min(0.5 * q.metres * p.set[0].tan_radius, 32768.0);
+    if (q.blockers > 0)
+    {
+        float r = sqrt(u.x) * q.radius;
+        float2 o = float2(cos(a), sin(a)) * r;
+        if (ring_tap(q.r.image, q.at + o, max(q.z + dot(q.slope, o), 0.0)) < 0.5)
+        {
+            penumbra[pixel] = p.closest == 0 ? 0.0 : min(0.5 * q.metres * p.set[0].tan_radius, 32768.0);
+            return;
+        }
+    }
+    // Lit by the ring: what it is too coarse for, through the depth buffer, along the same point
+    // of the disc. Leaves and blades keep the ring's alone.
+    if (!is_grass(vis) && !s.foliage)
+    {
+        float3 t = normalize(cross(sun, abs(sun.y) < 0.99 ? float3(0.0, 1.0, 0.0) : float3(1.0, 0.0, 0.0)));
+        float3 b = cross(sun, t);
+        float3 dir = normalize(sun + (t * cos(a) + b * sin(a)) * (p.set[0].tan_radius * sqrt(u.x)));
+        float along = ring_contact(f, p.set, q.r, p.depth_image, s.relative + g * 0.005, dir, u.y, float(p.width), float(p.height));
+        if (along >= 0.0)
+        {
+            penumbra[pixel] = p.closest == 0 ? 0.0 : min(0.5 * along * p.set[0].tan_radius, 32768.0);
+            return;
+        }
+    }
+    penumbra[pixel] = NRD_MISS;
 }
 
 // ------------------------------------------------------ the diffuse bounce (D-088) ---
@@ -10075,12 +10165,117 @@ float2 lamp_disc_point(uint2 pixel, uint frame, uint i)
     return float2(p.x * c - p.y * s, p.x * s + p.y * c);
 }
 
-// Whether lamp `lamp`'s light reaches a surface at `world` facing `n` from the point `disc` of
-// its sphere's disc (the unit disc, `lamp_disc_point`; a flat piece's rectangle, the point it
-// maps to, `disc_to_square`), its ray starting `bias` off the surface: (1, 1) seen, (0, 1) not,
-// (0, 0) a flat piece's point behind the surface's horizon, which tells nothing
-// (`lamp_rect_hidden`) and is left out of both the shadowed and the unshadowed light.
-float2 lamp_look(Frame* f, Lamp lamp, float3 world, float3 n, float bias, float2 disc)
+// The lamps' shadow atlas (D-108's step 2, shadow_atlas.rs): mirrors `GpuAtlasFace`, `GpuAtlasLamp`.
+public struct AtlasFace
+{
+    public float4x4 from_lamp; // from a point relative to the lamp to this face's clip space
+    public float4 rect;        // the slot in the atlas, as fractions: x, y, width, height; width 0: no face
+};
+
+public struct AtlasLamp
+{
+    public uint first_face;
+    public uint kind;   // 0: none, its light unshadowed; 1: a cone; 6: a cube
+    public float near;  // its near plane, metres
+    public float scale; // its projection's: 1 / the tangent of half its field of view
+    public float strength; // how much of its shadow shows, 0 to 1
+};
+
+public struct LampAtlasSet
+{
+    public uint image;   // sampled: the composed layer
+    public float texels; // along its side
+    public uint2 pad;
+    public AtlasLamp lamps[512]; // `LAMP_CAPACITY`, in the frame's order
+    public AtlasFace faces[384]; // `MAX_FACES`
+};
+
+// Whether lamp `i` is seen from `world` facing `n`, through the atlas: as `lamp_look`'s ray, one
+// point of the lamp's disc (`disc`, the unit disc), its penumbra as wide as the lamp and the
+// distance to what stands in the way ask. 1 where the lamp has no slot yet.
+float atlas_look(Frame* f, Lamp lamp, uint i, float3 world, float3 n, float bias, float2 disc)
+{
+    LampAtlasSet* a = f[0].lamp_atlas;
+    if (a == nullptr)
+        return 1.0;
+    AtlasLamp al = a[0].lamps[i];
+    if (al.kind == 0u)
+        return 1.0;
+    float3 to = world - lamp.position_radius.xyz;
+    uint side = 0u;
+    if (al.kind == 6u)
+    {
+        float3 m = abs(to);
+        if (m.x >= m.y && m.x >= m.z)
+            side = to.x >= 0.0 ? 0u : 1u;
+        else if (m.y >= m.z)
+            side = to.y >= 0.0 ? 2u : 3u;
+        else
+            side = to.z >= 0.0 ? 4u : 5u;
+    }
+    AtlasFace face = a[0].faces[al.first_face + side];
+    if (face.rect.z <= 0.0)
+        return 1.0;
+    float side_texels = face.rect.z * a[0].texels;
+    float along = mul(face.from_lamp, float4(to, 1.0)).w;
+    if (along <= al.near)
+        return 1.0;
+    // A texel's size at the surface, and the surface moved off itself by a little more than one.
+    float texel = 2.0 * along / (al.scale * side_texels);
+    float4 clip = mul(face.from_lamp, float4(to + n * (1.5 * texel + bias), 1.0));
+    if (clip.w <= al.near)
+        return 1.0;
+    float2 uv = face.rect.xy + (clip.xy / clip.w * 0.5 + 0.5) * face.rect.zw;
+    float2 at = uv * a[0].texels;
+    float2 lowest = face.rect.xy * a[0].texels + 0.5;
+    float2 highest = (face.rect.xy + face.rect.zw) * a[0].texels - 1.5;
+    // Reversed-Z: greater is nearer the lamp. A further centimetre, for what the depth's own
+    // sampling leaves.
+    float here = al.near / max(clip.w - 0.01, al.near);
+    uint image = a[0].image;
+    float radius = lamp.position_radius.w;
+    // The taps stay within what the slot holds past its face (`guard_texels`).
+    float guard = max(8.0, floor(side_texels / 32.0));
+    float search = clamp(radius / texel, 1.0, min(guard, 8.0));
+    uint blockers = 0u;
+    float sum = 0.0;
+    float turn = 2.39996323 * float(i) + disc.x * 6.2831853;
+    for (uint k = 0u; k < 6u; k++)
+    {
+        float r = sqrt((float(k) + 0.5) / 6.0) * search;
+        float t = float(k) * 2.39996323 + turn;
+        int2 p = int2(clamp(floor(at + float2(cos(t), sin(t)) * r), lowest, highest));
+        float d = g_sampled_images_r[NonUniformResourceIndex(image)].Load(int3(p, 0));
+        if (d > here)
+        {
+            blockers += 1u;
+            sum += d;
+        }
+    }
+    if (blockers == 0u)
+        return 1.0;
+    float blocker = al.near / (sum / float(blockers));
+    float penumbra = clamp(radius * (clip.w - blocker) / max(blocker, 1e-3) / texel, 0.5, guard);
+    int2 p = int2(clamp(floor(at + disc * penumbra), lowest, highest));
+    return g_sampled_images_r[NonUniformResourceIndex(image)].Load(int3(p, 0)) > here ? 0.0 : 1.0;
+}
+
+// `atlas_look`, faded as the lamp joins or leaves those shadowed.
+float atlas_seen(Frame* f, Lamp lamp, uint i, float3 world, float3 n, float bias, float2 disc)
+{
+    LampAtlasSet* a = f[0].lamp_atlas;
+    if (a == nullptr || a[0].lamps[i].kind == 0u)
+        return 1.0;
+    return 1.0 - a[0].lamps[i].strength * (1.0 - atlas_look(f, lamp, i, world, n, bias, disc));
+}
+
+// Whether lamp `lamp` (the frame's `i`-th) reaches a surface at `world` facing `n` from the point
+// `disc` of its sphere's disc (the unit disc, `lamp_disc_point`; a flat piece's rectangle, the
+// point it maps to, `disc_to_square`), its ray starting `bias` off the surface: (1, 1) seen, (0, 1)
+// not, (0, 0) a flat piece's point behind the surface's horizon, which tells nothing
+// (`lamp_rect_hidden`) and is left out of both the shadowed and the unshadowed light. With ATLAS,
+// through the atlas (D-108), and no ray.
+float2 lamp_look<let ATLAS : int>(Frame* f, Lamp lamp, uint i, float3 world, float3 n, float bias, float2 disc)
 {
     if (lamp_flat(lamp))
     {
@@ -10089,6 +10284,8 @@ float2 lamp_look(Frame* f, Lamp lamp, float3 world, float3 n, float bias, float2
             return float2(0.0);
         if (lamp_shadowless(lamp))
             return float2(1.0);
+        if (ATLAS != 0)
+            return float2(atlas_seen(f, lamp, i, world, n, bias, disc), 1.0);
         return float2(ray_blocked(f, lamp_ray(lamp, world, n, bias, offset)) ? 0.0 : 1.0, 1.0);
     }
     if (lamp_tube(lamp))
@@ -10100,10 +10297,14 @@ float2 lamp_look(Frame* f, Lamp lamp, float3 world, float3 n, float bias, float2
             return float2(0.0);
         if (lamp_shadowless(lamp))
             return float2(1.0);
+        if (ATLAS != 0)
+            return float2(atlas_seen(f, lamp, i, world, n, bias, disc), 1.0);
         return float2(ray_blocked(f, lamp_ray(lamp, world, n, bias, offset)) ? 0.0 : 1.0, 1.0);
     }
     if (lamp_shadowless(lamp))
         return float2(1.0);
+    if (ATLAS != 0)
+        return float2(atlas_seen(f, lamp, i, world, n, bias, disc), 1.0);
     float3 d = lamp.position_radius.xyz - world;
     float3 t;
     float3 b;
@@ -10131,6 +10332,19 @@ float3 lamp_lux(Lamp lamp, float3 world, float3 n)
 [shader("compute")]
 [numthreads(8, 8, 1)]
 void lamp_rays_main(uint3 id : SV_DispatchThreadID)
+{
+    lamp_rays<0>(id);
+}
+
+// The same through the shadow atlas (D-108): no ray.
+[shader("compute")]
+[numthreads(8, 8, 1)]
+void lamp_rays_atlas_main(uint3 id : SV_DispatchThreadID)
+{
+    lamp_rays<1>(id);
+}
+
+void lamp_rays<let ATLAS : int>(uint3 id)
 {
     LampShadowPush p = lamp_shadow_push;
     if (id.x >= p.width || id.y >= p.height)
@@ -10170,16 +10384,16 @@ void lamp_rays_main(uint3 id : SV_DispatchThreadID)
         // The share of its rays that reached it (x) and of those that looked at its lit side (y,
         // 1 but for a flat piece's points behind the horizon, `lamp_look`).
         float2 seen = float2(1.0);
-        if (f[0].tlas != 0)
+        if (ATLAS != 0 || f[0].tlas != 0)
         {
             // The strongest takes two rays, to the frame's run and its pair's (runs 2m and 2m + 1):
             // its 32 points a frame are an aligned run of the sequence, stratified as a whole.
             // Two runs half the cycle apart are not, and their estimate changed more from frame to
             // frame: a still camera's frames 10 apart changed on 6.1 % of the smoke yard's pixels
             // under TAA, 3.9 % with the pair (the hall 0.31 and 0.16 %).
-            seen = lamp_look(f, lamp, world, s.n, bias, lamp_disc_point(pixel, f[0].noise_frame, i));
+            seen = lamp_look<ATLAS>(f, lamp, i, world, s.n, bias, lamp_disc_point(pixel, f[0].noise_frame, i));
             if (j == 0u)
-                seen = 0.5 * seen + 0.5 * lamp_look(f, lamp, world, s.n, bias, lamp_disc_point(pixel, f[0].noise_frame ^ 1u, i));
+                seen = 0.5 * seen + 0.5 * lamp_look<ATLAS>(f, lamp, i, world, s.n, bias, lamp_disc_point(pixel, f[0].noise_frame ^ 1u, i));
         }
         unshadowed += e * seen.y;
         shadowed += e * seen.x;

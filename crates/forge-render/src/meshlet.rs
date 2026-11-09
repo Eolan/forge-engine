@@ -820,6 +820,8 @@ struct GpuFrame {
     /// A shadow ring's draw (D-108): the movers' first instance, and the one after their last.
     ring_mover_first: u32,
     ring_mover_end: u32,
+    /// The lamps' shadow atlas (D-108, `LampAtlasSet`), 0: none.
+    lamp_atlas: u64,
 }
 
 /// `options` of a shadow ring's draw: orthographic, its LOD by its texels (`OPTION_RING`).
@@ -828,8 +830,10 @@ const OPTION_RING: u32 = 1 << 16;
 const OPTION_RING_MOVERS: u32 = 1 << 17;
 /// With [`OPTION_RING`]: a ring past the scene's far shadows, casting what the far rays meet.
 const OPTION_RING_FAR: u32 = 1 << 18;
+/// With [`OPTION_RING`]: orthographic, the LOD by its texels; without, a lamp's perspective.
+const OPTION_RING_ORTHO: u32 = 1 << 19;
 /// A frame's shadow-ring draws, at most: each has a frame block.
-const RING_CHAINS: u64 = 48;
+const RING_CHAINS: u64 = 96;
 
 /// An instance record's bounding sphere, in the coordinates of [`CellPos::to_f64`].
 fn record_bounds(record: &GpuInstance) -> (DVec3, f64) {
@@ -856,6 +860,8 @@ struct RingPush {
     out_image: u32,
     width: u32,
     height: u32,
+    depth_image: u32,
+    pad: [u32; 3],
 }
 
 /// Mirrors `RingTracePush` in `meshlet.slang`.
@@ -872,7 +878,7 @@ struct RingTracePush {
     width: u32,
     height: u32,
     closest: u32,
-    pad: u32,
+    depth_image: u32,
 }
 
 /// What a frame's passes after the draw read of the shadow rings (D-108).
@@ -882,6 +888,8 @@ pub struct RingFrame {
     composed: [ImageHandle; crate::shadow_rings::RING_COUNT],
     /// The `RingSet` the shading reads.
     set: u64,
+    /// The lamps' atlas's composed layer, with the atlas on.
+    atlas: Option<ImageHandle>,
 }
 
 /// D-108's shadow rings on the GPU, made when first asked for
@@ -902,6 +910,13 @@ struct ShadowRingsGpu {
     sample: Pipeline,
     /// What the sun's denoisers read, from the rings (`sun_shadow_ring_trace_main`).
     trace: Pipeline,
+    /// The lamps' atlas (D-108): the casters that stay, and that layer with the movers over it.
+    atlas_static: GraphImage,
+    atlas_composed: GraphImage,
+    /// Per frame slot, the table the shading reads (`LampAtlasSet`).
+    atlas_sets: Vec<Buffer>,
+    /// The lamps' passes through the atlas: `lamp_rays_atlas_main`, the filter and the spread.
+    lamp_passes: [Pipeline; 3],
 }
 
 /// The transients one frame's ring draws share, one after the other.
@@ -952,6 +967,8 @@ struct RingChain {
     target: ImageHandle,
     rect: vk::Rect2D,
     clear: bool,
+    /// The target's side, texels.
+    area: u32,
 }
 
 /// Where a frame slot's light lists start in its lamps' buffer, bytes: after the lamps.
@@ -3240,6 +3257,7 @@ impl MeshletSceneBuilder {
                 })
                 .collect::<Result<Vec<_>>>()?,
             lamp_counts: std::array::from_fn(|_| Cell::new([0; 2])),
+            atlas_lamps: RefCell::new(Vec::new()),
             near_lamps: std::array::from_fn(|_| Cell::new(false)),
             decals_smooth: decals_smooth && decals.is_some(),
             decals,
@@ -3471,6 +3489,8 @@ pub struct MeshletScene {
     /// and how many of each.
     lamp_buffers: Vec<Buffer>,
     lamp_counts: [Cell<[u32; 2]>; FRAMES_IN_FLIGHT],
+    /// The frame's lamps and their stable names, for the shadow atlas (D-108).
+    atlas_lamps: RefCell<Vec<crate::shadow_atlas::AtlasLampIn>>,
     /// Whether a frame slot's lamps' buffer holds the grid of lamps by columns (#386).
     near_lamps: [Cell<bool>; FRAMES_IN_FLIGHT],
     /// Its decals' tables and the record pointing into them (D-074, [`MeshletSceneBuilder::set_decals`]),
@@ -4426,6 +4446,14 @@ impl MeshletScene {
         if let Some(far) = &self.far_lamps {
             far.shares[slot.index].write(0, &far.far.weights(lamps, shares));
         }
+        *self.atlas_lamps.borrow_mut() = shares
+            .iter()
+            .zip(&kept)
+            .map(|(&(id, _), lamp)| crate::shadow_atlas::AtlasLampIn {
+                id: id as u32,
+                lamp: *lamp,
+            })
+            .collect();
         let lists = crate::lamps::lists(&kept);
         let mut near = false;
         if !kept.is_empty() {
@@ -5082,6 +5110,16 @@ pub struct MeshletRenderer {
     ring_changes: RefCell<Vec<(DVec3, f64)>>,
     /// The rings' list capacities once a draw found the camera's too small: work, visible.
     ring_lists: Cell<[u32; 2]>,
+    /// The lamps' shadow atlas (D-108).
+    lamp_atlas: RefCell<crate::shadow_atlas::LampAtlas>,
+    /// Whether the rings' mode shadows the lamps through it (`r.shadows.atlas`).
+    pub atlas_on: bool,
+    /// Whether the atlas ran last frame: turned on again, it starts afresh.
+    atlas_ran: Cell<bool>,
+    /// The faces a frame may draw of it (`r.shadows.atlas_budget`).
+    pub atlas_budget: usize,
+    /// The faces a frame may lay again with movers over them (`r.shadows.atlas_movers`).
+    pub atlas_mover_budget: usize,
     /// Frames more to go round the rings' tiles since cluster pages last came in.
     ring_refresh: Cell<u32>,
     /// Whether the shadow rings give the sun's shadow (`r.shadows.mode`).
@@ -5747,6 +5785,11 @@ impl MeshletRenderer {
             ring_frame: Cell::new(0),
             ring_changes: RefCell::new(Vec::new()),
             ring_lists: Cell::new([0; 2]),
+            lamp_atlas: RefCell::new(crate::shadow_atlas::LampAtlas::new()),
+            atlas_on: true,
+            atlas_ran: Cell::new(false),
+            atlas_budget: 6,
+            atlas_mover_budget: 8,
             ring_refresh: Cell::new(0),
             shadow_rings: false,
             ring_denoised: false,
@@ -6358,6 +6401,11 @@ impl MeshletRenderer {
             gi_reference: self.gi_reference,
             ring_mover_first: 0,
             ring_mover_end: 0,
+            lamp_atlas: self
+                .rings
+                .as_ref()
+                .filter(|_| self.shadow_rings && self.atlas_on)
+                .map_or(0, |g| g.atlas_sets[slot.index].address()),
         }
     }
 
@@ -7044,6 +7092,7 @@ impl MeshletRenderer {
         self.shadow_rings = true;
         // What changed while they were off was not kept.
         self.ring_cache.get_mut().clear();
+        self.lamp_atlas.get_mut().clear();
         if self.rings.is_some() {
             return Ok(());
         }
@@ -7151,6 +7200,41 @@ impl MeshletRenderer {
             push_constant_bytes: std::mem::size_of::<RingPush>() as u32,
             name: "shadow rings' shading",
         })?;
+        let lamp_pass = |entry: &'static str, name: &'static str| -> Result<Pipeline> {
+            let module = device.create_shader_module(
+                &shaders.compile("meshlet.slang", entry, ShaderStage::Compute)?,
+                name,
+            )?;
+            let pipeline = device.create_compute_pipeline(&ComputePipelineDesc {
+                shader: (module, entry),
+                push_constant_bytes: std::mem::size_of::<LampShadowPush>() as u32,
+                name,
+            });
+            device.destroy_shader_module(module);
+            pipeline
+        };
+        let lamp_passes = [
+            lamp_pass("lamp_rays_atlas_main", "lamp atlas samples")?,
+            lamp_pass("lamp_filter_main", "lamp shadow filter (atlas)")?,
+            lamp_pass("lamp_spread_main", "lamp shadow spread (atlas)")?,
+        ];
+        let atlas_layer = |name: &str| {
+            GraphImage::new(
+                device,
+                ImageDesc {
+                    width: crate::shadow_atlas::ATLAS_TEXELS,
+                    height: crate::shadow_atlas::ATLAS_TEXELS,
+                    format: vk::Format::D32_SFLOAT,
+                    usage: vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT
+                        | vk::ImageUsageFlags::SAMPLED
+                        | vk::ImageUsageFlags::TRANSFER_SRC
+                        | vk::ImageUsageFlags::TRANSFER_DST,
+                    aspect: vk::ImageAspectFlags::DEPTH,
+                    mip_levels: 1,
+                    name,
+                },
+            )
+        };
         let trace_pipeline = device.create_compute_pipeline(&ComputePipelineDesc {
             shader: (trace, "sun_shadow_ring_trace_main"),
             push_constant_bytes: std::mem::size_of::<RingTracePush>() as u32,
@@ -7191,6 +7275,10 @@ impl MeshletRenderer {
             cutouts,
             sample: sample_pipeline,
             trace: trace_pipeline,
+            atlas_static: atlas_layer("lamp atlas static")?,
+            atlas_composed: atlas_layer("lamp atlas composed")?,
+            atlas_sets: host(crate::shadow_atlas::ATLAS_SET_BYTES, "lamp atlas table")?,
+            lamp_passes,
         });
         tracing::info!("the sun's shadow rings are made (D-108)");
         Ok(())
@@ -7199,6 +7287,7 @@ impl MeshletRenderer {
     /// Has the rings drawn again from nothing: what they hold no longer holds (`r.shadows.lod`).
     pub fn invalidate_shadow_rings(&mut self) {
         self.ring_cache.get_mut().clear();
+        self.lamp_atlas.get_mut().clear();
     }
 
     /// Tells the rings that what stands within `radius` metres of `center` (the coordinates of
@@ -7273,11 +7362,18 @@ impl MeshletRenderer {
             );
             self.ring_lists.set([grown.0, grown.1]);
             cache.clear();
+            self.lamp_atlas.borrow_mut().redraw_all();
             grown
         } else {
             (work, visible)
         };
-        for (center, radius) in self.ring_changes.borrow_mut().drain(..).chain(changes) {
+        let atlas_changes: Vec<_> = self
+            .ring_changes
+            .borrow_mut()
+            .drain(..)
+            .chain(changes)
+            .collect();
+        for &(center, radius) in &atlas_changes {
             cache.mark_changed(center, radius);
         }
         // Cluster pages that come in name no tile: the tiles are gone round for a while after.
@@ -7335,13 +7431,14 @@ impl MeshletRenderer {
                 cluster_groups: cull_groups(work),
                 page_need: 0,
                 ladder: 0,
-                options: OPTION_RING | layer,
+                options: OPTION_RING | OPTION_RING_ORTHO | layer,
                 ring_mover_first: first,
                 ring_mover_end: end,
                 ..base
             }
         };
         let texels = |slots: u32| slots * TILE_TEXELS;
+        let extent_height = params.extent.height as f32;
         let cells = (base.flags & FLAG_INSTANCE_CELLS) != 0;
         let ring_io = {
             let storage = vk::BufferUsageFlags::STORAGE_BUFFER;
@@ -7418,9 +7515,10 @@ impl MeshletRenderer {
             opening = opening.buffer(buffer, BufferAccess::TransferDst);
         }
         opening.run(|_, _| Ok(()));
-        let mut index = 0u64;
-        let mut chain = |graph: &mut FrameGraph<'f>, block, target, rect, clear| {
-            if index < RING_CHAINS {
+        let index = Cell::new(0u64);
+        let chain = |graph: &mut FrameGraph<'f>, block, target, rect, clear, area| {
+            let at = index.get();
+            if at < RING_CHAINS {
                 self.ring_chain(
                     graph,
                     gpu,
@@ -7429,13 +7527,14 @@ impl MeshletRenderer {
                     ring_io,
                     RingChain {
                         block,
-                        index,
+                        index: at,
                         target,
                         rect,
                         clear,
+                        area,
                     },
                 );
-                index += 1;
+                index.set(at + 1);
             }
         };
         for draw in &plan.draws {
@@ -7451,7 +7550,7 @@ impl MeshletRenderer {
                 },
             };
             let block = block_of(draw.ring, draw.tile, tiles, 0);
-            chain(graph, block, statics[draw.ring], rect, true);
+            chain(graph, block, statics[draw.ring], rect, true, RING_TEXELS);
         }
         for ring in 0..RING_COUNT {
             if plan.compose[ring] == 0 {
@@ -7507,9 +7606,178 @@ impl MeshletRenderer {
                 let [wx, wy] = cache.ring(ring).window();
                 let first = [wx + i64::from(x), wy + i64::from(y)];
                 let block = block_of(ring, first, [w, h], OPTION_RING_MOVERS);
-                chain(graph, block, to, rect, false);
+                chain(graph, block, to, rect, false, RING_TEXELS);
             }
         }
+        // The lamps' atlas (D-108, step 2), as the rings: what stays, laid, the movers over it.
+        // Turned on again, what it holds can't be trusted: what changed meanwhile was not told to it.
+        let atlas_resumed = self.atlas_on && !self.atlas_ran.get();
+        self.atlas_ran.set(self.atlas_on);
+        let atlas_handle = self.atlas_on.then(|| {
+            use crate::shadow_atlas::{ATLAS_TEXELS, AtlasDraw, AtlasView, GpuAtlasHead};
+            let lamps = scene.atlas_lamps.borrow();
+            let origin = scene.origin.to_f64();
+            let in_scene = |list: &[(DVec3, f64)]| -> Vec<(Vec3, f32)> {
+                list.iter()
+                    .map(|(c, r)| ((*c - origin).as_vec3(), *r as f32))
+                    .collect()
+            };
+            let view = AtlasView {
+                camera: params.cull.position.relative_to(scene.origin),
+                planes: frustum_planes(params.cull.view_proj),
+                pixels: params.cull.p11 * 0.5 * extent_height,
+            };
+            let mut atlas = self.lamp_atlas.borrow_mut();
+            if atlas_resumed {
+                atlas.clear();
+            }
+            if refresh {
+                atlas.refresh_turn();
+            }
+            // Within the chains the rings left: a static face takes one, and its laying another.
+            let left = (RING_CHAINS - index.get()) as usize;
+            let atlas_statics = self.atlas_budget.min(left / 2);
+            let atlas_movers = self.atlas_mover_budget.min(left - 2 * atlas_statics);
+            let atlas_plan = atlas.plan(
+                &lamps,
+                view,
+                &in_scene(&atlas_changes),
+                &in_scene(&moved),
+                atlas_statics,
+                atlas_movers,
+            );
+            let (from, to) = (
+                graph.import(&gpu.atlas_static),
+                graph.import(&gpu.atlas_composed),
+            );
+            let slot_rect = |d: &AtlasDraw| vk::Rect2D {
+                offset: vk::Offset2D {
+                    x: d.slot[0] as i32,
+                    y: d.slot[1] as i32,
+                },
+                extent: vk::Extent2D {
+                    width: d.slot[2],
+                    height: d.slot[2],
+                },
+            };
+            let (first, end) = scene
+                .movers
+                .as_ref()
+                .map_or((0, 0), |m| (m.first, m.first + m.len() as u32));
+            let block_of_lamp = |d: &AtlasDraw, layer: u32| {
+                let p = d.lamp.position_radius;
+                let position = scene.origin.offset(Vec3::new(p[0], p[1], p[2]));
+                let mut planes = frustum_planes(d.view_proj);
+                planes[5] = [
+                    -d.forward.x,
+                    -d.forward.y,
+                    -d.forward.z,
+                    d.lamp.colour_reach[3],
+                ];
+                GpuFrame {
+                    view_proj: d.view_proj.to_cols_array(),
+                    cull_view_proj: d.view_proj.to_cols_array(),
+                    cull_view: d.view.to_cols_array(),
+                    planes,
+                    camera_cell: position.cell.extend(0).to_array(),
+                    camera_in_scene: [p[0], p[1], p[2], 0.0],
+                    camera_local: position.local.to_array(),
+                    flags: (base.flags
+                        & (keep | FLAG_STREAMING | FLAG_INSTANCE_CELLS | FLAG_CUTOUTS))
+                        | CullFlags::FRUSTUM,
+                    pass: PASS_SINGLE,
+                    p00: d.scale,
+                    p11: d.scale,
+                    viewport_height: d.slot[2] as f32,
+                    znear: d.near,
+                    lod_threshold: self.ring_lod,
+                    target_width: d.slot[2],
+                    target_height: d.slot[2],
+                    work_capacity: work,
+                    visible_capacity: visible,
+                    cluster_groups: cull_groups(work),
+                    page_need: 0,
+                    ladder: 0,
+                    options: OPTION_RING | layer,
+                    ring_mover_first: first,
+                    ring_mover_end: end,
+                    ..base
+                }
+            };
+            for draw in &atlas_plan.statics {
+                chain(
+                    graph,
+                    block_of_lamp(draw, 0),
+                    from,
+                    slot_rect(draw),
+                    true,
+                    ATLAS_TEXELS,
+                );
+            }
+            if !atlas_plan.copies.is_empty() {
+                let regions: Vec<_> = atlas_plan
+                    .copies
+                    .iter()
+                    .map(|c| {
+                        let at = vk::Offset2D {
+                            x: c[0] as i32,
+                            y: c[1] as i32,
+                        };
+                        (
+                            at,
+                            at,
+                            vk::Extent2D {
+                                width: c[2],
+                                height: c[2],
+                            },
+                        )
+                    })
+                    .collect();
+                graph
+                    .pass("shadow/atlas compose")
+                    .image(from, ImageAccess::TransferSrc)
+                    .image(to, ImageAccess::TransferDst)
+                    .run(move |resources, commands| {
+                        commands.copy_depth_regions(
+                            resources.image(from).raw,
+                            resources.image(to).raw,
+                            &regions,
+                        );
+                        Ok(())
+                    });
+            }
+            if movers != RingMovers::None {
+                for draw in &atlas_plan.movers {
+                    chain(
+                        graph,
+                        block_of_lamp(draw, OPTION_RING_MOVERS),
+                        to,
+                        slot_rect(draw),
+                        false,
+                        ATLAS_TEXELS,
+                    );
+                }
+            }
+            let (records, faces) = atlas.tables(&lamps);
+            let table = &gpu.atlas_sets[slot.index];
+            let head = std::mem::size_of::<GpuAtlasHead>() as u64;
+            table.write(
+                0,
+                &[GpuAtlasHead {
+                    image: gpu.atlas_composed.sampled().0,
+                    texels: ATLAS_TEXELS as f32,
+                    pad: [0; 2],
+                }],
+            );
+            table.write(head, &records);
+            table.write(
+                head + (crate::lamps::LAMP_CAPACITY
+                    * std::mem::size_of::<crate::shadow_atlas::GpuAtlasLamp>())
+                    as u64,
+                &faces,
+            );
+            to
+        });
         let mut closing = graph.pass("shadow/ring clears");
         for buffer in ring_io.transients() {
             closing = closing.buffer(buffer, BufferAccess::TransferSrc);
@@ -7532,12 +7800,16 @@ impl MeshletRenderer {
                 search_reach: filter.search_reach,
                 bias: filter.bias,
                 normal_offset: filter.normal_offset,
-                pad: 0.0,
+                contact_steps: filter.contact_steps,
+                contact_reach: filter.contact_reach,
+                contact_thickness: filter.contact_thickness,
+                contact_far: filter.contact_far,
             }],
         );
         let ring_frame = RingFrame {
             composed: std::array::from_fn(|i| composed[i]),
             set: gpu.sets[slot.index].address(),
+            atlas: atlas_handle,
         };
         if self.ring_denoised {
             return Some((None, ring_frame));
@@ -7558,6 +7830,7 @@ impl MeshletRenderer {
         let mut builder = graph
             .pass("shadow/rings")
             .image(io.visibility, ImageAccess::Sampled(compute))
+            .image(io.depth, ImageAccess::Sampled(compute))
             .image(output, ImageAccess::StorageWrite(compute))
             .buffer(io.visible, BufferAccess::ShaderRead(compute))
             .buffer(io.pool, BufferAccess::ShaderRead(compute))
@@ -7566,7 +7839,7 @@ impl MeshletRenderer {
         for image in &composed {
             builder = builder.image(*image, ImageAccess::Sampled(compute));
         }
-        let visibility = io.visibility;
+        let (visibility, depth) = (io.visibility, io.depth);
         builder.run(move |resources, commands| {
             commands.bind_pipeline(pipeline);
             commands.push_constants(
@@ -7578,6 +7851,8 @@ impl MeshletRenderer {
                     out_image: resources.storage(output, 0).0,
                     width: extent.width,
                     height: extent.height,
+                    depth_image: resources.sampled(depth).0,
+                    pad: [0; 3],
                 },
             );
             commands.dispatch(extent.width.div_ceil(8), extent.height.div_ceil(8), 1);
@@ -7724,6 +7999,7 @@ impl MeshletRenderer {
             target,
             rect,
             clear,
+            area,
             ..
         } = chain;
         let mut builder = graph.pass("shadow/ring draw");
@@ -7760,7 +8036,6 @@ impl MeshletRenderer {
         builder
             .image(target, ImageAccess::DepthAttachment)
             .run(move |resources, commands| {
-                use crate::shadow_rings::RING_TEXELS;
                 let push = self.push(address);
                 let depth = vk::RenderingAttachmentInfo::default()
                     .image_view(resources.view(target))
@@ -7771,8 +8046,8 @@ impl MeshletRenderer {
                     .render_area(vk::Rect2D {
                         offset: vk::Offset2D::default(),
                         extent: vk::Extent2D {
-                            width: RING_TEXELS,
-                            height: RING_TEXELS,
+                            width: area,
+                            height: area,
                         },
                     })
                     .layer_count(1)
@@ -7972,6 +8247,7 @@ impl MeshletRenderer {
             let mut builder = graph
                 .pass("shadow/ring samples")
                 .image(targets.visibility, ImageAccess::Sampled(compute))
+                .image(targets.depth, ImageAccess::Sampled(compute))
                 .image(rays.penumbra, ImageAccess::StorageWrite(compute))
                 .image(rays.normal_roughness, ImageAccess::StorageWrite(compute))
                 .image(rays.view_z, ImageAccess::StorageWrite(compute))
@@ -8000,7 +8276,7 @@ impl MeshletRenderer {
                         width: extent.width,
                         height: extent.height,
                         closest: closest as u32,
-                        pad: 0,
+                        depth_image: resources.sampled(targets.depth).0,
                     },
                 );
                 commands.dispatch(extent.width.div_ceil(8), extent.height.div_ceil(8), 1);
@@ -8167,7 +8443,7 @@ impl MeshletRenderer {
     /// `probes`: the probes the resolve lights with (their regions are the lamps' places).
     /// `street_restir`: ReSTIR DI runs ([`LampShadows::restir`]), so neither pass takes its lamps:
     /// the street lamps, or with [`MeshletRenderer::lamp_restir_from`] those past the nearest. `None`, and nothing declared, when `scene` lights no lamp in this frame or
-    /// the device has no ray queries: no other image changes.
+    /// there is neither a ray query nor the rings' lamp atlas (D-108): no other image changes.
     #[allow(clippy::too_many_arguments)]
     pub fn lamp_shadows<'f>(
         &'f self,
@@ -8179,7 +8455,13 @@ impl MeshletRenderer {
         probes: Option<ProbeLight>,
         street_restir: bool,
     ) -> Option<ImageHandle> {
-        let [rays, filter, spread] = self.pipeline_lamp_shadows.as_ref()?;
+        // Through the atlas where the rings' mode has one (D-108), else the rays.
+        let atlas = targets.rings.and_then(|r| r.atlas).zip(self.rings.as_ref());
+        let [rays, filter, spread] = match (atlas, self.pipeline_lamp_shadows.as_ref()) {
+            (Some((_, gpu)), _) => &gpu.lamp_passes,
+            (None, Some(passes)) => passes,
+            (None, None) => return None,
+        };
         if scene.lamp_counts[slot.index].get()[0] == 0 {
             return None;
         }
@@ -8220,6 +8502,10 @@ impl MeshletRenderer {
         let mut builder = graph
             .pass("shadow/lamp rays")
             .image(targets.visibility, ImageAccess::Sampled(compute))
+            .with(|b| match atlas {
+                Some((image, _)) => b.image(image, ImageAccess::Sampled(compute)),
+                None => b,
+            })
             .image(ratio, ImageAccess::StorageWrite(compute))
             .image(surface, ImageAccess::StorageWrite(compute))
             .image(normal, ImageAccess::StorageWrite(compute))

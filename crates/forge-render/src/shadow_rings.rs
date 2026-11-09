@@ -533,6 +533,14 @@ pub struct RingFilter {
     pub bias: f32,
     /// Normal offset, texels.
     pub normal_offset: f32,
+    /// Steps of the contact march through the depth buffer; 0: none.
+    pub contact_steps: u32,
+    /// How far it goes, the ring's texels.
+    pub contact_reach: f32,
+    /// How far behind what the depth buffer shows a step still counts as blocked, metres.
+    pub contact_thickness: f32,
+    /// How far from the camera it goes on, metres.
+    pub contact_far: f32,
 }
 
 impl Default for RingFilter {
@@ -544,6 +552,10 @@ impl Default for RingFilter {
             search_reach: 64.0,
             bias: 1.5,
             normal_offset: 2.0,
+            contact_steps: 0,
+            contact_reach: 3.0,
+            contact_thickness: 0.25,
+            contact_far: 100.0,
         }
     }
 }
@@ -568,8 +580,14 @@ pub struct GpuRingSet {
     pub bias: f32,
     /// See [`RingFilter`].
     pub normal_offset: f32,
-    /// Keeps the block on 16 bytes.
-    pub pad: f32,
+    /// See [`RingFilter`].
+    pub contact_steps: u32,
+    /// See [`RingFilter`].
+    pub contact_reach: f32,
+    /// See [`RingFilter`].
+    pub contact_thickness: f32,
+    /// See [`RingFilter`].
+    pub contact_far: f32,
 }
 
 /// The rings' caches.

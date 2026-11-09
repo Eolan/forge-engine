@@ -216,6 +216,9 @@ command line": `--no-ao` and `--set r.ao=0` give the same image to the pixel.
 | `r.shadows.search_taps`, `r.shadows.filter_taps` | rings: taps of the blocker search and of the filter (the filter without a denoiser) | 1 to 64 | 12, 12 |
 | `r.shadows.max_radius`, `r.shadows.search_reach` | rings: the widest filter, texels, and how far along the sun the search looks, metres | 1 to 64, 1 to 1000 | 24, 64 |
 | `r.shadows.bias`, `r.shadows.normal_offset` | rings: depth bias and normal offset, texels | 0 to 16 | 1.5, 2 |
+| `r.shadows.contact`, `r.shadows.contact_steps` | rings: a short march through the depth buffer for what they are too coarse for, its steps | 0, 1; 1 to 32 | 0; 8 |
+| `r.shadows.contact_reach`, `r.shadows.contact_thickness`, `r.shadows.contact_far` | rings: the march's length in the ring's texels, how far behind what the depth buffer shows a step counts, metres, and how far from the camera it goes on, metres | 0.5 to 32, 0.01 to 4, 1 to 1000 | 3, 0.25, 100 |
+| `r.shadows.atlas`, `r.shadows.atlas_budget`, `r.shadows.atlas_movers` | rings: the lamps' shadows through an atlas, the faces a frame may draw, and those it may lay again with movers | 0, 1; 0 to 32; 0 to 32 | 1; 6; 8 |
 | `r.shadows.denoiser` | their denoiser, where there is one | sigma, ffx, none | sigma where NRD is, else ffx |
 | `r.shadows.history` | the frames SIGMA steadies the shadows over: fewer keep a moving caster's shadow from trailing behind it (#337), more steady a still penumbra | 0..7 | 7 |
 | `r.reflections.sky`, `r.reflections.rays` | the sky's reflection, mirror rays | 0, 1 | 1, 1 |

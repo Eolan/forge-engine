@@ -68,6 +68,14 @@ pub(crate) struct RenderVars {
     ring_reach: Var<f64>,
     ring_bias: Var<f64>,
     ring_normal: Var<f64>,
+    ring_contact: Var<bool>,
+    ring_contact_steps: Var<i64>,
+    ring_contact_reach: Var<f64>,
+    ring_contact_thickness: Var<f64>,
+    ring_contact_far: Var<f64>,
+    ring_atlas: Var<bool>,
+    ring_atlas_budget: Var<i64>,
+    ring_atlas_movers: Var<i64>,
     ring_budget: Var<i64>,
     ring_lod: Var<f64>,
     /// The catalogue's stars and the Moon's albedo at night (`r.sky.real`, the period key
@@ -370,6 +378,52 @@ impl Gallery {
                 0.0..=16.0,
                 "Shadow rings: normal offset, texels.",
             )),
+            ring_contact: s.add(Spec::bool(
+                "r.shadows.contact",
+                ring_filter.contact_steps > 0,
+                "Shadow rings: a short march through the depth buffer for what they are too coarse for.",
+            )),
+            ring_contact_steps: s.add(Spec::int(
+                "r.shadows.contact_steps",
+                8,
+                1..=32,
+                "Shadow rings: steps of the contact march.",
+            )),
+            ring_contact_reach: s.add(Spec::float(
+                "r.shadows.contact_reach",
+                f64::from(ring_filter.contact_reach),
+                0.5..=32.0,
+                "Shadow rings: how far the contact march goes, the ring's texels (at least 10 cm).",
+            )),
+            ring_contact_thickness: s.add(Spec::float(
+                "r.shadows.contact_thickness",
+                f64::from(ring_filter.contact_thickness),
+                0.01..=4.0,
+                "Shadow rings: how far behind what the depth buffer shows a step counts as blocked, metres.",
+            )),
+            ring_contact_far: s.add(Spec::float(
+                "r.shadows.contact_far",
+                f64::from(ring_filter.contact_far),
+                1.0..=1000.0,
+                "Shadow rings: how far from the camera the contact march goes on, metres.",
+            )),
+            ring_atlas: s.add(Spec::bool(
+                "r.shadows.atlas",
+                self.renderer.atlas_on,
+                "Shadow rings: the lamps' shadows through a shadow atlas, the ones that show most.",
+            )),
+            ring_atlas_budget: s.add(Spec::int(
+                "r.shadows.atlas_budget",
+                self.renderer.atlas_budget as i64,
+                0..=32,
+                "Shadow atlas: faces a frame may draw.",
+            )),
+            ring_atlas_movers: s.add(Spec::int(
+                "r.shadows.atlas_movers",
+                self.renderer.atlas_mover_budget as i64,
+                0..=32,
+                "Shadow atlas: faces a frame may lay again with the movers over them.",
+            )),
             ring_budget: s.add(Spec::int(
                 "r.shadows.budget",
                 self.renderer.ring_budget as i64,
@@ -608,8 +662,19 @@ impl Gallery {
             search_reach: s.get(v.ring_reach) as f32,
             bias: s.get(v.ring_bias) as f32,
             normal_offset: s.get(v.ring_normal) as f32,
+            contact_steps: if s.get(v.ring_contact) {
+                s.get(v.ring_contact_steps) as u32
+            } else {
+                0
+            },
+            contact_reach: s.get(v.ring_contact_reach) as f32,
+            contact_thickness: s.get(v.ring_contact_thickness) as f32,
+            contact_far: s.get(v.ring_contact_far) as f32,
         };
         self.renderer.ring_budget = s.get(v.ring_budget) as usize;
+        self.renderer.atlas_on = s.get(v.ring_atlas);
+        self.renderer.atlas_budget = s.get(v.ring_atlas_budget) as usize;
+        self.renderer.atlas_mover_budget = s.get(v.ring_atlas_movers) as usize;
         self.renderer.ring_lod = s.get(v.ring_lod) as f32;
         if s.changed_since(v.ring_lod, seen) {
             self.renderer.invalidate_shadow_rings();

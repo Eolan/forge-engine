@@ -52,6 +52,7 @@ pub mod raytrace;
 pub mod reflection_history;
 pub mod restir;
 pub mod settings;
+pub mod shadow_atlas;
 pub mod shadow_rings;
 pub mod shallow;
 pub mod sharc;
