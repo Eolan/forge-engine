@@ -611,6 +611,9 @@ impl Gallery {
         };
         self.renderer.ring_budget = s.get(v.ring_budget) as usize;
         self.renderer.ring_lod = s.get(v.ring_lod) as f32;
+        if s.changed_since(v.ring_lod, seen) {
+            self.renderer.invalidate_shadow_rings();
+        }
         if let Some(var) = v.denoiser
             && s.changed_since(var, seen)
         {

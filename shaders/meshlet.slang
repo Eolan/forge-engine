@@ -1745,6 +1745,15 @@ bool visible_last_frame(Frame* f, float3 world_center, float radius)
     return pyramid_visible(f, f[0].prev_hzb_image, aabb, f[0].znear / (-c.z - radius));
 }
 
+// In a shadow ring's draw a caster beyond the ring's depth range lies flat on its end and still
+// casts (D-108). Any other view's position, as it is.
+float4 ring_flattened(Frame* f, float4 clip)
+{
+    if ((f[0].options & OPTION_RING) != 0)
+        clip.z = saturate(clip.z);
+    return clip;
+}
+
 // A shadow ring's view is orthographic (D-108): an error is as many texels at any distance, so
 // its LOD divides by 1 and `p11` holds its texels per metre. Any other view's, `distance`.
 float ring_or_distance(Frame* f, float distance)
@@ -3298,7 +3307,7 @@ void mesh_cutout_main(
         bool uvs = f[0].meshes[inst.mesh].uvs != 0;
         PagedVertex v = paged_vertex(f, base, m, thread);
         float3 relative = instance_point(f, inst, v.position);
-        verts[thread].position = mul(f[0].view_proj, float4(relative, 1));
+        verts[thread].position = ring_flattened(f, mul(f[0].view_proj, float4(relative, 1)));
         verts[thread].uv = uvs ? paged_uv(f, uv_stream(f, base, m), thread) : float2(0.0);
         verts[thread].ground = v.position.xz;
         verts[thread].slant = card_slant(normalize(instance_normal(inst, decode_normal(v.normal))), relative);
@@ -3365,7 +3374,7 @@ FallbackCutoutVertex vertex_cutout_main(uint vertex_index : SV_VulkanVertexID, u
     PagedVertex v = paged_vertex(f, base, m, local);
     float3 relative = instance_point(f, inst, v.position);
     FallbackCutoutVertex o;
-    o.position = mul(f[0].view_proj, float4(relative, 1));
+    o.position = ring_flattened(f, mul(f[0].view_proj, float4(relative, 1)));
     o.id_base = slot << VISIBILITY_TRIANGLE_BITS;
     o.uv = float2(0.0);
     o.ground = v.position.xz;
@@ -3454,21 +3463,22 @@ void frag_ring_main()
 }
 
 [shader("fragment")]
-void frag_ring_cutout_main(float4 position : SV_Position, float2 uv : TEXCOORD0, float2 ground : TEXCOORD1, float slant : TEXCOORD2, uint id : SV_PrimitiveID, bool front : SV_IsFrontFace)
+void frag_ring_cutout_main(float4 position : SV_Position, float2 uv : TEXCOORD0, float2 ground : TEXCOORD1, float slant : TEXCOORD2, uint id : SV_PrimitiveID)
 {
     float2 dx = ddx(uv);
     float2 dy = ddy(uv);
-    if (!cutout_kept(push.frame, id, uv, front, ground, dx, dy, slant, position))
+    // Both faces, as the rays meet them: `true` for the face the camera's raster would test.
+    if (!cutout_kept(push.frame, id, uv, true, ground, dx, dy, slant, position))
         discard;
 }
 
 [shader("fragment")]
-void frag_ring_fallback_cutout_main(float4 position : SV_Position, nointerpolation uint id_base : VISIBILITY_ID, float2 uv : TEXCOORD0, float2 ground : TEXCOORD1, float slant : TEXCOORD2, uint triangle : SV_PrimitiveID, bool front : SV_IsFrontFace)
+void frag_ring_fallback_cutout_main(float4 position : SV_Position, nointerpolation uint id_base : VISIBILITY_ID, float2 uv : TEXCOORD0, float2 ground : TEXCOORD1, float slant : TEXCOORD2, uint triangle : SV_PrimitiveID)
 {
     uint id = id_base | triangle;
     float2 dx = ddx(uv);
     float2 dy = ddy(uv);
-    if (!cutout_kept(push.frame, id, uv, front, ground, dx, dy, slant, position))
+    if (!cutout_kept(push.frame, id, uv, true, ground, dx, dy, slant, position))
         discard;
 }
 
@@ -9459,6 +9469,13 @@ RingQuery ring_query(Frame* f, RingSet* set, float3 relative, float3 g, float ex
     float across = max(dot(g, r.axis_s.xyz), 0.05);
     q.slope = clamp(float2(-dot(g, r.axis_u.xyz), -dot(g, r.axis_v.xyz)) / across, -8.0, 8.0) * r.texel * r.inv_range;
     q.z = (dot(r.axis_s.xyz, p) + r.axis_s.w + r.texel * set[0].bias + extra) * r.inv_range;
+    // Under the ring's depth range: nothing is known of it, and a cleared texel would read as a
+    // caster.
+    if (q.z < 0.0)
+    {
+        q.found = false;
+        return q;
+    }
     q.turn = noise.y * 6.2831853;
     // What stands in the way, within the widest penumbra asked for.
     float search = clamp(set[0].search_reach * set[0].tan_radius / r.texel, 1.0, set[0].max_radius);
@@ -9468,7 +9485,7 @@ RingQuery ring_query(Frame* f, RingSet* set, float3 relative, float3 g, float ex
         float2 o = ring_disc(k, set[0].search_taps, search, q.turn);
         int2 t = int2(floor(q.at + o));
         float d = g_sampled_images_r[NonUniformResourceIndex(r.image)].Load(int3(t, 0));
-        float here = q.z + dot(q.slope, o);
+        float here = max(q.z + dot(q.slope, o), 0.0);
         if (d > here)
         {
             q.blockers += 1;
@@ -9497,7 +9514,7 @@ float ring_light(Frame* f, RingSet* set, float3 relative, float3 g, float extra,
     for (uint k = 0; k < taps; k++)
     {
         float2 o = ring_disc(k, taps, q.radius, q.turn);
-        lit += ring_tap(q.r.image, q.at + o, q.z + dot(q.slope, o));
+        lit += ring_tap(q.r.image, q.at + o, max(q.z + dot(q.slope, o), 0.0));
     }
     return lit / float(taps);
 }
@@ -9603,7 +9620,7 @@ void sun_shadow_ring_trace_main(uint3 id : SV_DispatchThreadID)
     float r = sqrt(u.x) * q.radius;
     float a = 6.2831853 * u.y;
     float2 o = float2(cos(a), sin(a)) * r;
-    bool blocked = ring_tap(q.r.image, q.at + o, q.z + dot(q.slope, o)) < 0.5;
+    bool blocked = ring_tap(q.r.image, q.at + o, max(q.z + dot(q.slope, o), 0.0)) < 0.5;
     if (!blocked)
         penumbra[pixel] = NRD_MISS;
     else

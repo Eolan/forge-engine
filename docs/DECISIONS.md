@@ -12743,6 +12743,12 @@ What building it changed from the text above:
 - **Not built:** culling by cones and by a ring's own previous pyramid, and `r.shadows.mover_cull`. They wait for a
   frame that shows they pay.
 
+- **What a draw could not fit is seen:** each draw's counters are read back, and when a list was too short it grows and
+  the rings draw again. On a dense walk the widest ring first asked for 400,000 work items more than the camera's lists.
+- **A frame's transients are laid out the same however many draws it makes:** a pass before and after them all holds them.
+- **Tiles are gone round when cluster pages come in,** a tile a frame for 15 s after the last: pages name no tile. A skinned
+  mover bending where it stands counts as moved.
+
 **Measured** (RTX 5070 Ti, validation clean on the mesh and the fallback paths, against the rays at a fixed exposure):
 
 | View | Pixels over 2 codes | ꟻLIP mean |
@@ -12762,8 +12768,9 @@ Below 2 codes the difference is the rays' finer contacts. `docs/PROFILE.md` has 
 - **Grass casts nothing.** Particles and the fog's sun still go by the rays where there are rays, and by nothing
   without: step 5's.
 - **Rings do not ask for cluster pages:** a caster the camera does not see stays at the detail it has.
-- **A turning sun redraws one ring a frame:** 2.7 ms at 20 s a day over the city's million instances, and at a game's
-  sun a ring every few seconds.
+- **A turning sun redraws one ring a frame,** the one furthest past its limit (0.1° for the finest, doubling with each
+  ring). A far ring is costly at once: in the city's million instances a frame of the widest ring takes tens of
+  milliseconds, once every few seconds under a game's sun. Splitting that redraw over frames is left.
 
 ## D-109 — Clear glass in a streamed world, near the camera only 🟡 (proposed 2026-11-08, waiting for the owner)
 

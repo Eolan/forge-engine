@@ -829,7 +829,7 @@ const OPTION_RING_MOVERS: u32 = 1 << 17;
 /// With [`OPTION_RING`]: a ring past the scene's far shadows, casting what the far rays meet.
 const OPTION_RING_FAR: u32 = 1 << 18;
 /// A frame's shadow-ring draws, at most: each has a frame block.
-const RING_CHAINS: u64 = 40;
+const RING_CHAINS: u64 = 48;
 
 /// An instance record's bounding sphere, in the coordinates of [`CellPos::to_f64`].
 fn record_bounds(record: &GpuInstance) -> (DVec3, f64) {
@@ -839,6 +839,12 @@ fn record_bounds(record: &GpuInstance) -> (DVec3, f64) {
         f64::from(record.radius),
     )
 }
+
+/// Where the counts of what did not fit lie among a cull's counters ([`FrameStats`]).
+const RING_STAT_VISIBLE_OVERFLOW: usize = 6;
+const RING_STAT_WORK_OVERFLOW: usize = 11;
+/// How long after cluster pages last came in the rings' tiles are gone round, frames.
+const RING_REFRESH_FRAMES: u32 = 900;
 
 /// Mirrors `RingPush` in `meshlet.slang`.
 #[repr(C)]
@@ -889,8 +895,8 @@ struct ShadowRingsGpu {
     blocks: Vec<Buffer>,
     /// Per frame slot, the `RingSet` the shading reads.
     sets: Vec<Buffer>,
-    /// Where the draws' culls count: nobody reads it.
-    stats: GraphBuffer,
+    /// Per frame slot, where each draw's culls count: read back for what did not fit.
+    stats: Vec<GraphBuffer>,
     solid: Pipeline,
     cutouts: Pipeline,
     sample: Pipeline,
@@ -916,6 +922,27 @@ struct RingIo {
     page_table: forge_gpu::BufferHandle,
     instances: Option<forge_gpu::BufferHandle>,
     cells: Option<forge_gpu::BufferHandle>,
+}
+
+impl RingIo {
+    /// The transients: every frame's bracket passes hold them all, so that how many draws a frame
+    /// makes doesn't change how they are laid out in memory.
+    fn transients(&self) -> impl Iterator<Item = forge_gpu::BufferHandle> {
+        [
+            Some(self.work),
+            Some(self.roots),
+            Some(self.cluster_lookback),
+            Some(self.lookback),
+            Some(self.indirect),
+            Some(self.clusters),
+            self.cell_list,
+            self.draws,
+            Some(self.visible),
+            Some(self.raster),
+        ]
+        .into_iter()
+        .flatten()
+    }
 }
 
 /// One draw of a ring: its block, where it goes, and whether that starts cleared.
@@ -5053,6 +5080,10 @@ pub struct MeshletRenderer {
     ring_frame: Cell<u64>,
     /// What the world changed since the last frame, for the rings' tiles: centre and radius.
     ring_changes: RefCell<Vec<(DVec3, f64)>>,
+    /// The rings' list capacities once a draw found the camera's too small: work, visible.
+    ring_lists: Cell<[u32; 2]>,
+    /// Frames more to go round the rings' tiles since cluster pages last came in.
+    ring_refresh: Cell<u32>,
     /// Whether the shadow rings give the sun's shadow (`r.shadows.mode`).
     pub shadow_rings: bool,
     /// Whether a denoiser reads them through [`Self::trace_sun_shadow`]: else they filter it
@@ -5715,6 +5746,8 @@ impl MeshletRenderer {
             ring_cache: RefCell::new(crate::shadow_rings::RingCache::new()),
             ring_frame: Cell::new(0),
             ring_changes: RefCell::new(Vec::new()),
+            ring_lists: Cell::new([0; 2]),
+            ring_refresh: Cell::new(0),
             shadow_rings: false,
             ring_denoised: false,
             ring_filter: crate::shadow_rings::RingFilter::default(),
@@ -6925,10 +6958,22 @@ impl MeshletRenderer {
             );
         }
         let ring_changes = scene.take_ring_changes();
-        let ring_moved = scene
+        let mut ring_moved = scene
             .movers
             .as_ref()
             .map_or(Vec::new(), |m| std::mem::take(&mut m.moved.borrow_mut()));
+        // A skinned mover that bends where it stands has moved all the same.
+        if let (true, Some(movers), Some(skins)) = (skins_ran, &scene.movers, &scene.skins) {
+            let bent: HashSet<u32> = skins.meshes.iter().map(|&(mesh, _)| mesh).collect();
+            ring_moved.extend(
+                movers
+                    .last
+                    .borrow()
+                    .iter()
+                    .filter(|record| bent.contains(&record.mesh))
+                    .map(record_bounds),
+            );
+        }
         let (sun_rings, rings) = self
             .shadow_ring_passes(
                 graph,
@@ -6997,6 +7042,8 @@ impl MeshletRenderer {
     ) -> Result<()> {
         use crate::shadow_rings::{RING_COUNT, RING_TEXELS};
         self.shadow_rings = true;
+        // What changed while they were off was not kept.
+        self.ring_cache.get_mut().clear();
         if self.rings.is_some() {
             return Ok(());
         }
@@ -7127,13 +7174,19 @@ impl MeshletRenderer {
                 std::mem::size_of::<crate::shadow_rings::GpuRingSet>() as u64,
                 "shadow ring set",
             )?,
-            stats: GraphBuffer::new(device.create_buffer(BufferDesc {
-                size: STATS_BYTES,
-                usage: vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_DST,
-                location: MemoryLocation::GpuOnly,
-                category: MemoryCategory::Frame,
-                name: "shadow ring counters",
-            })?),
+            stats: (0..FRAMES_IN_FLIGHT)
+                .map(|i| {
+                    device
+                        .create_buffer(BufferDesc {
+                            size: RING_CHAINS * STATS_BYTES,
+                            usage: vk::BufferUsageFlags::STORAGE_BUFFER,
+                            location: MemoryLocation::GpuToCpu,
+                            category: MemoryCategory::Frame,
+                            name: &format!("shadow ring counters {i}"),
+                        })
+                        .map(GraphBuffer::new)
+                })
+                .collect::<Result<Vec<_>>>()?,
             solid,
             cutouts,
             sample: sample_pipeline,
@@ -7141,6 +7194,11 @@ impl MeshletRenderer {
         });
         tracing::info!("the sun's shadow rings are made (D-108)");
         Ok(())
+    }
+
+    /// Has the rings drawn again from nothing: what they hold no longer holds (`r.shadows.lod`).
+    pub fn invalidate_shadow_rings(&mut self) {
+        self.ring_cache.get_mut().clear();
     }
 
     /// Tells the rings that what stands within `radius` metres of `center` (the coordinates of
@@ -7177,9 +7235,62 @@ impl MeshletRenderer {
         let frame = self.ring_frame.get();
         self.ring_frame.set(frame + 1);
         let mut cache = self.ring_cache.borrow_mut();
+        // What this slot's last frame could not fit (its fence has passed): longer lists, and
+        // every tile again, as a tile drawn short is not known to be.
+        let counters: &'f GraphBuffer = &gpu.stats[slot.index];
+        let mut counted = vec![0_u32; (RING_CHAINS * STATS_BYTES / 4) as usize];
+        counters.read(0, &mut counted);
+        counters.write(0, &vec![0_u32; counted.len()]);
+        let short_by = counted.chunks(STAT_COUNT).fold([0_u32; 2], |sum, c| {
+            [
+                sum[0].max(c[RING_STAT_WORK_OVERFLOW]),
+                sum[1].max(c[RING_STAT_VISIBLE_OVERFLOW]),
+            ]
+        });
+        let [work, visible] = self.ring_lists.get();
+        let (work, visible) = (work.max(self.work_target), visible.max(self.visible_target));
+        let grown = (
+            if short_by[0] > 0 {
+                (work * 2).max(work + short_by[0]).min(WORK_MAX_CAPACITY)
+            } else {
+                work
+            },
+            if short_by[1] > 0 {
+                (visible * 2)
+                    .max(visible + short_by[1])
+                    .min(self.visible_max)
+            } else {
+                visible
+            },
+        );
+        let (work, visible) = if grown != (work, visible) {
+            tracing::warn!(
+                work = grown.0,
+                visible = grown.1,
+                short_work = short_by[0],
+                short_visible = short_by[1],
+                "a shadow ring's lists were too short: longer, and the rings drawn again"
+            );
+            self.ring_lists.set([grown.0, grown.1]);
+            cache.clear();
+            grown
+        } else {
+            (work, visible)
+        };
         for (center, radius) in self.ring_changes.borrow_mut().drain(..).chain(changes) {
             cache.mark_changed(center, radius);
         }
+        // Cluster pages that come in name no tile: the tiles are gone round for a while after.
+        if scene
+            .streamer
+            .as_ref()
+            .is_some_and(|s| !s.plans[slot.index].pages.is_empty())
+        {
+            self.ring_refresh.set(RING_REFRESH_FRAMES);
+        }
+        let refresh = self.ring_refresh.get() > 0;
+        self.ring_refresh
+            .set(self.ring_refresh.get().saturating_sub(1));
         let plan = cache.plan(
             camera,
             self.sun_dir.as_dvec3(),
@@ -7187,6 +7298,7 @@ impl MeshletRenderer {
             movers,
             &moved,
             frame,
+            refresh,
         );
         let statics: Vec<ImageHandle> = gpu.statics.iter().map(|i| graph.import(i)).collect();
         let composed: Vec<ImageHandle> = gpu.composed.iter().map(|i| graph.import(i)).collect();
@@ -7218,7 +7330,9 @@ impl MeshletRenderer {
                 lod_threshold: self.ring_lod,
                 target_width: RING_TEXELS,
                 target_height: RING_TEXELS,
-                stats: gpu.stats.address(),
+                work_capacity: work,
+                visible_capacity: visible,
+                cluster_groups: cull_groups(work),
                 page_need: 0,
                 ladder: 0,
                 options: OPTION_RING | layer,
@@ -7228,10 +7342,8 @@ impl MeshletRenderer {
             }
         };
         let texels = |slots: u32| slots * TILE_TEXELS;
-        let mut chains_planned = plan.draws.len();
-        chains_planned += plan.movers.iter().filter(|m| **m).count();
         let cells = (base.flags & FLAG_INSTANCE_CELLS) != 0;
-        let ring_io = (chains_planned > 0).then(|| {
+        let ring_io = {
             let storage = vk::BufferUsageFlags::STORAGE_BUFFER;
             let args = storage | vk::BufferUsageFlags::INDIRECT_BUFFER;
             let buffer = |graph: &mut FrameGraph<'f>, name: &'static str, size: u64, usage| {
@@ -7239,22 +7351,12 @@ impl MeshletRenderer {
             };
             let room = transient_instances(scene.instance_count).div_ceil(64);
             RingIo {
-                work: buffer(
-                    graph,
-                    "ring work list",
-                    u64::from(self.work_target) * 8,
-                    storage,
-                ),
-                roots: buffer(
-                    graph,
-                    "ring root list",
-                    u64::from(self.work_target) * 8,
-                    storage,
-                ),
+                work: buffer(graph, "ring work list", u64::from(work) * 8, storage),
+                roots: buffer(graph, "ring root list", u64::from(work) * 8, storage),
                 cluster_lookback: buffer(
                     graph,
                     "ring cluster status words",
-                    cull_lookback_bytes(self.work_target),
+                    cull_lookback_bytes(work),
                     storage,
                 ),
                 lookback: buffer(
@@ -7287,34 +7389,38 @@ impl MeshletRenderer {
                     buffer(
                         graph,
                         "ring cluster draws",
-                        2 * u64::from(self.visible_target) * u64::from(DRAW_COMMAND_BYTES),
+                        2 * u64::from(visible) * u64::from(DRAW_COMMAND_BYTES),
                         args,
                     )
                 }),
                 visible: buffer(
                     graph,
                     "ring visible clusters",
-                    u64::from(self.visible_target) * 8,
+                    u64::from(visible) * 8,
                     storage,
                 ),
                 raster: buffer(
                     graph,
                     "ring raster lists",
-                    2 * u64::from(self.visible_target) * 4,
+                    2 * u64::from(visible) * 4,
                     storage,
                 ),
-                stats: graph.import_buffer(&gpu.stats),
+                stats: graph.import_buffer(counters),
                 pool: io.pool,
                 page_table: io.page_table,
                 instances: io.instances,
                 cells: io.cells,
             }
-        });
+        };
+        // Every frame, however many draws it makes: see `RingIo::transients`.
+        let mut opening = graph.pass("shadow/ring clears");
+        for buffer in ring_io.transients() {
+            opening = opening.buffer(buffer, BufferAccess::TransferDst);
+        }
+        opening.run(|_, _| Ok(()));
         let mut index = 0u64;
         let mut chain = |graph: &mut FrameGraph<'f>, block, target, rect, clear| {
-            if index < RING_CHAINS
-                && let Some(ring_io) = ring_io
-            {
+            if index < RING_CHAINS {
                 self.ring_chain(
                     graph,
                     gpu,
@@ -7404,6 +7510,11 @@ impl MeshletRenderer {
                 chain(graph, block, to, rect, false);
             }
         }
+        let mut closing = graph.pass("shadow/ring clears");
+        for buffer in ring_io.transients() {
+            closing = closing.buffer(buffer, BufferAccess::TransferSrc);
+        }
+        closing.run(|_, _| Ok(()));
         // What the shading reads.
         let mut rings = [crate::shadow_rings::GpuShadowRing::none(); RING_COUNT];
         for (i, ring) in rings.iter_mut().enumerate() {
@@ -7491,16 +7602,15 @@ impl MeshletRenderer {
         let blocks: &'f Buffer = &gpu.blocks[slot.index];
         let offset = chain.index * FRAME_BLOCK_STRIDE;
         let address = blocks.address() + offset;
-        let block = chain.block;
-        let stats: &'f GraphBuffer = &gpu.stats;
+        let mut block = chain.block;
+        block.stats = gpu.stats[slot.index].address() + chain.index * STATS_BYTES;
         let cells = io.cell_list.is_some();
         let mut clears = graph
             .pass("shadow/ring clears")
             .buffer(io.indirect, BufferAccess::TransferDst)
             .buffer(io.clusters, BufferAccess::TransferDst)
             .buffer(io.lookback, BufferAccess::TransferDst)
-            .buffer(io.cluster_lookback, BufferAccess::TransferDst)
-            .buffer(io.stats, BufferAccess::TransferDst);
+            .buffer(io.cluster_lookback, BufferAccess::TransferDst);
         if let Some(list) = io.cell_list {
             clears = clears.buffer(list, BufferAccess::TransferDst);
         }
@@ -7530,7 +7640,6 @@ impl MeshletRenderer {
             }
             commands.fill_buffer(lookback, 0, lookback.size() & !3, 0);
             commands.fill_buffer(cluster_lookback, 0, cluster_lookback.size() & !3, 0);
-            commands.fill_buffer(stats, 0, STATS_BYTES, 0);
             Ok(())
         });
         if let Some(list) = io.cell_list {
@@ -7605,7 +7714,7 @@ impl MeshletRenderer {
         let solid = &gpu.solid;
         let cutouts = scene.cutout_raster().then_some(&gpu.cutouts);
         let triangles: &'f Buffer = &scene.pool;
-        let capacity = self.visible_target;
+        let capacity = block.visible_capacity;
         let fragment = if cutouts.is_some() {
             S::FRAGMENT_SHADER
         } else {

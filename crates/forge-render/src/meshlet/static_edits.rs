@@ -15,7 +15,7 @@
 //! (#79) for what it uncovers.
 
 use std::cell::RefCell;
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
 
 use forge_gpu::{
@@ -37,8 +37,11 @@ pub(super) struct StaticEdits {
     bounds: Vec<Vec4>,
     /// The records changed since a frame last uploaded them.
     dirty: RefCell<BTreeSet<u32>>,
-    /// Where something has changed since the shadow rings last asked, as bounding spheres.
+    /// Where the records a frame has uploaded changed something since the shadow rings last
+    /// asked, as bounding spheres: not before, as the rings' culls read the table's records.
     changed: RefCell<Vec<(DVec3, f64)>>,
+    /// Per record not uploaded yet, where it stood when it first changed.
+    stood: RefCell<HashMap<u32, (DVec3, f64)>>,
     /// Per frame slot, room for [`EDITS_PER_FRAME`] records the GPU copies from.
     staging: Vec<Buffer>,
 }
@@ -77,6 +80,7 @@ impl StaticEdits {
                 .collect(),
             dirty: RefCell::new(BTreeSet::new()),
             changed: RefCell::new(Vec::new()),
+            stood: RefCell::new(HashMap::new()),
             staging,
         })
     }
@@ -91,7 +95,10 @@ impl StaticEdits {
         let mut records = self.records.borrow_mut();
         let record = &mut records[instance as usize];
         let bounds = self.bounds[record.mesh as usize];
-        self.changed.borrow_mut().push(record_bounds(record));
+        self.stood
+            .borrow_mut()
+            .entry(instance)
+            .or_insert_with(|| record_bounds(record));
         let position = origin.offset(transform.position);
         let center = transform.rotation
             * (bounds.truncate() * transform.scale * Vec3::from(record.stretch))
@@ -102,7 +109,6 @@ impl StaticEdits {
         record.rotation = transform.rotation.to_array();
         record.center = center.to_array();
         record.radius = bounds.w * transform.scale;
-        self.changed.borrow_mut().push(record_bounds(record));
         self.dirty.borrow_mut().insert(instance);
     }
 
@@ -116,7 +122,10 @@ impl StaticEdits {
         let mut records = self.records.borrow_mut();
         let record = &mut records[instance as usize];
         record.flags = (record.flags & !INSTANCE_VISIBILITY) | (bits & INSTANCE_VISIBILITY);
-        self.changed.borrow_mut().push(record_bounds(record));
+        self.stood
+            .borrow_mut()
+            .entry(instance)
+            .or_insert_with(|| record_bounds(record));
         self.dirty.borrow_mut().insert(instance);
     }
 
@@ -163,6 +172,12 @@ impl StaticEdits {
             dirty.remove(i);
         }
         let batch: Vec<GpuInstance> = taken.iter().map(|&i| records[i as usize]).collect();
+        let (mut changed, mut stood) = (self.changed.borrow_mut(), self.stood.borrow_mut());
+        for (i, record) in taken.iter().zip(&batch) {
+            changed.extend(stood.remove(i));
+            changed.push(record_bounds(record));
+        }
+        drop((changed, stood));
         self.staging[slot].write(0, &batch);
         // One copy a run of consecutive instances (a forest added in one go is one run).
         let mut regions: Vec<(u64, u64, u64)> = Vec::new();
