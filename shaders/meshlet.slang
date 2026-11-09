@@ -242,6 +242,10 @@ public struct CellBounds
     public float pad;
 };
 
+// `Frame::options` of a shadow ring's draw (D-108): an orthographic view whose LOD goes by its
+// texels, and which layer it draws: the casters that stay, or with OPTION_RING_MOVERS the movers.
+static const uint OPTION_RING = 1u << 16;
+static const uint OPTION_RING_MOVERS = 1u << 17;
 public static const uint FLAG_FREEZE_CULLING = 1;
 public static const uint FLAG_CONE_CULLING = 2;
 public static const uint FLAG_FRUSTUM_CULLING = 4;
@@ -598,6 +602,8 @@ public struct Frame
     public NearLamps* near_lamps;   // the frame's lamps by columns round the camera when none has regions (#386), null: none
     public float ray_glow;          // what a diffuse ray meets of a glow, times this (`MeshletRenderer::ray_glow`)
     public uint hollow_backs;       // not 0: a traced ray's back-face hit takes the probes' light (`set_hollow_backs`), a world of open shells
+    public uint ring_mover_first;   // a shadow ring's draw (OPTION_RING, D-108): the movers' first instance
+    public uint ring_mover_end;     // and the one after their last
 };
 
 // Whether this thread's rays meet the movers: every pass's but the probes' unless their scene asks
@@ -1737,12 +1743,19 @@ bool visible_last_frame(Frame* f, float3 world_center, float radius)
     return pyramid_visible(f, f[0].prev_hzb_image, aabb, f[0].znear / (-c.z - radius));
 }
 
+// A shadow ring's view is orthographic (D-108): an error is as many texels at any distance, so
+// its LOD divides by 1 and `p11` holds its texels per metre. Any other view's, `distance`.
+float ring_or_distance(Frame* f, float distance)
+{
+    return (f[0].options & OPTION_RING) != 0 ? 1.0 : distance;
+}
+
 // Projected size in pixels of an object-space error `error` carried by a world-space sphere,
 // measured at the sphere's nearest point (conservative): a length L at view distance d spans
 // L * p11 / d in NDC, i.e. half that times the viewport height in pixels.
 float lod_error_pixels(Frame* f, float3 center, float radius, float error)
 {
-    float d = max(length(center) - radius, f[0].znear);
+    float d = ring_or_distance(f, max(length(center) - radius, f[0].znear));
     return error * f[0].p11 * 0.5 * f[0].viewport_height / d;
 }
 
@@ -1775,6 +1788,8 @@ bool lod_selected(Frame* f, Meshlet m, InstancePose pose, float scale, bool stre
 // Records that `page` is wanted: `px` pixels of error would appear without it.
 void want_page(Frame* f, uint page, float px)
 {
+    if (f[0].page_need == nullptr)
+        return; // a shadow ring's draw shows what the camera's cull made resident
     uint unused;
     InterlockedMax(f[0].page_need[page], asuint(max(px, 0.0)), unused);
 }
@@ -1839,8 +1854,8 @@ bool group_possible(Frame* f, Mesh* mesh, Instance* inst, uint local_group, floa
     // holds.
     for (uint l = l0; l <= l1; l++)
     {
-        float self_far = dist + mesh[0].self_reach_max[l] * scale;
-        float parent_near = max(dist - mesh[0].parent_reach_max[l] * scale, f[0].znear);
+        float self_far = ring_or_distance(f, dist + mesh[0].self_reach_max[l] * scale);
+        float parent_near = ring_or_distance(f, max(dist - mesh[0].parent_reach_max[l] * scale, f[0].znear));
         float self_min_px = mesh[0].self_error_min[l] * scale * k / self_far;
         float parent_max_px = mesh[0].parent_error_max[l] * scale * k / parent_near;
         if ((self_min_px <= t || streamed) && parent_max_px > t)
@@ -2532,8 +2547,8 @@ bool level_possible(Frame* f, Mesh* mesh, uint l, float scale, float dist)
 {
     float k = f[0].p11 * 0.5 * f[0].viewport_height;
     float t = f[0].lod_threshold;
-    float self_far = dist + mesh[0].self_reach_max[l] * scale;
-    float parent_near = max(dist - mesh[0].parent_reach_max[l] * scale, f[0].znear);
+    float self_far = ring_or_distance(f, dist + mesh[0].self_reach_max[l] * scale);
+    float parent_near = ring_or_distance(f, max(dist - mesh[0].parent_reach_max[l] * scale, f[0].znear));
     float self_min_px = mesh[0].self_error_min[l] * scale * k / self_far;
     float parent_max_px = mesh[0].parent_error_max[l] * scale * k / parent_near;
     bool streamed = (f[0].flags & FLAG_STREAMING) != 0; // see `group_possible`
@@ -2551,7 +2566,7 @@ uint instance_roots(Frame* f, Mesh* mesh, float scale, float dist)
 {
     if ((f[0].flags & (FLAG_LOD | FLAG_GROUP_WINDOW_OFF)) != FLAG_LOD || mesh[0].root_count == 0)
         return 0;
-    float nearest = max(dist - mesh[0].root_reach_max * scale, f[0].znear);
+    float nearest = ring_or_distance(f, max(dist - mesh[0].root_reach_max * scale, f[0].znear));
     float px = mesh[0].root_error_max * scale * f[0].p11 * 0.5 * f[0].viewport_height / nearest;
     return px <= f[0].lod_threshold ? mesh[0].root_count : 0;
 }
@@ -2765,6 +2780,27 @@ void append_instance_work(Frame* f, uint64_t* status, uint ticket, uint groups, 
     }
 }
 
+// Whether a shadow ring's draw takes instance `index` (D-108): every other view takes them all.
+bool ring_layer_holds(Frame* f, uint index)
+{
+    if ((f[0].options & OPTION_RING) == 0)
+        return true;
+    bool mover = index >= f[0].ring_mover_first && index < f[0].ring_mover_end;
+    return mover == ((f[0].options & OPTION_RING_MOVERS) != 0);
+}
+
+// Whether it takes any of cell `cell`'s 64 instances.
+bool ring_layer_holds_cell(Frame* f, uint cell)
+{
+    if ((f[0].options & OPTION_RING) == 0)
+        return true;
+    uint first = cell * 64;
+    uint end = first + 64;
+    if ((f[0].options & OPTION_RING_MOVERS) != 0)
+        return first < f[0].ring_mover_end && end > f[0].ring_mover_first;
+    return first < f[0].ring_mover_first || end > f[0].ring_mover_end;
+}
+
 // Instance cull 1, one thread per instance: frustum-cull it and append its work
 // (`append_instance_work`). With FLAG_INSTANCE_OCCLUSION, an instance the previous frame's
 // pyramid hides (`visible_last_frame`, the clusters' pass 1 question) waits for this frame's
@@ -2806,7 +2842,8 @@ void cull_main(uint thread : SV_GroupThreadID)
         sphere_radius = inst.radius;
         bool frustum = (f[0].flags & FLAG_FRUSTUM_CULLING) != 0;
         visible = (inst.flags & (INSTANCE_VACANT | INSTANCE_NO_RASTER)) == 0
-            && (!frustum || sphere_in_frustum(f, sphere_center, sphere_radius));
+            && (!frustum || sphere_in_frustum(f, sphere_center, sphere_radius))
+            && ring_layer_holds(f, instance_index);
     }
     uint in_frustum = WaveActiveCountBits(visible);
     if (WaveIsFirstLane() && in_frustum > 0)
@@ -2895,7 +2932,7 @@ void cell_cull_main(uint thread : SV_GroupThreadID)
         CellBounds bounds = f[0].cells[cell];
         float3 sphere = cell_center_relative(f, bounds);
         bool frustum = (f[0].flags & FLAG_FRUSTUM_CULLING) != 0;
-        bool in_view = !frustum || sphere_in_frustum(f, sphere, bounds.radius);
+        bool in_view = (!frustum || sphere_in_frustum(f, sphere, bounds.radius)) && ring_layer_holds_cell(f, cell);
         if (in_view && f[0].pass == PASS_PREVIOUSLY_VISIBLE && (f[0].flags & FLAG_INSTANCE_OCCLUSION) != 0)
             deferred = !visible_last_frame(f, sphere, bounds.radius);
         listed = in_view && !deferred;
@@ -3347,6 +3384,86 @@ uint frag_main(uint id : SV_PrimitiveID) : SV_Target
 uint frag_fallback_main(nointerpolation uint id_base : VISIBILITY_ID, uint triangle : SV_PrimitiveID) : SV_Target
 {
     return id_base | triangle;
+}
+
+// -------------------------------------------------------- the shadow rings' raster ---
+// D-108: depth alone, of the clusters a ring's draw listed. Cut-out clusters take `mesh_cutout_main`
+// and the fragments below.
+
+[shader("mesh")]
+[outputtopology("triangle")]
+[numthreads(MESH_GROUP_SIZE, 1, 1)]
+void ring_mesh_main(
+    uint thread : SV_GroupThreadID,
+    uint3 group : SV_GroupID,
+    out vertices VertexOut verts[MAX_VERTICES],
+    out indices uint3 tris[MAX_TRIANGLES])
+{
+    Frame* f = push.frame;
+    uint index = grid_index(group);
+    uint vertex_count = 0;
+    uint triangle_count = 0;
+    uint base = 0;
+    Meshlet m = {};
+    Instance inst = {};
+    if (index < pass_args(f)[3])
+    {
+        uint2 record = f[0].visible[f[0].raster[index]];
+        m = f[0].meshlets[record.y & MESHLET_INDEX_MASK];
+        inst = f[0].instances[record.x];
+        vertex_count = m.vertex_count;
+        triangle_count = m.triangle_count;
+        base = payload_base(f, m);
+    }
+    SetMeshOutputCounts(vertex_count, triangle_count);
+    if (thread < vertex_count)
+    {
+        PagedVertex v = paged_vertex(f, base, m, thread);
+        float4 clip = mul(f[0].view_proj, float4(instance_point(f, inst, v.position), 1));
+        // A caster beyond the ring's depth range lies flat on its end: it still casts.
+        clip.z = saturate(clip.z);
+        verts[thread].position = clip;
+    }
+    for (uint t = thread; t < triangle_count; t += MESH_GROUP_SIZE)
+        tris[t] = uint3(paged_index(f, base, m, t, 0), paged_index(f, base, m, t, 1), paged_index(f, base, m, t, 2));
+}
+
+[shader("vertex")]
+float4 ring_vertex_main(uint vertex_index : SV_VulkanVertexID, uint slot : SV_VulkanInstanceID) : SV_Position
+{
+    Frame* f = push.frame;
+    uint2 record = f[0].visible[slot];
+    Instance inst = f[0].instances[record.x];
+    Meshlet m = f[0].meshlets[record.y & MESHLET_INDEX_MASK];
+    uint base = payload_base(f, m);
+    PagedVertex v = paged_vertex(f, base, m, vertex_index - base / PAGED_VERTEX_BYTES);
+    float4 clip = mul(f[0].view_proj, float4(instance_point(f, inst, v.position), 1));
+    clip.z = saturate(clip.z);
+    return clip;
+}
+
+[shader("fragment")]
+void frag_ring_main()
+{
+}
+
+[shader("fragment")]
+void frag_ring_cutout_main(float4 position : SV_Position, float2 uv : TEXCOORD0, float2 ground : TEXCOORD1, float slant : TEXCOORD2, uint id : SV_PrimitiveID, bool front : SV_IsFrontFace)
+{
+    float2 dx = ddx(uv);
+    float2 dy = ddy(uv);
+    if (!cutout_kept(push.frame, id, uv, front, ground, dx, dy, slant, position))
+        discard;
+}
+
+[shader("fragment")]
+void frag_ring_fallback_cutout_main(float4 position : SV_Position, nointerpolation uint id_base : VISIBILITY_ID, float2 uv : TEXCOORD0, float2 ground : TEXCOORD1, float slant : TEXCOORD2, uint triangle : SV_PrimitiveID, bool front : SV_IsFrontFace)
+{
+    uint id = id_base | triangle;
+    float2 dx = ddx(uv);
+    float2 dy = ddy(uv);
+    if (!cutout_kept(push.frame, id, uv, front, ground, dx, dy, slant, position))
+        discard;
 }
 
 // -------------------------------------------------------------------- grass ---
@@ -8559,6 +8676,9 @@ uint shade_pixel<let SHADOWS : int>(uint class_index, uint2 pixel, uint vis)
     s.traced = mirror_ray && !grass && resolve_push.request_image != 0xFFFFFFFFu;
     // Its shadow rays (the sun's, the lamps'): the trees' cards near, their proxies far.
     g_ray_mask = shadow_world(f, surface_relative, pixel);
+    // The rings' shadow (D-108) where no ray can trace: the same image the denoiser's would be.
+    if ((SHADOWS == 0 || f[0].tlas == 0) && (f[0].flags & FLAG_SHADOWS) != 0 && resolve_push.sun_shadow != 0xFFFFFFFFu)
+        s.shadow = denoised_sun_shadow(f, grass ? s.n : leaf_shadow_normal(f, mat, s.n), pixel);
     if (SHADOWS != 0 && f[0].tlas != 0 && (f[0].flags & FLAG_SHADOWS) != 0)
     {
         // A leaf card's shadow is the sun's from whichever side faces it (#346): the light
@@ -9213,6 +9333,167 @@ void sun_shadow_trace_main(uint3 id : SV_DispatchThreadID)
     }
     ClosestHit hit = trace_closest(f, ray, true);
     penumbra[pixel] = hit.hit ? min(0.5 * hit.t * p.tan_radius, 32768.0) : NRD_MISS;
+}
+
+// ------------------------------------------------------ the shadow rings (D-108) ---
+// The sun's shadow without rays. Mirrors `GpuShadowRing` and `GpuRingSet` in shadow_rings.rs.
+
+static const uint RING_COUNT = 5;
+static const float RING_TEXELS = 2048.0;
+static const float GOLDEN_ANGLE = 2.39996323;
+
+struct ShadowRing
+{
+    float4 axis_u;   // across the sun, and what to add to a dot with it for metres across the ring
+    float4 axis_v;
+    float4 axis_s;   // towards the sun, and what to add for metres over the bottom of its depth
+    float texel;     // metres
+    float inv_width;
+    float inv_range;
+    uint image;      // sampled index of its composed layer, or 0xFFFFFFFF: not ready
+};
+
+struct RingSet
+{
+    ShadowRing rings[RING_COUNT];
+    float tan_radius;   // of the sun's disc
+    uint search_taps;
+    uint filter_taps;
+    float max_radius;   // texels
+    float search_reach; // metres along the sun: the widest penumbra the blocker search looks for
+    float bias;         // texels
+    float normal_offset;// texels
+    float pad;
+};
+
+struct RingPush
+{
+    Frame* frame;
+    RingSet* set;
+    uint vis_image;
+    uint out_image;   // storage (r32f): the square root of the share of the sun seen, as SIGMA's
+    uint width;
+    uint height;
+};
+
+[[vk::push_constant]]
+RingPush ring_push;
+
+// One percentage-closer tap with bilinear weights: `at` in texels, lit where the stored height is
+// not over `z`.
+float ring_tap(uint image, float2 at, float z)
+{
+    float2 corner = floor(at - 0.5);
+    float2 t = at - 0.5 - corner;
+    float4 g = g_sampled_images_r[NonUniformResourceIndex(image)].GatherRed(g_samplers[SAMPLER_NEAREST_CLAMP], (corner + 1.0) / RING_TEXELS);
+    float4 c = float4(g.x <= z ? 1.0 : 0.0, g.y <= z ? 1.0 : 0.0, g.z <= z ? 1.0 : 0.0, g.w <= z ? 1.0 : 0.0);
+    float top = c.w + (c.z - c.w) * t.x;
+    float bottom = c.x + (c.y - c.x) * t.x;
+    return top + (bottom - top) * t.y;
+}
+
+// A disc's `k`-th of `n` points, `radius` wide, turned by `turn`.
+float2 ring_disc(uint k, uint n, float radius, float turn)
+{
+    float r = sqrt((float(k) + 0.5) / float(n)) * radius;
+    float a = float(k) * GOLDEN_ANGLE + turn;
+    return float2(cos(a), sin(a)) * r;
+}
+
+// The share of the sun's disc that `relative` sees, on a surface of normal `g` facing it, by the
+// finest ring holding the point and what its filter reads: a search for what stands between it and
+// the sun, then a filter as wide as the disc and that distance ask. `extra` is a further bias in
+// metres, for what the surface's own LOD may have moved it.
+float ring_light(Frame* f, RingSet* set, float3 relative, float3 g, float extra, uint2 pixel)
+{
+    float2 noise = spatio_temporal_noise(pixel, f[0].noise_frame);
+    ShadowRing r = set[0].rings[0];
+    float3 p = relative;
+    float2 uv = 0.0;
+    uint found = RING_COUNT;
+    float margin = (set[0].max_radius + 2.0) / RING_TEXELS;
+    for (uint i = 0; i < RING_COUNT; i++)
+    {
+        r = set[0].rings[i];
+        if (r.image == 0xFFFFFFFFu)
+            continue;
+        float cos_sun = dot(g, r.axis_s.xyz);
+        p = relative + g * (r.texel * set[0].normal_offset * sqrt(saturate(1.0 - cos_sun * cos_sun)));
+        uv = float2(dot(r.axis_u.xyz, p) + r.axis_u.w, dot(r.axis_v.xyz, p) + r.axis_v.w) * r.inv_width;
+        float edge = min(min(uv.x, uv.y), min(1.0 - uv.x, 1.0 - uv.y)) - margin;
+        if (edge < 0.0)
+            continue;
+        // The last tile's width goes over to the next ring by the noise, not along a line.
+        if (i + 1 < RING_COUNT && set[0].rings[i + 1].image != 0xFFFFFFFFu && edge < noise.x * 0.125)
+            continue;
+        found = i;
+        break;
+    }
+    if (found == RING_COUNT)
+        return 1.0;
+    float2 at = uv * RING_TEXELS;
+    // The receiver's plane: its height along the sun per texel across it.
+    float across = max(dot(g, r.axis_s.xyz), 0.05);
+    float2 slope = clamp(float2(-dot(g, r.axis_u.xyz), -dot(g, r.axis_v.xyz)) / across, -8.0, 8.0) * r.texel * r.inv_range;
+    float z = (dot(r.axis_s.xyz, p) + r.axis_s.w + r.texel * set[0].bias + extra) * r.inv_range;
+    float turn = noise.y * 6.2831853;
+    // What stands in the way, within the widest penumbra asked for.
+    float search = clamp(set[0].search_reach * set[0].tan_radius / r.texel, 1.0, set[0].max_radius);
+    uint blockers = 0;
+    float over = 0.0;
+    for (uint k = 0; k < set[0].search_taps; k++)
+    {
+        float2 o = ring_disc(k, set[0].search_taps, search, turn);
+        int2 t = int2(floor(at + o));
+        float d = g_sampled_images_r[NonUniformResourceIndex(r.image)].Load(int3(t, 0));
+        float here = z + dot(slope, o);
+        if (d > here)
+        {
+            blockers += 1;
+            over += d - here;
+        }
+    }
+    if (blockers == 0)
+        return 1.0;
+    float metres = (over / float(blockers)) / r.inv_range;
+    float radius = clamp(metres * set[0].tan_radius / r.texel, 0.75, set[0].max_radius);
+    float lit = 0.0;
+    for (uint k = 0; k < set[0].filter_taps; k++)
+    {
+        float2 o = ring_disc(k, set[0].filter_taps, radius, turn);
+        lit += ring_tap(r.image, at + o, z + dot(slope, o));
+    }
+    return lit / float(set[0].filter_taps);
+}
+
+[shader("compute")]
+[numthreads(8, 8, 1)]
+void sun_shadow_ring_main(uint3 id : SV_DispatchThreadID)
+{
+    RingPush p = ring_push;
+    if (id.x >= p.width || id.y >= p.height)
+        return;
+    uint2 pixel = id.xy;
+    RWTexture2D<float> shadow = g_storage_images_r32f[NonUniformResourceIndex(p.out_image)];
+    uint vis = g_sampled_images_u32[NonUniformResourceIndex(p.vis_image)].Load(int3(pixel, 0));
+    if (vis == VISIBILITY_EMPTY)
+    {
+        shadow[pixel] = 1.0;
+        return;
+    }
+    Frame* f = p.frame;
+    PixelSurface s = pixel_surface(f, vis, pixel, p.width, p.height);
+    float3 sun = normalize(f[0].sun_dir);
+    float3 n = s.shadow_n;
+    if (dot(n, sun) <= 0.0)
+    {
+        shadow[pixel] = 0.0;
+        return;
+    }
+    // The triangle's own normal where it faces the sun and is known, else the shading's.
+    float3 g = dot(s.g, sun) > 0.0 ? s.g : n;
+    float extra = is_grass(vis) ? 0.0 : s.m.self_error * s.inst.scale;
+    shadow[pixel] = sqrt(saturate(ring_light(f, p.set, s.relative, g, extra, pixel)));
 }
 
 // ------------------------------------------------------ the diffuse bounce (D-088) ---

@@ -277,6 +277,46 @@ impl<'a> Commands<'a> {
         unsafe { self.device.raw().cmd_pipeline_barrier2(self.cb, &info) };
     }
 
+    /// Sets the viewport and the scissor to `rect` of the target, not flipped: NDC +y runs down
+    /// the image.
+    pub fn set_viewport_rect(&self, rect: vk::Rect2D) {
+        let viewport = vk::Viewport {
+            x: rect.offset.x as f32,
+            y: rect.offset.y as f32,
+            width: rect.extent.width as f32,
+            height: rect.extent.height as f32,
+            min_depth: 0.0,
+            max_depth: 1.0,
+        };
+        // SAFETY: recording state.
+        unsafe {
+            self.device.raw().cmd_set_viewport(self.cb, 0, &[viewport]);
+            self.device.raw().cmd_set_scissor(self.cb, 0, &[rect]);
+        }
+    }
+
+    /// Clears `rect` of the depth attachment to `depth`, inside a rendering scope.
+    pub fn clear_depth_rect(&self, rect: vk::Rect2D, depth: f32) {
+        let attachment = vk::ClearAttachment {
+            aspect_mask: vk::ImageAspectFlags::DEPTH,
+            color_attachment: 0,
+            clear_value: vk::ClearValue {
+                depth_stencil: vk::ClearDepthStencilValue { depth, stencil: 0 },
+            },
+        };
+        let clear = vk::ClearRect {
+            rect,
+            base_array_layer: 0,
+            layer_count: 1,
+        };
+        // SAFETY: recording state, inside a rendering scope with a depth attachment.
+        unsafe {
+            self.device
+                .raw()
+                .cmd_clear_attachments(self.cb, &[attachment], &[clear]);
+        }
+    }
+
     /// Sets a full-size viewport with the y axis flipped so NDC +y is up (Y-up worlds render
     /// with counter-clockwise front faces), plus a matching scissor.
     pub fn set_viewport_full(&self, extent: vk::Extent2D) {
@@ -352,6 +392,57 @@ impl<'a> Commands<'a> {
                 vk::ImageLayout::TRANSFER_DST_OPTIMAL,
                 &[region],
                 filter,
+            );
+        }
+    }
+
+    /// Copies rectangles (source offset, destination offset, size) of a 2-D depth image
+    /// (`TRANSFER_SRC_OPTIMAL`) onto another of its format (`TRANSFER_DST_OPTIMAL`).
+    pub fn copy_depth_regions(
+        &self,
+        src: vk::Image,
+        dst: vk::Image,
+        regions: &[(vk::Offset2D, vk::Offset2D, vk::Extent2D)],
+    ) {
+        self.paranoid_barrier();
+        let layers = vk::ImageSubresourceLayers {
+            aspect_mask: vk::ImageAspectFlags::DEPTH,
+            mip_level: 0,
+            base_array_layer: 0,
+            layer_count: 1,
+        };
+        let copies: Vec<vk::ImageCopy> = regions
+            .iter()
+            .map(|&(from, to, extent)| {
+                vk::ImageCopy::default()
+                    .src_subresource(layers)
+                    .dst_subresource(layers)
+                    .src_offset(vk::Offset3D {
+                        x: from.x,
+                        y: from.y,
+                        z: 0,
+                    })
+                    .dst_offset(vk::Offset3D {
+                        x: to.x,
+                        y: to.y,
+                        z: 0,
+                    })
+                    .extent(vk::Extent3D {
+                        width: extent.width,
+                        height: extent.height,
+                        depth: 1,
+                    })
+            })
+            .collect();
+        // SAFETY: recording state; both images are in the transfer layouts their pass declares.
+        unsafe {
+            self.device.raw().cmd_copy_image(
+                self.cb,
+                src,
+                vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
+                dst,
+                vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                &copies,
             );
         }
     }

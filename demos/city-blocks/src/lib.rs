@@ -3995,6 +3995,11 @@ impl Demo for Gallery {
                 }
             }
         }
+        // The shadow rings (D-108) take the denoiser's place in the resolve; with rays the shadow
+        // rays still run for the bounce's guides, so that one term changes and the others don't.
+        if let Some(rings) = targets.sun_rings {
+            sun_shadow = Some(rings);
+        }
         let mut reflection_history = None;
         if steadied {
             if taa_frame.reset {

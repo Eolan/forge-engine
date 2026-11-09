@@ -817,6 +817,75 @@ struct GpuFrame {
     /// Whether a traced ray's back-face hit takes the probes' light
     /// ([`MeshletSceneBuilder::set_hollow_backs`]), 1, or black, 0.
     hollow_backs: u32,
+    /// A shadow ring's draw (D-108): the movers' first instance, and the one after their last.
+    ring_mover_first: u32,
+    ring_mover_end: u32,
+}
+
+/// `options` of a shadow ring's draw: orthographic, its LOD by its texels (`OPTION_RING`).
+const OPTION_RING: u32 = 1 << 16;
+/// With [`OPTION_RING`]: it draws the movers, not the casters that stay.
+const OPTION_RING_MOVERS: u32 = 1 << 17;
+/// A frame's shadow-ring draws, at most: each has a frame block.
+const RING_CHAINS: u64 = 40;
+
+/// Mirrors `RingPush` in `meshlet.slang`.
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+struct RingPush {
+    frame: u64,
+    set: u64,
+    vis_image: u32,
+    out_image: u32,
+    width: u32,
+    height: u32,
+}
+
+/// D-108's shadow rings on the GPU, made when first asked for
+/// ([`MeshletRenderer::enable_shadow_rings`]).
+struct ShadowRingsGpu {
+    /// The casters that stay, tiles wrapped.
+    statics: Vec<GraphImage>,
+    /// What the shading reads: the static layer unwrapped, the movers over it.
+    composed: Vec<GraphImage>,
+    /// Per frame slot, the draws' frame blocks.
+    blocks: Vec<Buffer>,
+    /// Per frame slot, the `RingSet` the shading reads.
+    sets: Vec<Buffer>,
+    /// Where the draws' culls count: nobody reads it.
+    stats: GraphBuffer,
+    solid: Pipeline,
+    cutouts: Pipeline,
+    sample: Pipeline,
+}
+
+/// The transients one frame's ring draws share, one after the other.
+#[derive(Clone, Copy)]
+struct RingIo {
+    work: forge_gpu::BufferHandle,
+    roots: forge_gpu::BufferHandle,
+    cluster_lookback: forge_gpu::BufferHandle,
+    lookback: forge_gpu::BufferHandle,
+    indirect: forge_gpu::BufferHandle,
+    clusters: forge_gpu::BufferHandle,
+    cell_list: Option<forge_gpu::BufferHandle>,
+    draws: Option<forge_gpu::BufferHandle>,
+    visible: forge_gpu::BufferHandle,
+    raster: forge_gpu::BufferHandle,
+    stats: forge_gpu::BufferHandle,
+    pool: forge_gpu::BufferHandle,
+    page_table: forge_gpu::BufferHandle,
+    instances: Option<forge_gpu::BufferHandle>,
+    cells: Option<forge_gpu::BufferHandle>,
+}
+
+/// One draw of a ring: its block, where it goes, and whether that starts cleared.
+struct RingChain {
+    block: GpuFrame,
+    index: u64,
+    target: ImageHandle,
+    rect: vk::Rect2D,
+    clear: bool,
 }
 
 /// Where a frame slot's light lists start in its lamps' buffer, bytes: after the lamps.
@@ -1408,6 +1477,9 @@ pub struct DrawTargets {
     /// With movers (#79): what this frame wrote of them, which the passes after the draw
     /// declare.
     pub movers: Option<MoversFrame>,
+    /// With the shadow rings on (D-108): the sun's shadow they give, as the denoiser's would be
+    /// ([`Ambient::sun_shadow`]).
+    pub sun_rings: Option<ImageHandle>,
 }
 
 /// A frame's movers as the passes after the draw read them (#79): the instance table this frame
@@ -4913,6 +4985,20 @@ pub struct MeshletRenderer {
     /// The previous frame's culling view and pyramid, when pass 1 can test against them (not
     /// after a resize, nor with occlusion off). A `Cell`: set while declaring a frame.
     prev: Cell<Option<PrevCull>>,
+    /// D-108's shadow rings, once asked for.
+    rings: Option<ShadowRingsGpu>,
+    ring_cache: RefCell<crate::shadow_rings::RingCache>,
+    ring_frame: Cell<u64>,
+    /// What the world changed since the last frame, for the rings' tiles: centre and radius.
+    ring_changes: RefCell<Vec<(DVec3, f64)>>,
+    /// Whether the shadow rings give the sun's shadow (`r.shadows.mode`).
+    pub shadow_rings: bool,
+    /// Their filter (`r.shadows.*`).
+    pub ring_filter: crate::shadow_rings::RingFilter,
+    /// How many rectangles a frame may draw of them for moves and changes.
+    pub ring_budget: usize,
+    /// The LOD error a ring's casters may show, texels.
+    pub ring_lod: f32,
     /// Entries each of the cluster culls' work lists holds (transients of the frame's graph,
     /// #78: [`cull_groups`]).
     work_target: u32,
@@ -5560,6 +5646,14 @@ impl MeshletRenderer {
                 .transpose()?,
             hzb,
             prev: Cell::new(None),
+            rings: None,
+            ring_cache: RefCell::new(crate::shadow_rings::RingCache::new()),
+            ring_frame: Cell::new(0),
+            ring_changes: RefCell::new(Vec::new()),
+            shadow_rings: false,
+            ring_filter: crate::shadow_rings::RingFilter::default(),
+            ring_budget: 6,
+            ring_lod: 1.0,
             work_target: WORK_INITIAL_CAPACITY,
             vis64,
             sw_auto_on: false,
@@ -6163,6 +6257,8 @@ impl MeshletRenderer {
             grass_depth,
             show_input: self.show_input,
             gi_reference: self.gi_reference,
+            ring_mover_first: 0,
+            ring_mover_end: 0,
         }
     }
 
@@ -6750,6 +6846,7 @@ impl MeshletRenderer {
                 slot,
             );
         }
+        let ring_base = self.frame_block(slot, &params, PASS_SINGLE, pyramid, prev);
         // The grass blades (#300) over the clusters both passes drew.
         if let Some(grass) = &self.grass {
             grass.draw(
@@ -6761,6 +6858,7 @@ impl MeshletRenderer {
                 params.extent,
             );
         }
+        let sun_rings = self.shadow_ring_passes(graph, slot, &params, io, ring_base);
         self.prev.set(match (occlusion, build) {
             (false, _) => None,
             (true, true) => Some(PrevCull {
@@ -6804,7 +6902,678 @@ impl MeshletRenderer {
                 }),
                 _ => None,
             },
+            sun_rings,
         })
+    }
+
+    /// Makes the shadow rings' images and pipelines (D-108) if they are not there, and turns the
+    /// rings on: about 160 MB. Not made in a scene that has no use for them.
+    pub fn enable_shadow_rings(
+        &mut self,
+        device: &Arc<Device>,
+        shaders: &ShaderCompiler,
+    ) -> Result<()> {
+        use crate::shadow_rings::{RING_COUNT, RING_TEXELS};
+        self.shadow_rings = true;
+        if self.rings.is_some() {
+            return Ok(());
+        }
+        let layers = |name: &str| -> Result<Vec<GraphImage>> {
+            (0..RING_COUNT)
+                .map(|i| {
+                    GraphImage::new(
+                        device,
+                        ImageDesc {
+                            width: RING_TEXELS,
+                            height: RING_TEXELS,
+                            format: vk::Format::D32_SFLOAT,
+                            usage: vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT
+                                | vk::ImageUsageFlags::SAMPLED
+                                | vk::ImageUsageFlags::TRANSFER_SRC
+                                | vk::ImageUsageFlags::TRANSFER_DST,
+                            aspect: vk::ImageAspectFlags::DEPTH,
+                            mip_levels: 1,
+                            name: &format!("shadow ring {name} {i}"),
+                        },
+                    )
+                })
+                .collect()
+        };
+        let host = |size: u64, name: &str| -> Result<Vec<Buffer>> {
+            (0..FRAMES_IN_FLIGHT)
+                .map(|i| {
+                    device.create_buffer(BufferDesc {
+                        size,
+                        usage: vk::BufferUsageFlags::STORAGE_BUFFER,
+                        location: MemoryLocation::CpuToGpu,
+                        category: MemoryCategory::Frame,
+                        name: &format!("{name} {i}"),
+                    })
+                })
+                .collect()
+        };
+        let (stage, solid_geometry, cutout_geometry, cutout_fragment) = match self.path {
+            GeometryPath::MeshShader => (
+                ShaderStage::Mesh,
+                "ring_mesh_main",
+                "mesh_cutout_main",
+                "frag_ring_cutout_main",
+            ),
+            GeometryPath::IndirectCount => (
+                ShaderStage::Vertex,
+                "ring_vertex_main",
+                "vertex_cutout_main",
+                "frag_ring_fallback_cutout_main",
+            ),
+        };
+        let module = |entry: &str, stage: ShaderStage| {
+            device.create_shader_module(&shaders.compile("meshlet.slang", entry, stage)?, entry)
+        };
+        let geometry = module(solid_geometry, stage)?;
+        let fragment = module("frag_ring_main", ShaderStage::Fragment)?;
+        let cut_geometry = module(cutout_geometry, stage)?;
+        let cut_fragment = module(cutout_fragment, ShaderStage::Fragment)?;
+        let sample = module("sun_shadow_ring_main", ShaderStage::Compute)?;
+        let path = self.path;
+        let depth_only = |g: (vk::ShaderModule, &str), f: (vk::ShaderModule, &str), name: &str| {
+            let push_constant_bytes = std::mem::size_of::<Push>() as u32;
+            // No face culled: the worlds' shells are open, and a shell's far side casts too.
+            match path {
+                GeometryPath::MeshShader => device.create_mesh_pipeline(&MeshPipelineDesc {
+                    task: None,
+                    mesh: g,
+                    fragment: f,
+                    color_formats: &[],
+                    depth_format: Some(vk::Format::D32_SFLOAT),
+                    push_constant_bytes,
+                    cull_mode: vk::CullModeFlags::NONE,
+                    wireframe: false,
+                    depth_test: true,
+                    name,
+                }),
+                GeometryPath::IndirectCount => device.create_vertex_pipeline(&VertexPipelineDesc {
+                    vertex: g,
+                    fragment: f,
+                    color_formats: &[],
+                    depth_format: Some(vk::Format::D32_SFLOAT),
+                    push_constant_bytes,
+                    cull_mode: vk::CullModeFlags::NONE,
+                    wireframe: false,
+                    depth_test: true,
+                    alpha_blend: false,
+                    premultiplied: false,
+                    name,
+                }),
+            }
+        };
+        let solid = depth_only(
+            (geometry, solid_geometry),
+            (fragment, "frag_ring_main"),
+            "shadow ring",
+        )?;
+        let cutouts = depth_only(
+            (cut_geometry, cutout_geometry),
+            (cut_fragment, cutout_fragment),
+            "shadow ring cut-outs",
+        )?;
+        let sample_pipeline = device.create_compute_pipeline(&ComputePipelineDesc {
+            shader: (sample, "sun_shadow_ring_main"),
+            push_constant_bytes: std::mem::size_of::<RingPush>() as u32,
+            name: "shadow rings' shading",
+        })?;
+        for m in [geometry, fragment, cut_geometry, cut_fragment, sample] {
+            device.destroy_shader_module(m);
+        }
+        self.rings = Some(ShadowRingsGpu {
+            statics: layers("static")?,
+            composed: layers("composed")?,
+            blocks: host(RING_CHAINS * FRAME_BLOCK_STRIDE, "shadow ring blocks")?,
+            sets: host(
+                std::mem::size_of::<crate::shadow_rings::GpuRingSet>() as u64,
+                "shadow ring set",
+            )?,
+            stats: GraphBuffer::new(device.create_buffer(BufferDesc {
+                size: STATS_BYTES,
+                usage: vk::BufferUsageFlags::STORAGE_BUFFER
+                    | vk::BufferUsageFlags::TRANSFER_DST,
+                location: MemoryLocation::GpuOnly,
+                category: MemoryCategory::Frame,
+                name: "shadow ring counters",
+            })?),
+            solid,
+            cutouts,
+            sample: sample_pipeline,
+        });
+        tracing::info!("the sun's shadow rings are made (D-108)");
+        Ok(())
+    }
+
+    /// Tells the rings that what stands within `radius` metres of `center` (the coordinates of
+    /// [`forge_world::CellPos::to_f64`]) has changed: its tiles are drawn again.
+    pub fn shadow_rings_changed(&self, center: DVec3, radius: f64) {
+        if self.shadow_rings {
+            self.ring_changes.borrow_mut().push((center, radius));
+        }
+    }
+
+    /// Draws what the shadow rings need this frame (D-108) and shades the frame's pixels from
+    /// them. `None` with the rings off.
+    fn shadow_ring_passes<'f>(
+        &'f self,
+        graph: &mut FrameGraph<'f>,
+        slot: FrameSlot,
+        params: &DrawParams<'f>,
+        io: MeshPassIo,
+        base: GpuFrame,
+    ) -> Option<ImageHandle> {
+        use crate::shadow_rings::{GpuRingSet, RING_COUNT, RING_TEXELS, RingMovers, TILE_TEXELS};
+        let gpu = self.rings.as_ref().filter(|_| self.shadow_rings)?;
+        let compute = vk::PipelineStageFlags2::COMPUTE_SHADER;
+        let scene = params.scene;
+        let camera = params.cull.position.to_f64();
+        let movers = match scene.movers.as_ref().filter(|m| m.len() > 0) {
+            None => RingMovers::None,
+            Some(m) if m.skipped.get() => RingMovers::Standing,
+            Some(_) => RingMovers::Moving,
+        };
+        let frame = self.ring_frame.get();
+        self.ring_frame.set(frame + 1);
+        let mut cache = self.ring_cache.borrow_mut();
+        for (center, radius) in self.ring_changes.borrow_mut().drain(..) {
+            cache.mark_changed(center, radius);
+        }
+        let plan = cache.plan(
+            camera,
+            self.sun_dir.as_dvec3(),
+            self.ring_budget,
+            movers,
+            frame,
+        );
+        let statics: Vec<ImageHandle> = gpu.statics.iter().map(|i| graph.import(i)).collect();
+        let composed: Vec<ImageHandle> = gpu.composed.iter().map(|i| graph.import(i)).collect();
+
+        let keep = CullFlags::FRUSTUM | CullFlags::LOD | CullFlags::GROUP_WINDOW_OFF;
+        let block_of = |ring: usize, tile: [i64; 2], tiles: [u32; 2], layer: u32| {
+            let r = cache.ring(ring);
+            let view = r.clip_from_relative(camera, tile, tiles);
+            let (first, end) = scene
+                .movers
+                .as_ref()
+                .map_or((0, 0), |m| (m.first, m.first + m.len() as u32));
+            GpuFrame {
+                view_proj: view.to_cols_array(),
+                cull_view_proj: view.to_cols_array(),
+                cull_view: Mat4::IDENTITY.to_cols_array(),
+                planes: r.planes(camera, tile, tiles),
+                flags: (base.flags & (keep | FLAG_STREAMING | FLAG_INSTANCE_CELLS | FLAG_CUTOUTS))
+                    | CullFlags::FRUSTUM,
+                pass: PASS_SINGLE,
+                p00: 1.0,
+                p11: (1.0 / r.texel()) as f32,
+                viewport_height: 2.0,
+                znear: 1e-3,
+                lod_threshold: self.ring_lod,
+                target_width: RING_TEXELS,
+                target_height: RING_TEXELS,
+                stats: gpu.stats.address(),
+                page_need: 0,
+                ladder: 0,
+                options: OPTION_RING | layer,
+                ring_mover_first: first,
+                ring_mover_end: end,
+                ..base
+            }
+        };
+        let texels = |slots: u32| slots * TILE_TEXELS;
+        let mut chains_planned = plan.draws.len();
+        chains_planned += plan.movers.iter().filter(|m| **m).count();
+        let cells = (base.flags & FLAG_INSTANCE_CELLS) != 0;
+        let ring_io = (chains_planned > 0).then(|| {
+            let storage = vk::BufferUsageFlags::STORAGE_BUFFER;
+            let args = storage | vk::BufferUsageFlags::INDIRECT_BUFFER;
+            let buffer = |graph: &mut FrameGraph<'f>, name: &'static str, size: u64, usage| {
+                graph.transient_buffer(TransientBufferDesc { name, size, usage })
+            };
+            let room = transient_instances(scene.instance_count).div_ceil(64);
+            RingIo {
+                work: buffer(graph, "ring work list", u64::from(self.work_target) * 8, storage),
+                roots: buffer(graph, "ring root list", u64::from(self.work_target) * 8, storage),
+                cluster_lookback: buffer(
+                    graph,
+                    "ring cluster status words",
+                    cull_lookback_bytes(self.work_target),
+                    storage,
+                ),
+                lookback: buffer(
+                    graph,
+                    "ring instance status words",
+                    LOOKBACK_RUNS * room * 8,
+                    storage,
+                ),
+                indirect: buffer(
+                    graph,
+                    "ring cull grid",
+                    std::mem::size_of_val(&INDIRECT_START) as u64,
+                    args,
+                ),
+                clusters: buffer(
+                    graph,
+                    "ring draw grids",
+                    std::mem::size_of_val(&CLUSTER_ARGS_START) as u64,
+                    args,
+                ),
+                cell_list: cells.then(|| {
+                    buffer(
+                        graph,
+                        "ring cell lists",
+                        4 * (CELL_LIST_WORDS + 2 * room.max(1)),
+                        args,
+                    )
+                }),
+                draws: (self.path == GeometryPath::IndirectCount).then(|| {
+                    buffer(
+                        graph,
+                        "ring cluster draws",
+                        2 * u64::from(self.visible_target) * u64::from(DRAW_COMMAND_BYTES),
+                        args,
+                    )
+                }),
+                visible: buffer(
+                    graph,
+                    "ring visible clusters",
+                    u64::from(self.visible_target) * 8,
+                    storage,
+                ),
+                raster: buffer(
+                    graph,
+                    "ring raster lists",
+                    2 * u64::from(self.visible_target) * 4,
+                    storage,
+                ),
+                stats: graph.import_buffer(&gpu.stats),
+                pool: io.pool,
+                page_table: io.page_table,
+                instances: io.instances,
+                cells: io.cells,
+            }
+        });
+        let mut index = 0u64;
+        let mut chain = |graph: &mut FrameGraph<'f>, block, target, rect, clear| {
+            if index < RING_CHAINS
+                && let Some(ring_io) = ring_io
+            {
+                self.ring_chain(
+                    graph,
+                    gpu,
+                    slot,
+                    scene,
+                    ring_io,
+                    RingChain {
+                        block,
+                        index,
+                        target,
+                        rect,
+                        clear,
+                    },
+                );
+                index += 1;
+            }
+        };
+        for draw in &plan.draws {
+            let tiles = [draw.rect.w, draw.rect.h];
+            let rect = vk::Rect2D {
+                offset: vk::Offset2D {
+                    x: texels(draw.rect.x) as i32,
+                    y: texels(draw.rect.y) as i32,
+                },
+                extent: vk::Extent2D {
+                    width: texels(draw.rect.w),
+                    height: texels(draw.rect.h),
+                },
+            };
+            let block = block_of(draw.ring, draw.tile, tiles, 0);
+            chain(graph, block, statics[draw.ring], rect, true);
+        }
+        for ring in 0..RING_COUNT {
+            if !plan.compose[ring] {
+                continue;
+            }
+            let regions: Vec<_> = cache
+                .ring(ring)
+                .compose_copies()
+                .iter()
+                .map(|c| {
+                    (
+                        vk::Offset2D {
+                            x: c.from[0] as i32,
+                            y: c.from[1] as i32,
+                        },
+                        vk::Offset2D {
+                            x: c.to[0] as i32,
+                            y: c.to[1] as i32,
+                        },
+                        vk::Extent2D {
+                            width: c.size[0],
+                            height: c.size[1],
+                        },
+                    )
+                })
+                .collect();
+            let (from, to) = (statics[ring], composed[ring]);
+            graph
+                .pass("shadow/ring compose")
+                .image(from, ImageAccess::TransferSrc)
+                .image(to, ImageAccess::TransferDst)
+                .run(move |resources, commands| {
+                    commands.copy_depth_regions(
+                        resources.image(from).raw,
+                        resources.image(to).raw,
+                        &regions,
+                    );
+                    Ok(())
+                });
+            if plan.movers[ring] {
+                let rect = vk::Rect2D {
+                    offset: vk::Offset2D::default(),
+                    extent: vk::Extent2D {
+                        width: RING_TEXELS,
+                        height: RING_TEXELS,
+                    },
+                };
+                let tiles = [texels(0) + 8, 8];
+                let block = block_of(ring, cache.ring(ring).window(), tiles, OPTION_RING_MOVERS);
+                chain(graph, block, to, rect, false);
+            }
+        }
+        // What the shading reads.
+        let mut rings = [crate::shadow_rings::GpuShadowRing::none(); RING_COUNT];
+        for (i, ring) in rings.iter_mut().enumerate() {
+            *ring = cache.ring(i).sampling(camera, gpu.composed[i].sampled().0);
+        }
+        let filter = self.ring_filter;
+        gpu.sets[slot.index].write(
+            0,
+            &[GpuRingSet {
+                rings,
+                tan_radius: self.sun_angular_radius.tan(),
+                search_taps: filter.search_taps,
+                filter_taps: filter.filter_taps,
+                max_radius: filter.max_radius,
+                search_reach: filter.search_reach,
+                bias: filter.bias,
+                normal_offset: filter.normal_offset,
+                pad: 0.0,
+            }],
+        );
+        let extent = params.extent;
+        let output = graph.transient(TransientDesc {
+            name: "sun shadow of the rings",
+            width: extent.width,
+            height: extent.height,
+            format: vk::Format::R32_SFLOAT,
+            usage: vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::STORAGE,
+            aspect: vk::ImageAspectFlags::COLOR,
+            mip_levels: 1,
+        });
+        let frame_address = self.frame_address(slot);
+        let set = gpu.sets[slot.index].address();
+        let pipeline = &gpu.sample;
+        let mut builder = graph
+            .pass("shadow/rings")
+            .image(io.visibility, ImageAccess::Sampled(compute))
+            .image(output, ImageAccess::StorageWrite(compute))
+            .buffer(io.visible, BufferAccess::ShaderRead(compute))
+            .buffer(io.pool, BufferAccess::ShaderRead(compute))
+            .buffer(io.page_table, BufferAccess::ShaderRead(compute))
+            .buffer_if(io.instances, BufferAccess::ShaderRead(compute));
+        for image in &composed {
+            builder = builder.image(*image, ImageAccess::Sampled(compute));
+        }
+        let visibility = io.visibility;
+        builder.run(move |resources, commands| {
+            commands.bind_pipeline(pipeline);
+            commands.push_constants(
+                pipeline,
+                &RingPush {
+                    frame: frame_address,
+                    set,
+                    vis_image: resources.sampled(visibility).0,
+                    out_image: resources.storage(output, 0).0,
+                    width: extent.width,
+                    height: extent.height,
+                },
+            );
+            commands.dispatch(extent.width.div_ceil(8), extent.height.div_ceil(8), 1);
+            Ok(())
+        });
+        Some(output)
+    }
+
+    /// One draw of a ring: its culls, as the camera's with the ring's block, then its depth.
+    #[allow(clippy::too_many_arguments)]
+    fn ring_chain<'f>(
+        &'f self,
+        graph: &mut FrameGraph<'f>,
+        gpu: &'f ShadowRingsGpu,
+        slot: FrameSlot,
+        scene: &'f MeshletScene,
+        io: RingIo,
+        chain: RingChain,
+    ) {
+        use vk::PipelineStageFlags2 as S;
+        let compute = S::COMPUTE_SHADER;
+        let blocks: &'f Buffer = &gpu.blocks[slot.index];
+        let offset = chain.index * FRAME_BLOCK_STRIDE;
+        let address = blocks.address() + offset;
+        let block = chain.block;
+        let stats: &'f GraphBuffer = &gpu.stats;
+        let cells = io.cell_list.is_some();
+        let mut clears = graph
+            .pass("shadow/ring clears")
+            .buffer(io.indirect, BufferAccess::TransferDst)
+            .buffer(io.clusters, BufferAccess::TransferDst)
+            .buffer(io.lookback, BufferAccess::TransferDst)
+            .buffer(io.cluster_lookback, BufferAccess::TransferDst)
+            .buffer(io.stats, BufferAccess::TransferDst);
+        if let Some(list) = io.cell_list {
+            clears = clears.buffer(list, BufferAccess::TransferDst);
+        }
+        clears.run(move |resources, commands| {
+            let mut b = block;
+            let (lookback, cluster_lookback) = (
+                resources.buffer(io.lookback),
+                resources.buffer(io.cluster_lookback),
+            );
+            b.lookback = lookback.address();
+            b.cluster_lookback = cluster_lookback.address();
+            b.work = resources.buffer(io.work).address();
+            b.roots = resources.buffer(io.roots).address();
+            b.visible = resources.buffer(io.visible).address();
+            b.raster = resources.buffer(io.raster).address();
+            b.indirect = resources.buffer(io.indirect).address();
+            b.clusters = resources.buffer(io.clusters).address();
+            b.draws = io.draws.map_or(0, |h| resources.buffer(h).address());
+            b.cell_list = io.cell_list.map_or(0, |h| resources.buffer(h).address());
+            b.rejects = 0;
+            b.deferred = 0;
+            blocks.write(offset, &[b]);
+            commands.update_buffer(resources.buffer(io.indirect), 0, &INDIRECT_START);
+            commands.update_buffer(resources.buffer(io.clusters), 0, &CLUSTER_ARGS_START);
+            if let Some(list) = io.cell_list {
+                commands.update_buffer(resources.buffer(list), 0, &CELL_LIST_START);
+            }
+            commands.fill_buffer(lookback, 0, lookback.size() & !3, 0);
+            commands.fill_buffer(cluster_lookback, 0, cluster_lookback.size() & !3, 0);
+            commands.fill_buffer(stats, 0, STATS_BYTES, 0);
+            Ok(())
+        });
+        if let Some(list) = io.cell_list {
+            let pipeline = &self.pipeline_cell_cull;
+            graph
+                .pass("shadow/ring cull")
+                .buffer(list, BufferAccess::ShaderReadWrite(compute))
+                .buffer(io.lookback, BufferAccess::ShaderReadWrite(compute))
+                .buffer(io.stats, BufferAccess::ShaderReadWrite(compute))
+                .buffer_if(io.cells, BufferAccess::ShaderRead(compute))
+                .buffer_if(io.instances, BufferAccess::ShaderRead(compute))
+                .run(move |_, commands| {
+                    commands.bind_pipeline(pipeline);
+                    commands.push_constants(pipeline, &self.push(address));
+                    commands.dispatch(scene.instance_count.div_ceil(64).div_ceil(64).max(1), 1, 1);
+                    Ok(())
+                });
+        }
+        let instances = &self.pipeline_cull;
+        let instance_groups = scene.instance_count.div_ceil(64).max(1);
+        let mut builder = graph
+            .pass("shadow/ring cull")
+            .buffer(io.work, BufferAccess::ShaderWrite(compute))
+            .buffer(io.roots, BufferAccess::ShaderWrite(compute))
+            .buffer(io.indirect, BufferAccess::ShaderReadWrite(compute))
+            .buffer(io.lookback, BufferAccess::ShaderReadWrite(compute))
+            .buffer(io.stats, BufferAccess::ShaderReadWrite(compute))
+            .buffer_if(io.instances, BufferAccess::ShaderRead(compute));
+        if let Some(list) = io.cell_list {
+            builder = builder.buffer(list, BufferAccess::IndirectArgsAndShaderRead(compute));
+        }
+        let cell_list = io.cell_list;
+        builder.run(move |resources, commands| {
+            commands.bind_pipeline(instances);
+            commands.push_constants(instances, &self.push(address));
+            match cell_list {
+                Some(list) if cells => commands.dispatch_indirect(resources.buffer(list), 0),
+                _ => commands.dispatch(instance_groups, 1, 1),
+            }
+            Ok(())
+        });
+        let clusters = if scene.streamer.is_some() {
+            &self.pipeline_cluster_cull_streamed
+        } else {
+            &self.pipeline_cluster_cull
+        };
+        let mut builder = graph
+            .pass("shadow/ring cull")
+            .buffer(
+                io.indirect,
+                BufferAccess::IndirectArgsAndShaderRead(compute),
+            )
+            .buffer(io.work, BufferAccess::ShaderRead(compute))
+            .buffer(io.roots, BufferAccess::ShaderRead(compute))
+            .buffer(io.clusters, BufferAccess::ShaderReadWrite(compute))
+            .buffer(io.cluster_lookback, BufferAccess::ShaderReadWrite(compute))
+            .buffer(io.visible, BufferAccess::ShaderWrite(compute))
+            .buffer(io.raster, BufferAccess::ShaderWrite(compute))
+            .buffer(io.stats, BufferAccess::ShaderReadWrite(compute))
+            .buffer(io.page_table, BufferAccess::ShaderRead(compute))
+            .buffer_if(io.instances, BufferAccess::ShaderRead(compute));
+        if let Some(draws) = io.draws {
+            builder = builder.buffer(draws, BufferAccess::ShaderWrite(compute));
+        }
+        builder.run(move |resources, commands| {
+            commands.bind_pipeline(clusters);
+            commands.push_constants(clusters, &self.push(address));
+            commands.dispatch_indirect(resources.buffer(io.indirect), 0);
+            Ok(())
+        });
+
+        let solid = &gpu.solid;
+        let cutouts = scene.cutout_raster().then_some(&gpu.cutouts);
+        let triangles: &'f Buffer = &scene.pool;
+        let capacity = self.visible_target;
+        let fragment = if cutouts.is_some() {
+            S::FRAGMENT_SHADER
+        } else {
+            S::NONE
+        };
+        let RingChain {
+            target,
+            rect,
+            clear,
+            ..
+        } = chain;
+        let mut builder = graph.pass("shadow/ring draw");
+        builder = match io.draws {
+            None => builder
+                .buffer(
+                    io.clusters,
+                    BufferAccess::IndirectArgsAndShaderRead(S::MESH_SHADER_EXT),
+                )
+                .buffer(io.raster, BufferAccess::ShaderRead(S::MESH_SHADER_EXT))
+                .buffer(
+                    io.visible,
+                    BufferAccess::ShaderRead(S::MESH_SHADER_EXT | fragment),
+                )
+                .buffer(io.pool, BufferAccess::ShaderRead(S::MESH_SHADER_EXT))
+                .buffer(io.page_table, BufferAccess::ShaderRead(S::MESH_SHADER_EXT))
+                .buffer_if(
+                    io.instances,
+                    BufferAccess::ShaderRead(S::MESH_SHADER_EXT | fragment),
+                ),
+            Some(draws) => builder
+                .buffer(io.clusters, BufferAccess::IndirectArgs)
+                .buffer(draws, BufferAccess::IndirectArgs)
+                .buffer(
+                    io.visible,
+                    BufferAccess::ShaderRead(S::VERTEX_SHADER | fragment),
+                )
+                .buffer(io.pool, BufferAccess::IndexAndShaderRead(S::VERTEX_SHADER))
+                .buffer_if(
+                    io.instances,
+                    BufferAccess::ShaderRead(S::VERTEX_SHADER | fragment),
+                ),
+        };
+        builder
+            .image(target, ImageAccess::DepthAttachment)
+            .run(move |resources, commands| {
+                use crate::shadow_rings::RING_TEXELS;
+                let push = self.push(address);
+                let depth = vk::RenderingAttachmentInfo::default()
+                    .image_view(resources.view(target))
+                    .image_layout(vk::ImageLayout::DEPTH_ATTACHMENT_OPTIMAL)
+                    .load_op(vk::AttachmentLoadOp::LOAD)
+                    .store_op(vk::AttachmentStoreOp::STORE);
+                let info = vk::RenderingInfo::default()
+                    .render_area(vk::Rect2D {
+                        offset: vk::Offset2D::default(),
+                        extent: vk::Extent2D {
+                            width: RING_TEXELS,
+                            height: RING_TEXELS,
+                        },
+                    })
+                    .layer_count(1)
+                    .depth_attachment(&depth);
+                commands.begin_rendering(&info);
+                commands.set_viewport_rect(rect);
+                if clear {
+                    commands.clear_depth_rect(rect, 0.0);
+                }
+                let grids = resources.buffer(io.clusters);
+                let mut result = Ok(());
+                let lists = std::iter::once((solid, 0)).chain(cutouts.map(|p| (p, 1)));
+                for (pipeline, list) in lists {
+                    commands.bind_pipeline(pipeline);
+                    commands.push_constants(pipeline, &push);
+                    let grid = list * CLUSTER_ARGS_CUTOUT_BYTES;
+                    result = result.and(match io.draws {
+                        None => commands.draw_mesh_tasks_indirect(grids, grid),
+                        Some(draws) => {
+                            let draws = resources.buffer(draws);
+                            commands.bind_index_buffer(triangles, 0, vk::IndexType::UINT8_KHR);
+                            commands.draw_indexed_indirect_count(
+                                draws,
+                                list * u64::from(capacity) * u64::from(DRAW_COMMAND_BYTES),
+                                grids,
+                                grid + 12,
+                                capacity,
+                                DRAW_COMMAND_BYTES,
+                            );
+                            Ok(())
+                        }
+                    });
+                }
+                commands.end_rendering();
+                result
+            });
     }
 
     /// Once the last cull has written the page needs: copies them into this slot's readback

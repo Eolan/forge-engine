@@ -55,6 +55,7 @@ pub mod settings;
 pub mod shallow;
 pub mod sharc;
 pub mod skin;
+pub mod shadow_rings;
 pub mod sky;
 pub mod skybody;
 pub mod skybox;

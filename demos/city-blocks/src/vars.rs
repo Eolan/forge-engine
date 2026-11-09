@@ -59,6 +59,17 @@ pub(crate) struct RenderVars {
     denoiser: Option<Var<usize>>,
     /// Its frames of history (`r.shadows.history`, #337), where there is one.
     shadow_history: Option<Var<i64>>,
+    /// The sun's shadow by rays or by the shadow rings (`r.shadows.mode`, D-108).
+    shadow_mode: Var<usize>,
+    /// The rings' filter and cost (`r.shadows.*`, D-108).
+    ring_search_taps: Var<i64>,
+    ring_filter_taps: Var<i64>,
+    ring_radius: Var<f64>,
+    ring_reach: Var<f64>,
+    ring_bias: Var<f64>,
+    ring_normal: Var<f64>,
+    ring_budget: Var<i64>,
+    ring_lod: Var<f64>,
     /// The catalogue's stars and the Moon's albedo at night (`r.sky.real`, the period key
     /// before D-069), where the night has them.
     sky_real: Option<Var<bool>>,
@@ -69,6 +80,7 @@ pub(crate) struct RenderVars {
 impl Gallery {
     /// Registers the gallery's settings, from the state its flags gave it.
     pub(crate) fn register_vars(&mut self, s: &mut Settings) {
+        let ring_filter = self.renderer.ring_filter;
         // A night with lamps keyed on its lamps (D-080, the owner's go of 2026-10-31): its exposure
         // no lower than EV100 0, so a lit window shows its room rather than white. Keyed on the
         // moon (about EV100 -2), a window's 25 cd/m² stood 12 stops over middle grey. A night
@@ -316,6 +328,60 @@ impl Gallery {
                 let history = forge_render::sun_shadow::SHADOW_HISTORY as i64;
                 s.add(rs::shadow_history(history))
             }),
+            shadow_mode: s.add(Spec::choice(
+                "r.shadows.mode",
+                SHADOW_MODES,
+                usize::from(self.scene.rays().is_none()),
+                "The sun's shadow by rays, or by the cached shadow rings (D-108), which need none.",
+            )),
+            ring_search_taps: s.add(Spec::int(
+                "r.shadows.search_taps",
+                i64::from(ring_filter.search_taps),
+                1..=64,
+                "Shadow rings: taps of the blocker search.",
+            )),
+            ring_filter_taps: s.add(Spec::int(
+                "r.shadows.filter_taps",
+                i64::from(ring_filter.filter_taps),
+                1..=64,
+                "Shadow rings: taps of the filter.",
+            )),
+            ring_radius: s.add(Spec::float(
+                "r.shadows.max_radius",
+                f64::from(ring_filter.max_radius),
+                1.0..=64.0,
+                "Shadow rings: the widest filter, texels.",
+            )),
+            ring_reach: s.add(Spec::float(
+                "r.shadows.search_reach",
+                f64::from(ring_filter.search_reach),
+                1.0..=1000.0,
+                "Shadow rings: how far along the sun the blocker search looks, metres.",
+            )),
+            ring_bias: s.add(Spec::float(
+                "r.shadows.bias",
+                f64::from(ring_filter.bias),
+                0.0..=16.0,
+                "Shadow rings: depth bias, texels.",
+            )),
+            ring_normal: s.add(Spec::float(
+                "r.shadows.normal_offset",
+                f64::from(ring_filter.normal_offset),
+                0.0..=16.0,
+                "Shadow rings: normal offset, texels.",
+            )),
+            ring_budget: s.add(Spec::int(
+                "r.shadows.budget",
+                self.renderer.ring_budget as i64,
+                0..=32,
+                "Shadow rings: rectangles a frame may draw for moves and changes.",
+            )),
+            ring_lod: s.add(Spec::float(
+                "r.shadows.lod",
+                f64::from(self.renderer.ring_lod),
+                0.25..=8.0,
+                "Shadow rings: the casters' LOD error, texels.",
+            )),
             sky_real,
             liquid,
         });
@@ -338,6 +404,14 @@ impl Gallery {
         let Some(v) = &self.vars else {
             return;
         };
+        let rings = SHADOW_MODES[s.get(v.shadow_mode)] == "rings";
+        if rings && !self.renderer.shadow_rings {
+            if let Err(error) = self.renderer.enable_shadow_rings(&ctx.device, &ctx.shaders) {
+                tracing::error!(%error, "the shadow rings could not be made");
+            }
+        } else if !rings {
+            self.renderer.shadow_rings = false;
+        }
         let seen = self.vars_seen;
         if seen == s.changes() {
             return;
@@ -527,6 +601,16 @@ impl Gallery {
                 denoiser.history = history;
             }
         }
+        self.renderer.ring_filter = forge_render::shadow_rings::RingFilter {
+            search_taps: s.get(v.ring_search_taps) as u32,
+            filter_taps: s.get(v.ring_filter_taps) as u32,
+            max_radius: s.get(v.ring_radius) as f32,
+            search_reach: s.get(v.ring_reach) as f32,
+            bias: s.get(v.ring_bias) as f32,
+            normal_offset: s.get(v.ring_normal) as f32,
+        };
+        self.renderer.ring_budget = s.get(v.ring_budget) as usize;
+        self.renderer.ring_lod = s.get(v.ring_lod) as f32;
         if let Some(var) = v.denoiser
             && s.changed_since(var, seen)
         {
@@ -575,6 +659,9 @@ impl Gallery {
         }
     }
 }
+
+/// `r.shadows.mode`'s choices (D-108).
+const SHADOW_MODES: &[&str] = &["rays", "rings"];
 
 /// `r.shadows.denoiser`'s choices: NVIDIA's SIGMA (where NRD's library is), AMD's FidelityFX,
 /// none (the resolve's own ray a frame).
