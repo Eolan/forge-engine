@@ -3954,7 +3954,10 @@ bool cutout_kept(Frame* f, uint id, float2 uv, bool front, float2 ground, float2
     if (instance_fading_now(f, record.x, inst))
     {
         float value = f[0].ladder[record.x];
-        float noise = spatio_temporal_noise(pixel, f[0].noise_frame).x * FADE_WHOLE;
+        // Interleaved gradient noise: every 3 x 3 block spreads over the whole range, so a fade is an
+        // even stipple the upscaler averages in a frame or two. The Hilbert curve's R2 clumps: a
+        // building crossing its fade under a moving camera showed in blocks (the owner, 2026-11-11).
+        float noise = interleaved_gradient_noise(pixel, f[0].noise_frame, float2(41.0, 7.0)) * FADE_WHOLE;
         float goes = fade_goes(value);
         float comes = fade_comes(value);
         InstanceFade fade = f[0].fades[record.x];
