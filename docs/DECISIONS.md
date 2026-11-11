@@ -12772,6 +12772,16 @@ whether the micro-shadows and `min` become defaults after the A/B.
   gallery shows no loss; `r.micro.ao` stays off, since it needs occlusion maps authored for direct light.
 - **No motion-vector correction:** the strafe showed no smear.
 
+**Amended 2026-11-11: the defaults, as decided.** The procedural sets' relief is on (`--no-pom-sets` leaves it out; `--pom-sets` is kept for old scripts and changes nothing), and so is `r.ao.material min`. `r.micro.bump` stays off. A first A/B of stills (DLAA, a fixed exposure, the share of pixels that change and the mean in stops):
+
+| Scene | `min` | `r.micro.bump` |
+|---|---|---|
+| The flight helmet (occlusion and normal maps) | 2.3 %, +0.01 | 0.24 %, -0.001 |
+| The Bistro by day | none | 0.04 % |
+| The city's prop gallery | none | 1 pixel |
+
+`min` lifts the crevices of the helmet's mask a little, which the product darkened twice: no loss. The whole capture batch on both paths then showed what three scenes had not: the terminator term flattens sunlit bumps on every normal-mapped surface, the physics lab's yard most (its floor's pebbles lose their lit rims; 10 % of the frame, ꟻLIP 0.031), the asteroids and most of the lab's scenes besides. A loss for the look, so it stays a setting. With the relief and `min` on, against `main`: the city 0.12 % of its pixels, its street without ray queries 0.69 % (the bricks near the camera; further off the relief has faded), the gallery and the island under 0.001 %. `shading/standard` unchanged in the city, the gallery and the island; +0.10 ms in the street without ray queries (0.295 to 0.391), where the facades are near.
+
 ## D-108 — A tier without rays: shadow rings on the clusters, a lamp atlas, screen-space reflections, and D-097's relit probes ✅ (proposed 2026-11-08 on the owner's "start phase 2"; reopens D-008; D-094, D-097; designed without running the engine: every cost here is an estimate; accepted 2026-11-11: "I will follow recommendations for D-107 and D-108")
 
 **Why, and what it reopens.** D-008 kept its raster tier (T0) "only for tools and servers", with ray

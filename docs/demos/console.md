@@ -209,7 +209,7 @@ command line": `--no-ao` and `--set r.ao=0` give the same image to the pixel.
 | `r.gi.cube_ambient` | with no probes, a room's ambient light from its reflection cube, and a street's from cubes made where the camera has been, else the open sky's (D-108; needs the cubes) | 0, 1 | 1 |
 | `r.gi.screen`, `r.gi.screen_radius`, `r.gi.screen_slices` | without rays, the near light from the screen over the ambient light (D-108): on or off, how far a surface lights another, metres, and the slices per pixel | 0, 1; 0.25 to 8; 1 to 4 | 1 without rays; 2; 2 |
 | `r.ao.ignore_nearer` | what the ambient occlusion leaves out near the camera: a first-person weapon or hands cast no dark halo on the wall behind them (#337) | 0..2 m | 0 |
-| `r.ao.material` | how a material's occlusion map joins GTAO on the sky's and the probes' light: their product, or their minimum, which does not darken twice a crevice both see (D-107) | multiply, min | multiply |
+| `r.ao.material` | how a material's occlusion map joins GTAO on the sky's and the probes' light: their product, or their minimum, which does not darken twice a crevice both see (D-107) | multiply, min | min |
 | `r.pom` | relief inside surfaces from their height maps; rows without one are not touched (D-107) | 0, 1 | 1 |
 | `r.pom.steps`, `r.pom.shadow_steps` | the most steps of the relief's march along the view, and along the sun and the strongest lamp (0: no self-shadow) | 4..64; 0..16 | 32; 8 |
 | `r.pom.fade` | the height map's level of detail the relief starts to fade at (0: a texel a pixel), gone two levels on | -2..8 | 0.5 |

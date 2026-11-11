@@ -53,8 +53,12 @@ impl Default for ReliefSettings {
             fade: 0.5,
             scale: 1.0,
             micro_ao: 0.0,
+            // Off: the full capture batch showed it flattening sunlit bumps (the yard's pebbles lost
+            // their lit rims, 10 % of the frame), a loss for the look (D-107, 2026-11-11).
             micro_bump: false,
-            ao_min: false,
+            // On since 2026-11-11 (D-107's A/B): an occlusion map and GTAO by their minimum, which
+            // no longer darkens twice a crevice both see.
+            ao_min: true,
         }
     }
 }
@@ -237,14 +241,14 @@ mod tests {
         let s = ReliefSettings::default();
         assert_eq!(s.step_word() & 0xFF, 32);
         assert_eq!((s.step_word() >> 8) & 0xFF, 8);
-        assert_eq!(s.option_bits(), OPTION_RELIEF);
+        assert_eq!(s.option_bits(), OPTION_RELIEF | OPTION_AO_MIN);
         let off = ReliefSettings {
             enabled: false,
             micro_bump: true,
-            ao_min: true,
+            ao_min: false,
             ..s
         };
-        assert_eq!(off.option_bits(), OPTION_MICRO_BUMP | OPTION_AO_MIN);
+        assert_eq!(off.option_bits(), OPTION_MICRO_BUMP);
     }
 
     #[test]
