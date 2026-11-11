@@ -403,8 +403,8 @@ pub trait Running: Send {
     /// place in the scene frame each frame (the partition's frame must be the scene's) and applies
     /// its edits, every change the camera asks for settled before the frame in a scripted run (a
     /// capture's, as the physics lab's), one edit a frame unwaited when played, as a game takes
-    /// them (`FORGE_CELLS_REALTIME=1` or `0` says which). The cells' sets (rooms, panes, lamps) are not taken yet: give the
-    /// lamps through [`Running::lamps`]. None by default.
+    /// them (`FORGE_CELLS_REALTIME=1` or `0` says which). The cells' sets (rooms, panes, lamps)
+    /// are not taken yet: give the lamps through [`Running::lamps`]. None by default.
     fn cells(&mut self) -> Option<&mut forge_render::CellStreamer> {
         None
     }

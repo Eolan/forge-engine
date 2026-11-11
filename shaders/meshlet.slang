@@ -195,7 +195,7 @@ static const uint INSTANCE_FADES = 128;        // Instance::flags: dissolves in 
 static const uint INSTANCE_GOES = 256;         // Instance::flags: a stand-in that goes as pieces come (D-106): its shadow rays start clear of them
 static const uint INSTANCE_COARSE = 512;       // Instance::flags: a coarse stand-in, a hollow shell (D-106): the probes' light on it, and on a traced ray meeting its back
 static const float STAND_IN_SHADOW_START = 4.0; // metres, for INSTANCE_GOES; only ever seen from afar
-static const uint INSTANCE_HULL = 1024;        // Instance::flags: a hull round other instances (D-106): a shadow ray meets it from its front alone (`ray_blocked`)
+static const uint INSTANCE_HULL = 1024;        // Instance::flags: a hull round other instances (D-106): a shadow ray from one of them meets it from its front alone (`ray_blocked`, `g_shadows_leave_hulls`)
 static const uint INSTANCE_NO_FAR_SHADOW_RAYS = 64; // Instance::flags: not met by the shadow rays from far points (D-075 step 3, `shadow_world`)
 // The TLAS records' mask bits, one a world of rays (#301): an instance a kind of ray does not meet
 // leaves its bit out, and a pass's rays carry their own (`g_ray_mask`).
@@ -7423,7 +7423,10 @@ bool ray_candidate_kept(Frame* f, uint instance, uint primitive, float2 b)
 // starts inside the hull. It passes out: an INSTANCE_HULL's triangles are met from their front
 // alone (`tlas_instances_main` leaves the facing cull on for them and off for every other
 // instance, so the flag here touches nothing else). A roof under its building's stand-in stood in
-// full shadow until the building's own pieces came, then lit up in one frame.
+// full shadow until the building's own pieces came, then lit up in one frame. Only where the
+// pass says so (`g_shadows_leave_hulls`): the sun's rays from a stand-in's own surface meet a
+// hull's backs. The rays from a bounce's or a mirror's hit, the lamps', the fog's and the water's
+// pass out whatever they start from.
 //
 // The other queries that ask whether light is blocked (the particles', the splashes', the dust's,
 // the impostors', the jelly's) and the shadow rings (D-108) still meet a hull from inside.
@@ -9109,6 +9112,8 @@ uint shade_pixel<let SHADOWS : int>(uint class_index, uint2 pixel, uint vis)
     s.traced = mirror_ray && !grass && resolve_push.request_image != 0xFFFFFFFFu;
     // Its shadow rays (the sun's, the lamps'): the trees' cards near, their proxies far.
     g_ray_mask = shadow_world(f, surface_relative, pixel);
+    // As `sun_shadow_trace_main`: a stand-in's own surface is no piece of a hull.
+    g_shadows_leave_hulls = grass || (f[0].instances[p.instance_index].flags & INSTANCE_COARSE) == 0u;
     // The rings' shadow (D-108) where no ray can trace: the same image the denoiser's would be.
     if ((SHADOWS == 0 || f[0].tlas == 0) && (f[0].flags & FLAG_SHADOWS) != 0 && resolve_push.sun_shadow != 0xFFFFFFFFu)
         s.shadow = denoised_sun_shadow(f, grass ? s.n : leaf_shadow_normal(f, mat, s.n), pixel);
@@ -10152,7 +10157,7 @@ void sun_shadow_trace_main(uint3 id : SV_DispatchThreadID)
     }
     // The trees' cards near, their proxies far (D-075 step 3).
     g_ray_mask = shadow_world(f, surface_relative, pixel);
-    // A stand-in's own surface is inside no hull (`g_shadows_leave_hulls`).
+    // A stand-in's own surface is no piece of a hull (`g_shadows_leave_hulls`).
     g_shadows_leave_hulls = is_grass(vis) || (s.inst.flags & INSTANCE_COARSE) == 0u;
     // A point of the disc, uniform in area, as `sun_shadow` aims.
     float2 u = spatio_temporal_noise(pixel, f[0].noise_frame);
@@ -11924,7 +11929,7 @@ void tlas_instances_main(uint3 id : SV_DispatchThreadID)
             opacity |= 0x20u; // VK_GEOMETRY_INSTANCE_DISABLE_OPACITY_MICROMAPS_EXT
     }
     // VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT, and the opacity. A hull keeps the cull:
-    // the shadow rays, which cull back faces, pass out of it (`ray_blocked`).
+    // the shadow rays that cull back faces pass out of it (`ray_blocked`, `g_shadows_leave_hulls`).
     uint facing = (inst.flags & INSTANCE_HULL) != 0u ? 0x0u : 0x1u;
     r[13] = (facing | opacity) << 24;
     uint64_t blas = vacant ? 0 : tlas_push.blas[inst.mesh];
