@@ -13128,3 +13128,26 @@ where the hall's walls stand.
 - **Cost to measure before keeping it:** `glass/draw` under 0.3 ms on the walk; memory under 50 MB.
 
 **Not decided:** the radius, and whether the far layer takes the fake rooms of `window` materials where a chunk has an atlas.
+
+## D-110 — The rays at a hand-over: a fading piece met as often as it is drawn 🟡 (proposed 2026-11-11, waiting for the owner)
+
+**The problem.** At a hand-over (D-106) the picture crosses from a stand-in to its pieces over 8 to 40 m, pixel by pixel. The rays' structure cannot: a piece is in it or not.
+- A piece joins the structure when it joins the scene, 12 m of lead before its band: it casts a shadow, and shows in mirrors and in the bounce, before one pixel of it is drawn.
+- A stand-in stops casting on the edit that brings the first of its pieces; from that frame the pieces cast. Where the two shapes differ (parapets, roof plant, a hull over a gap) the shadow moves in one frame.
+- The same cut holds for a piece that comes or goes alone at its range.
+
+Measured on the city flight (2026-11-11, after the hull rule and the played run's streaming): of the 25 areas that still step, none traced to this; they are near objects passing. It was the roof's pop before the hull rule, and it remains wherever a stand-in's shape and its pieces' differ.
+
+**Options.**
+
+| | How | Cost | Risk |
+|---|---|---|---|
+| A. A ray meets a fading instance by chance, the chance its drawn share | the rays' candidate test reads the instance's fade (D-106's, at the hit) against one noise value per ray: a stand-in and its pieces take complementary shares, as their pixels do. The instances in a crossing are flagged non-opaque while they cross, by the scene's user, on the edits it already makes | the candidate loop for the rays that cross a fading instance (a ring of them round the camera at any time); to measure, expected under 0.2 ms | noise in the shadows inside the band, which the denoisers settle; one more thing a scene's user must flag |
+| B. A ramp in time, by the instance mask | two mask bits, a ray takes one at random by a ramp of half a second after the swap | no loop; a structure update per ramp step | runs on time, not on the camera's distance; few swaps at once; mask bits are short |
+| C. Leave the cut | nothing | none | what remains today |
+
+**Recommended: A,** in two steps.
+1. The engine's part behind `r.rays.fade` (off): `Visibility::fading` to flag the instances, the candidate test, the sun's ray taking its pixel's own draw noise so that a stand-in's pixel is lit in the stand-in's world and a piece's in the pieces'. Measured on the city flight: `shadow/trace`, `gi/trace`, the areas that step.
+2. On by default if the flight shows fewer steps and under 0.2 ms; the private viewer flags its pieces from their arrival to the end of their band.
+
+**Not in this decision:** the probes and the surface cache already cross over a second or more by their own blend; the rings of the tier without rays (D-108) keep their cut.
