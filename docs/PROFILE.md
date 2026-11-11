@@ -3121,6 +3121,20 @@ The screen's reflections (D-108, step 3). RTX 5070 Ti, milliseconds of GPU time 
 
 The walk's frame: p50 7.32 ms and p99 9.17 against 7.33 and 9.21 with rays. A cube's face is drawn with a chain of the rings' culls (`shadow/ring cull`, `shadow/ring draw`), its other passes under "reflections/cube" and the camera's "shading/" names; at the default of one face a frame the bar's frame is 17.54 ms against 17.80 with the mirror rays. Memory: 45 MB for the atlas (2048 x 2048 `RGBA16F`, 5 levels), made when a scene gives cubes.
 
+The indirect light without rays (D-108, step 4). RTX 5070 Ti, milliseconds of GPU time per frame, `FORGE_NO_RAY_QUERY=1`:
+
+| Pass | The city's street, 1600 x 900 DLAA | A private district's bar, 2560 x 1440 DLSS Quality |
+|---|---|---|
+| `gi/screen trace`: the near light's bitmask, at half resolution | 0.069 | 0.091 |
+| `gi/screen keep`: the frame's colour kept at half resolution for the next | 0.030 | 0.036 |
+| `gi/screen filter`, `gi/screen history`, `gi/screen depth` | 0.026, 0.006, 0.005 | 0.029, 0.009, 0.009 |
+| `reflections/cube prefilter` (now with the diffuse level), `reflections/cube face`, over the frames | 0.004, 0.004 | 0.019, 0.004 |
+
+The near light costs 0.14 to 0.17 ms in all. The street's frame is 2.79 ms with it and 2.64 without, against 5.94 with rays and probes;
+the bar's 9.6 ms against about 17 traced. A street cube's bounce rounds are three more rounds of its six faces in the frames after its
+first, through the rings' chains (`shadow/ring cull`, `shadow/ring draw`). Memory: three half-resolution `RGBA16F` images (the kept
+light and two of history), 8.6 MB at 1600 x 900, made when the near light is first on.
+
 ## Not measured yet
 
 - **Streaming**: residency pools, request queue depth, drive and decompression throughput.

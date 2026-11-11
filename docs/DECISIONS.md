@@ -12758,6 +12758,46 @@ screen, kept until that is well off. A cone takes a slot; anything else six, a c
 
 *Its check.* Against the mirror rays at a fixed exposure, on a flat mirror, a glossy floor, a wet street and the private district's bar; a moving camera for shimmer at the hits' edges and for what the screen uncovers; timings by alternating runs; 0 pixels with `rays`; validation; `FORGE_NO_RAY_QUERY=1`.
 
+**Step 4 in detail, before its code (the owner's go, 2026-11-09).** With no rays today the indirect light is the open sky's times GTAO: a bar lit like the street. D-108's plan had D-097's relit bricks first for authored worlds. They stand, but their format, their bake and their streaming are a piece of their own, and they do nothing for a world that cannot be baked. Two parts come first, which work with no bake at all, in this order:
+
+*Part 1, a room's light from its cube.* Step 3's cubes already hold what a room sees: the sun through the rings, the lamps through the atlas, what glows, the sky through its openings.
+- **Read:** a cosine-weighted level of each tile (the atlas's sixth, 8 x 8 texels) by the surface's normal, in place of the sky's irradiance, blended between the two volumes a point is deepest in, as the reflections are. Outside every volume the sky stays. The sky's reflection on rough rows dims by the same ratio, as the probes dim it (#68).
+- **Bounces:** a cube's faces are lit by the ambient of its last round, starting from none. Three more rounds follow the first, with no wait between them, and the light builds up in about 24 frames at the default budget. A round asked for later by a change starts from what is there.
+- **Only without probes:** where the frame has probes, as on a device with rays, they stay the light and nothing changes.
+
+*Part 2, the last few metres, from the screen.* A visibility-bitmask pass at half resolution over that base, written from the published method: per pixel a few slices, each a mask of 32 sectors, a sample's light counted over the sectors it newly covers, with a thickness guessed.
+- **What it reads:** the last frame's colour, reprojected, corrected for the exposure. It adds what the frame shows of the near surfaces' light, and never the base term: its light goes when its source leaves the screen.
+- **Its radius:** its own setting, in metres, faded to nothing at its end. The depth level a sample reads comes from its step's index.
+- **Its filter:** one spatial pass of a fixed small radius, then one temporal one; the resolve reads the half-resolution texel nearest in depth to the pixel.
+
+*After this, on their own:* D-097's bricks for authored worlds; a distance field only if a measurement of a procedural world asks for it.
+
+*Settings:* `r.gi.cube_ambient`, `r.gi.screen`, `r.gi.screen_radius`, `r.gi.screen_slices`. Every pass a graph pass, in the profiler and `docs/PROFILE.md`.
+
+*Its check.* `FORGE_NO_RAY_QUERY=1` against the traced image of the same view at a fixed exposure, the error per tile in stops and stills side by side; a moving camera; timings; 0 pixels with rays and probes as they are.
+
+**Amended 2026-11-11: step 4 built** (the owner's go for step 4; step 5 stays proposed). The cubes' diffuse level and their rounds in `crates/forge-render/src/reflection_cubes.rs` and `cube_prefilter_main`, their reading in `cube_pick` and `cube_ambient` of `shaders/meshlet.slang`, the near light in `crates/forge-render/src/screen_gi.rs` and `shaders/screen_gi.slang`. Where the device has ray queries nothing changes: 0 pixels against main in the city, the gallery and the island.
+
+- **A room's light from its cube, as planned.** Where the frame has no probes, **street cubes** too: one where the camera stands whenever it has gone 32 m from every other, 80 m across, up to 40 kept (the furthest goes). A point the camera stood in has a view, which a point of a grid need not. One made in a room fills what the room's own volumes miss: in the private bar, whose volumes leave gaps, the light measured +0.02 stops from the traced with it and +0.31 without. A new cube draws its six faces, then three bounce rounds.
+- **Blending:** the three cubes a point is deepest in, a room's before a street's. Inside a room its cube is the light: the street cubes count only as far as the rooms there leave them. A cube's weight rises over its first half metre inside; a street cube's light fades to the open sky's over its outer 8 m, so no line shows where the street cubes end; and every cube's weight rises over 45 frames once its six faces are drawn. Taking over at once, a new street cube changed the facades round the camera in one frame: walking 80 m down the city's street, the largest frame-to-frame ꟻLIP over the rays' was 0.146 and 0.078 where two cubes came in; now it is 0.018, nowhere in particular (mean 0.128 against 0.121).
+- **What a face keeps:** no sun or lamp glints, which are aimed and would colour a room's average, but the sky's reflection, as in step 3: without it glass and metal came out black in the cubes' reflections. It reads the sky alone, dimmed by the cube's light by a ratio of at most 1, so nothing feeds back round after round.
+- **The near light, where it moved from the design:** every sample reads the half-resolution depth itself, no level chosen from a distance. The resolve takes, of the four half-resolution texels round its pixel, the one nearest in depth; one 3 x 3 spatial pass, then a temporal one (90 % history, a 5 % depth test). Two slices and six steps a side over 2 m, 0.4 m thick (`r.gi.screen_radius`, `r.gi.screen_slices`). On wherever there are no rays. Its history starts afresh when its images are new or the pass was off, and on a cut, when it reads no last frame's light either; a value that is no number is not kept.
+- **Found on the way, in steps 3 and 4:**
+  - On this GPU a pass that reads back the colour the class passes wrote saw, in whole tiles, the memory as it was before them, as #349's mirror rays did: the cube's face pass (whole tiles of a face's layered ground came out as another transient's bytes, magenta in the cubes and in the street's light), the reflection colour pyramid's first level and the near light's kept colour. Each stands behind a full barrier now.
+  - A vertex exactly in a face's plane (w = 0: the street's middle line under a cube placed on it) made its triangle's barycentrics infinite. The faces are drawn from 1 to 2 cm off the cube's point, by amounts no metre grid holds.
+  - A NaN that one frame's reflection brought back stayed in the reflections' history for good, a streak on a tower's glass. The history neither keeps nor reads a value that is no number, and the colour pyramid counts such a pixel as empty.
+- **Results.** `FORGE_NO_RAY_QUERY=1` against the traced image of the same view (rays and probes) at one exposure, in stops of the mean and ꟻLIP; before this step the open sky's light:
+
+| View | Before | Now (without the near light) | ꟻLIP before, now |
+|---|---|---|---|
+| The city's street, sun 35° | +0.74 | +0.08 (+0.07) | 0.263, 0.158 |
+| Its avenue, sun 12° | +0.89 | +0.50 (+0.49) | 0.205, 0.139 |
+| The city from above | +0.31 | +0.32 (+0.31) | 0.178, 0.181 |
+| A private district's bar | +7.9 | +0.02 (-0.04) | 0.98, 0.109 |
+
+  The low sun's avenue stays brightest: it looks far down the street, past the 40 m a cube stands for, and its far end takes the open sky. The bar's frame is 9.6 ms against about 17 traced. Costs in `docs/PROFILE.md`.
+- **Limits.** The city seen from above keeps the open sky: street cubes stand where the camera has been, and a camera in the air has none round what it sees. A cube is a view from one point, so the facades round it take the light it saw, not their own. A street cube made in a room lends the room's light to the street outside it, within its 40 m, until the camera has walked 32 m out and one is made there. The near light holds only what the screen shows, and goes with it; its history is reprojected from jittered pixel centres with the unjittered motion, a drift of up to half a pixel, a slight blur. A cube is lit when it is drawn: the sun's turn past 5° redraws it face by face. Particles' and fog's sun still go unshadowed without rays (step 5).
+
 **Amended 2026-11-09: step 3 built** (the owner's go for step 3; steps 4 and 5 stay proposed). The march and the cubes' shaders in `shaders/meshlet.slang`, the pyramids in `shaders/reflection_pyramid.slang`, the placement in `crates/forge-render/src/reflection_cubes.rs`, the passes in `meshlet.rs`. `r.reflections.mode rays` stays the default where the device has ray queries, and its frame is the base's: 0 pixels in the city, the gallery and the island. Cubes need `r.shadows.mode rings`, whose chains draw them.
 
 - **A face is shaded by the camera's own resolve,** run a second time on the face's visibility, so that every material class comes with no shading of its own (`resolve_view`). The sun is the rings' from where the face stands (`Frame::ring_offset`). It reads the frame's probes where there are any. Its lamps are all those of the place, each through the atlas where it has a slot, none picked by a noise that would stay in the cube. What moves is left out: a cube is kept, and what moved on would stay in it.
