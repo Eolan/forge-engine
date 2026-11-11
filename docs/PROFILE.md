@@ -3140,6 +3140,15 @@ the bar's 9.6 ms against about 17 traced. A street cube's bounce rounds are thre
 first, through the rings' chains (`shadow/ring cull`, `shadow/ring draw`). Memory: three half-resolution `RGBA16F` images (the kept
 light and two of history), 8.6 MB at 1600 x 900, made when the near light is first on.
 
+The no-ray path complete (D-108, step 5). The private district's bar with its smoke and its fog, 2560 x 1440 DLSS Quality, `FORGE_NO_RAY_QUERY=1` against the traced path:
+
+| Pass | Without rays | Traced |
+|---|---|---|
+| `fog/light`: the sun from the rings, the strong lamps through the lamps' atlas, the cubes' light | 0.391 | 0.412 |
+| `particles/advance` (on the graphics queue with the rings) | 0.002 | 0.001 |
+| `particles/draw` | 0.129 | 0.113 |
+| The frame | 11.76 | 18.03 |
+
 ## Not measured yet
 
 - **Streaming**: residency pools, request queue depth, drive and decompression throughput.

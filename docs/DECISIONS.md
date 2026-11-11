@@ -12972,6 +12972,32 @@ screen, kept until that is well off. A cone takes a slot; anything else six, a c
 
 *Its check.* `FORGE_NO_RAY_QUERY=1` against the traced image of the same view at a fixed exposure, the error per tile in stops and stills side by side; a moving camera; timings; 0 pixels with rays and probes as they are.
 
+**Step 5 in detail, before its code (the owner's go, 2026-11-11).** Three parts, in this order:
+
+*Part 1, no module that asks for ray queries on a device without them.* Compiled offline, 15 entries of the frame's shaders declare the capability. Of those a device without ray queries creates, each gets an entry of its own without the traced code, as the resolve's classes have (`resolve_standard_main` against `resolve_standard_rt_main`), picked by the device's features:
+- **The resolve's plain entries** still hold two traced calls behind run-time switches: D-088's reference for the near light (`near_field_reference`) and the jelly's see-through (`shade_jelly`). Their switches become the entry's compile-time one.
+- **The particles, the splashes, the dust's shafts, the far plants' impostors, the fog's light** and the lab's liquid: an entry each without rays.
+- **The check:** the offline compile of every entry the no-ray path creates finds no `RayQueryKHR`, and validation is clean with `FORGE_NO_RAY_QUERY=1`.
+
+*Part 2, the sun without rays from the rings.* The rings' records and a point's visibility (no surface, so no normal offset, and a few taps of the filter) move to a module of their own, `shadow_rings.slang`, which `meshlet.slang` and the others import. The particles, the splashes, the dust's shafts and the impostors read it in place of their shadow ray, each pass declaring the rings' composed layers. Past the last ring the sun is seen, as the resolve's own pixels take it.
+
+*Part 3, the fog volumes without rays* (D-099; until now left out without them):
+- **Their sun** from the rings.
+- **Their lamps' shadows** from the lamp atlas (step 2) where the lamp has a slot; the others unshadowed, as the strongest lamps beyond the rays' budget are now.
+- **Their ambient,** with no probes, from the cubes (step 4): a white surface facing up and one facing down, as the probes give it, where a cube covers the froxel, and the open sky's elsewhere. Without this a bar's haze would take the street's light.
+
+*After this, as its own run, asked for first (a long one):* D-108's tables of error and cost, `FORGE_NO_RAY_QUERY=1` against the traced image per view and per time of day (`tools/gi-compare.sh`'s method).
+
+*Its check.* 0 pixels with rays against `main`; validation and sync validation without ray queries on both paths; the bar with its smoke and its fog against the rays' at one exposure; the cost of each part.
+
+**Amended 2026-11-11: step 5 built** (the owner's go for step 5). The rings' records and a point's share of the sun in `shaders/shadow_rings.slang`, the cubes' records and lookups in `shaders/reflection_cubes.slang`, both imported by `meshlet.slang` and the passes below; `SunRings` and `CubeLight` hand them to the passes of other modules. Where the device has ray queries nothing changes: 0 pixels against `main` in the city, the gallery and the island.
+
+- **No module asks for ray queries on a device without them.** Every entry of the frame's shaders compiled offline: 74 hold no ray query, 18 do, and those are only the traced entries and the passes that exist only with rays. Each pass a device without ray queries creates has its own entry without the traced code (`advance_rings_main`, `vert_rings_main`, `light_rings_main`, `impostor_*_rings_main`, `fog_light_rings_main`, `march_rings_main`), picked by the device's features. The resolve's plain entries had two traced calls behind run-time switches; their tests now carry the entry's own. Validation with `FORGE_NO_RAY_QUERY=1`: 0 errors in the city (16 before), the private bar (24 before) and the island.
+- **The sun without rays from the rings** for the particles, the splashes, the dust's shafts and the far plants' impostors: the finest ring that holds the point, four taps round it, the sun seen past the last ring. The particles' advance reads the rings' layers, render targets, so it runs on the graphics queue when it has them.
+- **The fog volumes without rays** (until now left out): the sun from the rings; the strong lamps' shadows from the lamps' atlas, a lamp without a slot unshadowed; with no probes, the light round a froxel from the cubes, as a white surface facing up and one facing down take it, the open sky's where no cube covers it. **The smoke** takes the cubes' light the same way: without it, the bar's smoke stood white in the room, lit by the open sky.
+- **Results.** The private bar with its smoke and its fog, `FORGE_NO_RAY_QUERY=1` against the traced image at one exposure: -0.07 stops, ꟻLIP 0.095 (0.109 before with both left out). Its frame is 11.8 ms against 18.0 traced; `fog/light` 0.39 ms against 0.41.
+- **Limits.** Without rays the particles collide with nothing and the tank's bent rays go to its box. A point's share of the sun has no blocker search, so its penumbra is the ring's texel and four taps, soft and fixed. The fog's lamps beyond the atlas's 48 go unshadowed. The tables of error and cost per view and per time of day, D-108's last item, wait for the owner's go: a long run.
+
 **Amended 2026-11-11: step 4 built** (the owner's go for step 4; step 5 stays proposed). The cubes' diffuse level and their rounds in `crates/forge-render/src/reflection_cubes.rs` and `cube_prefilter_main`, their reading in `cube_pick` and `cube_ambient` of `shaders/meshlet.slang`, the near light in `crates/forge-render/src/screen_gi.rs` and `shaders/screen_gi.slang`. Where the device has ray queries nothing changes: 0 pixels against main in the city, the gallery and the island.
 
 - **A room's light from its cube, as planned.** Where the frame has no probes, **street cubes** too: one where the camera stands whenever it has gone 32 m from every other, 80 m across, up to 40 kept (the furthest goes). A point the camera stood in has a view, which a point of a grid need not. One made in a room fills what the room's own volumes miss: in the private bar, whose volumes leave gaps, the light measured +0.02 stops from the traced with it and +0.31 without. A new cube draws its six faces, then three bounce rounds.
