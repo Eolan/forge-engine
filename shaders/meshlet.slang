@@ -642,6 +642,17 @@ static bool g_lamps_unshadowed = false;
 // RAY_PROBE and the mirror rays' RAY_MIRROR, so an instance left out of one is out of all that
 // pass's rays (a probe's hit's shadow rays too).
 static uint g_ray_mask = RAY_SHADOW;
+// Whether this pass's shadow rays pass out of the hulls they start inside (INSTANCE_HULL,
+// `ray_blocked`): the rays from the finer pieces a hull stands for. Off for a ray from a coarse
+// stand-in's own surface, which is no piece of any hull: a far ground's stand-in lies under the
+// open bases of the buildings' hulls, and its rays, passing up through them and out by their
+// roofs, lost the buildings' shadows until the buildings' own pieces came.
+static bool g_shadows_leave_hulls = true;
+// The ray flag that says so.
+uint hull_flag()
+{
+    return g_shadows_leave_hulls ? RAY_FLAG_CULL_BACK_FACING_TRIANGLES : RAY_FLAG_NONE;
+}
 // Whether this pass's diffuse rays left a surface in a room (`rays_leave`, `sky_light_along`).
 static bool g_rays_from_room = false;
 
@@ -7416,7 +7427,7 @@ bool ray_candidate_kept(Frame* f, uint instance, uint primitive, float2 b)
 bool ray_blocked(Frame* f, RayDesc ray)
 {
     RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_SKIP_CLOSEST_HIT_SHADER> q;
-    q.TraceRayInline(RaytracingAccelerationStructure(f[0].tlas), ray_opacity(f) | RAY_FLAG_CULL_BACK_FACING_TRIANGLES, g_ray_mask, ray);
+    q.TraceRayInline(RaytracingAccelerationStructure(f[0].tlas), ray_opacity(f) | hull_flag(), g_ray_mask, ray);
     while (q.Proceed())
     {
         if (shadow_candidate_kept(f, q.CandidateInstanceID(), cut_triangle(f, q.CandidateInstanceID(), q.CandidateGeometryIndex(), q.CandidatePrimitiveIndex()), q.CandidateTriangleBarycentrics()))
@@ -7427,7 +7438,7 @@ bool ray_blocked(Frame* f, RayDesc ray)
     if (movers_tlas(f) == 0)
         return false;
     RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_SKIP_CLOSEST_HIT_SHADER> m;
-    m.TraceRayInline(RaytracingAccelerationStructure(movers_tlas(f)), ray_opacity(f) | RAY_FLAG_CULL_BACK_FACING_TRIANGLES, g_ray_mask, ray);
+    m.TraceRayInline(RaytracingAccelerationStructure(movers_tlas(f)), ray_opacity(f) | hull_flag(), g_ray_mask, ray);
     while (m.Proceed())
     {
         if (shadow_candidate_kept(f, m.CandidateInstanceID(), cut_triangle(f, m.CandidateInstanceID(), m.CandidateGeometryIndex(), m.CandidatePrimitiveIndex()), m.CandidateTriangleBarycentrics()))
@@ -7514,7 +7525,7 @@ ClosestHit trace_closest(Frame* f, RayDesc ray, bool shadow = false, bool probe 
     o.t = ray.TMax;
     o.mover = false;
     // A shadow ray passes out of a hull (INSTANCE_HULL), as `ray_blocked`'s.
-    uint flags = ray_opacity(f) | (shadow ? RAY_FLAG_CULL_BACK_FACING_TRIANGLES : RAY_FLAG_NONE);
+    uint flags = ray_opacity(f) | (shadow ? hull_flag() : RAY_FLAG_NONE);
     RayQuery<RAY_FLAG_NONE> q;
     q.TraceRayInline(RaytracingAccelerationStructure(f[0].tlas), flags, g_ray_mask, ray);
     while (q.Proceed())
@@ -10138,6 +10149,8 @@ void sun_shadow_trace_main(uint3 id : SV_DispatchThreadID)
     }
     // The trees' cards near, their proxies far (D-075 step 3).
     g_ray_mask = shadow_world(f, surface_relative, pixel);
+    // A stand-in's own surface is inside no hull (`g_shadows_leave_hulls`).
+    g_shadows_leave_hulls = is_grass(vis) || (s.inst.flags & INSTANCE_COARSE) == 0u;
     // A point of the disc, uniform in area, as `sun_shadow` aims.
     float2 u = spatio_temporal_noise(pixel, f[0].noise_frame);
     float3 t = normalize(cross(sun, abs(sun.y) < 0.99 ? float3(0.0, 1.0, 0.0) : float3(1.0, 0.0, 0.0)));
