@@ -773,6 +773,7 @@ impl forge_render::CellSource for GridCells {
         let mesh = editor.add_mesh(
             &cooked,
             forge_render::meshlet::MeshRays {
+                error: 0.0,
                 budget: merged.triangle_count() as u32,
                 terrain: false,
             },

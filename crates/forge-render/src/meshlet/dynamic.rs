@@ -127,6 +127,16 @@ impl Ranges {
         Some(start)
     }
 
+    /// The entries taken under the highest ever handed out.
+    fn taken(&self) -> u32 {
+        let free: u32 = self
+            .free
+            .iter()
+            .map(|&(start, len)| len.min(self.high.saturating_sub(start)))
+            .sum();
+        self.high - free
+    }
+
     /// Whether [`Ranges::take`] would find `len` entries.
     fn fits(&self, len: u32) -> bool {
         len == 0 || self.free.iter().any(|&(_, l)| l >= len)
@@ -710,8 +720,33 @@ struct NewMesh {
 pub struct MeshRays {
     /// The most triangles of its cut ([`MeshletSceneBuilder::set_ray_budget`]).
     pub budget: u32,
+    /// How far its cut may stand from the mesh as drawn up close, in the mesh's metres: the
+    /// coarsest cut within it is taken (coarser still where `budget` asks). 0: the finest. An
+    /// authored world's rays held every mesh's finest triangles, the larger half of its
+    /// geometry's memory; a shadow ray starts 2 cm off its surface at the least, twice a cut's
+    /// error beyond that, so a centimetre of it shows nowhere.
+    pub error: f32,
     /// Whether it is ground to the rays ([`MeshletSceneBuilder::set_ray_terrain`]).
     pub terrain: bool,
+}
+
+impl MeshRays {
+    /// The error its cut of `mesh` is made at.
+    fn cut_error(&self, mesh: &MeshletMesh) -> f32 {
+        raytrace::cut_error(&[&mesh.meshlets], self.budget)
+            .max(raytrace::error_within(&mesh.meshlets, self.error))
+    }
+
+    /// The vertices and the triangles its cut of `mesh` takes of a dynamic scene's tables
+    /// ([`DynamicCapacity::ray_vertices`], [`DynamicCapacity::ray_triangles`]): what
+    /// [`SceneEditor::add_mesh`] will ask for.
+    pub fn cut_size(&self, mesh: &MeshletMesh) -> (u32, u32) {
+        let (vertices, triangles) = raytrace::cut_size(&mesh.meshlets, self.cut_error(mesh));
+        (
+            vertices.min(u64::from(u32::MAX)) as u32,
+            triangles.min(u64::from(u32::MAX)) as u32,
+        )
+    }
 }
 
 /// The top-level structure's inputs the editor keeps: its own copy of the instance table, the
@@ -853,7 +888,13 @@ impl SceneEditor {
                     memory: Arc::default(),
                     sources: sources.clone(),
                 };
-                let mut cut = raytrace::mesh_cut(&mesh.meshlets, &store, rays.budget, mesh.uvs)?;
+                let mut cut = raytrace::mesh_cut_at(
+                    &mesh.meshlets,
+                    &store,
+                    rays.cut_error(mesh),
+                    rays.budget,
+                    mesh.uvs,
+                )?;
                 if rays.terrain {
                     cut.shadow_start = raytrace::TERRAIN_SHADOW_START * cut.error;
                 }
@@ -959,6 +1000,18 @@ impl SceneEditor {
     /// a mesh of the build.
     pub fn mesh_pinned_bytes(&self, mesh: MeshId) -> u64 {
         self.pinned_bytes.get(mesh.0 as usize).copied().unwrap_or(0)
+    }
+
+    /// The entries taken of the rays' vertices and triangles tables, and the highest of each
+    /// ever handed out: what a scene's [`DynamicCapacity`] must hold.
+    pub fn ray_use(&self) -> [u32; 4] {
+        let room = self.room.lock().expect("the room");
+        [
+            room.ray_vertices.taken(),
+            room.ray_vertices.high,
+            room.ray_triangles.taken(),
+            room.ray_triangles.high,
+        ]
     }
 
     /// The root pages the scene's pool can still pin, the pages its small meshes share (#387)
@@ -1950,6 +2003,15 @@ mod tests {
         assert_eq!(r.free, vec![(0, 10)]);
         assert_eq!(r.take(0), Some(0), "nothing taken for nothing");
         assert_eq!(r.high, 8, "the highest entry ever handed out");
+        assert_eq!(r.taken(), 0);
+        assert_eq!(r.take(3), Some(0));
+        assert_eq!(r.take(4), Some(3));
+        r.give(0, 3);
+        assert_eq!(
+            (r.taken(), r.high),
+            (4, 8),
+            "the free end past the highest counts for nothing"
+        );
     }
 
     #[test]

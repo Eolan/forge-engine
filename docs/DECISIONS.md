@@ -12599,6 +12599,21 @@ assumption fails, and it failed exactly where the owner saw it. Found by turning
 - **Measured, private district:** a roof in shade 14 times brighter, the darkest ground patch 7 times; a bar interior changes in 0.06 % of its pixels by over 12 codes; the walk's p50 19.9 ms, p99 26.1 ms.
 - **Left:** the probes still count back faces as being inside something, and the surface cache, SHaRC's and NRC's later bounces and the path reference still read a back as black.
 
+**Amended 2026-11-11: what the rays hold of a streamed scene's meshes.** The rays' tables and structures were the larger half of the private district's geometry: every mesh's finest triangles, in room reserved for twice that.
+- **The room by the cut:** `MeshRays::cut_size` says what a mesh's cut takes of the rays' vertices and triangles. A host sizing its `DynamicCapacity` from `MeshletSceneBuilder::dynamic_capacity` counted every level of detail, about twice the finest. `SceneEditor::ray_use` says what is taken and the highest ever handed out.
+- **A cut within an error:** `MeshRays::error`, how far the rays' cut may stand from the mesh as drawn up close; the coarsest cut within it is taken. A shadow ray starts 2 cm off its surface at the least and twice its cut's error beyond that, so a centimetre shows nowhere.
+- **Measured,** the city flight in real time, 6,200 frames at 2560 x 1440 under DLSS Quality:
+
+| | Geometry | VRAM | Rays' triangles at most | p50 / p99 |
+|---|---|---|---|---|
+| before | 6,586 MiB | 83.8 % | not logged | 10.3 / 14.4 ms |
+| the room by the cut, the finest cut | 5,851 MiB | 78.4 % | 25.5 M | 10.0 / 13.8 ms |
+| within 1 cm | 5,372 MiB | 75.6 % | 20.3 M | 10.0 / 13.5 ms |
+| within 3 cm | 5,259 MiB | 75.3 % | 19.1 M | 10.0 / 13.3 ms |
+
+- **Kept: 1 cm.** Two still views against the finest cut at one exposure: 0.36 % and 0.13 % of the pixels over 2 codes, the level of two runs of one setting. At 3 cm one of the two views changed over 20 % of its pixels for 113 MiB more.
+- **Left:** the structures themselves are built without compaction.
+
 **Amended 2026-11-11: a streamed scene's small meshes share pages (#387 for the edits).** A built scene packed its small meshes into shared pages; a mesh an edit brought took whole pages of its own, one at least pinned for its roots. The private district holds 16,000 meshes at once in its centre, most of a few kilobytes: their roots alone filled the 16,384 pages, pieces were refused (up to 768 in one update), and what was left for the finer pages thrashed.
 - **Now:** a mesh whose clusters fill at most half a page takes no page of its own (`SceneEditor::add_mesh`). Its bytes go at an offset of a page pinned for the small meshes, the first with room; its records point there; the page leaves with its last mesh. `FORGE_NO_PAGE_PACKING=1` gives each mesh its pages back, in a built scene and in the edits alike. `SceneEditor::mesh_pinned_bytes` says what a mesh keeps resident, `SceneEditor::page_room` what the pool has left.
 - **Measured,** the city flight in real time, 6,200 frames at 2560 x 1440 under DLSS Quality: no piece refused; 10,200 pages resident of 16,384 where every page was taken; 0 to 1 page uploaded a frame where 12 to 29 were, and at most 31 wanted pages absent where up to 1,100 were (geometry drawn coarser than asked). 16,300 meshes held: 1,776 shared pages 95 % full hold the small ones. p50 10.2 ms, p99 13.9 (10.4 and 14.4).

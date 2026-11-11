@@ -395,6 +395,7 @@ pub(crate) fn edit_scene(
     upload_normal_maps(device, parts, &new_cells, &mut new_tiles)?;
     let rotation = parts.placement.rotation.as_quat();
     let rays = MeshRays {
+        error: 0.0,
         budget: TILE_RAY_BUDGET,
         terrain: true,
     };

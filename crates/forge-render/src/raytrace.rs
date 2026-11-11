@@ -155,6 +155,30 @@ pub(crate) fn mesh_cut(
     mesh_cut_at(meshlets, store, cut_error(&[meshlets], budget), budget, uvs)
 }
 
+/// The error of the coarsest cut of `meshlets` (one mesh's clusters) that stands no further
+/// than `most` from the mesh as drawn up close: the largest of its clusters' errors at or
+/// under it, 0 (the finest cut) when none is.
+pub(crate) fn error_within(meshlets: &[GpuMeshlet], most: f32) -> f32 {
+    meshlets
+        .iter()
+        .map(|m| m.self_error)
+        .filter(|&e| e <= most)
+        .fold(0.0, f32::max)
+}
+
+/// The vertices and the triangles of the cut of `meshlets` (one mesh's clusters) at `error`.
+pub(crate) fn cut_size(meshlets: &[GpuMeshlet], error: f32) -> (u64, u64) {
+    meshlets
+        .iter()
+        .filter(|m| m.self_error <= error && error < m.parent_error)
+        .fold((0, 0), |(v, t), m| {
+            (
+                v + u64::from(m.vertex_count),
+                t + u64::from(m.triangle_count),
+            )
+        })
+}
+
 /// The cut of `meshlets` at `error`, read from `store` (`budget` only for the log), with its
 /// UVs when `uvs` (the mesh's pages carry them).
 pub(crate) fn mesh_cut_at(
