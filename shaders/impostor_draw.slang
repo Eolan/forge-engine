@@ -8,6 +8,7 @@ import sh;
 import probes;
 import impostor_layout;
 import brdf;
+import shadow_rings;
 
 static const float CELL_SIZE = 1024.0;
 // The far shadow rays' world (`RAY_SHADOW_FAR` in meshlet.slang, D-075 step 3): the plants'
@@ -94,6 +95,7 @@ struct Frame
     float4 cloud_frame;              // the shadow map's first corner (world x, z), 1 / its span
     uint64_t tlas_movers;            // the movers' structure (#79), 0 for none
     ProbeField* probes;              // this frame's light probes, as the resolve's, or null
+    RingSet* rings;                  // the sun's shadow rings (D-108), read where there is no structure; null: none
 };
 
 struct Push
@@ -281,6 +283,15 @@ bool blocked_in(uint64_t tlas, RayDesc ray)
     return q.CommittedStatus() == COMMITTED_TRIANGLE_HIT;
 }
 
+// The share of the sun `relative` sees: the far shadows' world and the movers' where the entry
+// traces (`RAYS`) and the scene has a structure, else the sun's shadow rings (D-108 step 5).
+float sun_seen<let RAYS : int>(Frame* f, float3 relative, float3 sun, float turn)
+{
+    if (RAYS == 0 || f[0].tlas == 0)
+        return ring_sun(f[0].rings, relative, turn);
+    return sun_blocked(f, relative, sun) ? 0.0 : 1.0;
+}
+
 bool sun_blocked(Frame* f, float3 relative, float3 sun)
 {
     RayDesc ray;
@@ -322,7 +333,7 @@ struct Shaded
 // point, moved along the view by the frame's noise so that DLAA averages the leaves' depths as
 // SIGMA does the far cards' shadows; the camera's motion at that depth (`motion_at` in
 // taa.slang).
-Shaded shade(Varyings v)
+Shaded shade<let RAYS : int>(Varyings v)
 {
     Frame* f = push.frame;
     Impostor imp = f[0].instances[v.instance];
@@ -376,7 +387,7 @@ Shaded shade(Varyings v)
             interleaved_gradient_noise(pixel, f[0].noise_frame, float2(23.0, 11.0)),
             interleaved_gradient_noise(pixel, f[0].noise_frame, float2(5.0, 37.0)),
             interleaved_gradient_noise(pixel, f[0].noise_frame, float2(41.0, 3.0))) - 0.5;
-        shadow = sun_blocked(f, relative + wander * (SHADOW_WANDER * kind.radius * imp.scale), sun) ? 0.0 : 1.0;
+        shadow = sun_seen<RAYS>(f, relative + wander * (SHADOW_WANDER * kind.radius * imp.scale), sun, wander.x + 0.5);
         shadow *= cloud_light(f, f[0].camera_in_scene + relative, sun);
     }
     // The sky's light on leaves that agree that much: from their normal's, towards the mean of its
@@ -437,7 +448,19 @@ struct Out
 [shader("fragment")]
 Out impostor_fragment_main(Varyings v)
 {
-    Shaded s = shade(v);
+    return fragment<1>(v);
+}
+
+// The same without ray queries (D-108 step 5): the sun from the rings.
+[shader("fragment")]
+Out impostor_fragment_rings_main(Varyings v)
+{
+    return fragment<0>(v);
+}
+
+Out fragment<let RAYS : int>(Varyings v)
+{
+    Shaded s = shade<RAYS>(v);
     Out o;
     o.color = s.color;
     o.motion = s.motion;
@@ -456,7 +479,19 @@ struct ColorOut
 [shader("fragment")]
 ColorOut impostor_color_main(Varyings v)
 {
-    Shaded s = shade(v);
+    return color<1>(v);
+}
+
+// The same without ray queries (D-108 step 5): the sun from the rings.
+[shader("fragment")]
+ColorOut impostor_color_rings_main(Varyings v)
+{
+    return color<0>(v);
+}
+
+ColorOut color<let RAYS : int>(Varyings v)
+{
+    Shaded s = shade<RAYS>(v);
     ColorOut o;
     o.color = s.color;
     o.depth = s.depth;

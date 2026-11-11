@@ -38,6 +38,8 @@ struct GpuDust {
     fill: [f32; 4],
     tlas: u64,
     tlas_movers: u64,
+    /// The sun's shadow rings' record (D-108): the shafts where there is no structure; 0: none.
+    rings: u64,
     light: u32,
     light_sampled: u32,
     volume: u32,
@@ -50,7 +52,7 @@ struct GpuDust {
     pad: u32,
 }
 
-const _: () = assert!(std::mem::size_of::<GpuDust>() == 200);
+const _: () = assert!(std::mem::size_of::<GpuDust>() == 208);
 
 /// What a frame's dust needs.
 #[derive(Clone, Copy, Debug)]
@@ -81,6 +83,9 @@ pub struct DustParams {
     /// The movers' structure ([`crate::raytrace::SceneRays::movers_address`], #79), traced
     /// after the static one so they cast shafts too (0: none).
     pub tlas_movers: u64,
+    /// The sun's shadow rings (D-108 step 5): the shafts where there is no structure to trace (a
+    /// device without ray queries). None: no shafts there.
+    pub sun_rings: Option<crate::SunRings>,
     /// This frame's movers ([`crate::DrawTargets::movers`]), whose structure the shafts read.
     pub movers: Option<crate::MoversFrame>,
     /// The noise's frame (TAA's, modulo its jitter period).
@@ -123,7 +128,15 @@ impl DustVolume {
             })
             .collect::<Result<Vec<_>>>()?;
         Ok(Self {
-            light: compute("light_main", "dust light")?,
+            // Without ray queries, the entry that holds none: the shafts from the rings (D-108).
+            light: compute(
+                if device.features().ray_query {
+                    "light_main"
+                } else {
+                    "light_rings_main"
+                },
+                "dust light",
+            )?,
             integrate: compute("integrate_main", "dust integrate")?,
             apply: compute("apply_main", "dust apply")?,
             params,
@@ -162,6 +175,7 @@ impl DustVolume {
             .pass("dust/light")
             .image(light, ImageAccess::StorageWrite(compute))
             .with(|p| crate::MoversFrame::declare(params.movers, p, compute, true))
+            .with(|p| crate::SunRings::declare(params.sun_rings, p, compute))
             .run(move |resources, commands| {
                 buffer.write(
                     0,
@@ -178,6 +192,7 @@ impl DustVolume {
                         fill: params.fill.extend(0.0).to_array(),
                         tlas: params.tlas,
                         tlas_movers: params.tlas_movers,
+                        rings: crate::SunRings::address(params.sun_rings),
                         light: resources.storage(light, 0).0,
                         light_sampled: resources.sampled(light).0,
                         volume: resources.storage(volume, 0).0,

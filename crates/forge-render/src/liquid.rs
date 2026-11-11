@@ -663,9 +663,16 @@ impl Liquid {
         solver: LiquidSolver,
         look: LiquidLook,
     ) -> Result<Self> {
+        let rays = device.features().ray_query;
         let pipelines = KERNELS
             .iter()
             .map(|&(file, entry, push)| {
+                // Without ray queries, the march that holds none (D-108 step 5).
+                let entry = if entry == "march_main" && !rays {
+                    "march_rings_main"
+                } else {
+                    entry
+                };
                 let module = device.create_shader_module(
                     &shaders.compile(file, entry, ShaderStage::Compute)?,
                     entry,

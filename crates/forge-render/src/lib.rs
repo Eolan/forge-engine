@@ -110,11 +110,11 @@ pub use liquid::{
 pub use local_exposure::{LocalExposure, LocalExposureRead, LocalExposureSettings};
 pub use material::motion::{Flipbook, Glow, MaterialMotion, Slide, Slideshow};
 pub use meshlet::{
-    AmbientLight, CullCamera, CullFlags, DiffuseForDenoiser, DrawTargets, DynamicCapacity,
-    FrameStats, GeometryPath, InstanceOcclusion, LampShadows, MAX_PICKS, MeshId, MeshRays,
-    MeshletRenderer, MeshletScene, MeshletSceneBuilder, MoverTransform, MoversFrame, Picked,
-    PickedInstance, PickedWhat, PlanetView, RayRequests, SceneEdit, SceneEditor, SunShadowRays,
-    SwRaster, Visibility,
+    AmbientLight, CubeLight, CullCamera, CullFlags, DiffuseForDenoiser, DrawTargets,
+    DynamicCapacity, FrameStats, GeometryPath, InstanceOcclusion, LampShadows, MAX_PICKS, MeshId,
+    MeshRays, MeshletRenderer, MeshletScene, MeshletSceneBuilder, MoverTransform, MoversFrame,
+    Picked, PickedInstance, PickedWhat, PlanetView, RayRequests, SceneEdit, SceneEditor, SunRings,
+    SunShadowRays, SwRaster, Visibility,
 };
 pub use nrc::{NrcCache, NrcLight};
 pub use particles::{Burst, DrawKind, Effect, Emitter, ParticleParams, ParticleStats, Particles};

@@ -211,6 +211,9 @@ struct GpuFog {
     /// The distance fog ([`DistanceFog`]): its range and height, layers, near colour and the
     /// sun's scale, far colour and the sky's, phase and on (`distance_*` in `fog.slang`).
     distance: [[f32; 4]; 5],
+    /// The sun's shadow rings' record (D-108), read where there is no structure; 0: none.
+    rings: u64,
+    rings_pad: [u32; 2],
 }
 
 /// What a frame's fog needs.
@@ -274,6 +277,15 @@ pub struct FogParams {
     pub cull: bool,
     /// The scene's distance fog beyond the froxels (D-101), none: the froxels' alone.
     pub distance: Option<DistanceFog>,
+    /// The sun's shadow rings (D-108 step 5): the sun's shadow where there is no structure to
+    /// trace (a device without ray queries). None: the sun is seen there.
+    pub sun_rings: Option<crate::SunRings>,
+    /// The lamps' shadow atlas's composed layer (D-108), which the frame record's atlas reads:
+    /// the strong lamps' shadows where there is no structure to trace. None: unshadowed there.
+    pub lamp_atlas: Option<ImageHandle>,
+    /// The reflection cubes' atlas this frame (D-108 step 4), when the frame record's ambient
+    /// reads them: the light round a froxel where there are no probes. None: the open sky's.
+    pub cube_atlas: Option<ImageHandle>,
 }
 
 /// A scene's distance fog (D-101): an exponential height fog beyond the froxels, two layers
@@ -402,7 +414,15 @@ impl FogVolume {
                 .collect::<Result<Vec<_>>>()
         };
         Ok(Self {
-            light: compute("fog_light_main", "fog light")?,
+            // Without ray queries, the entry that holds none (D-108 step 5).
+            light: compute(
+                if device.features().ray_query {
+                    "fog_light_main"
+                } else {
+                    "fog_light_rings_main"
+                },
+                "fog light",
+            )?,
             integrate: compute("fog_integrate_main", "fog integrate")?,
             tiles: compute("fog_tiles_main", "fog tiles")?,
             bound: compute("fog_bound_main", "fog bound")?,
@@ -642,7 +662,11 @@ impl FogVolume {
         let mut pass = graph
             .pass("fog/light")
             .image(this, ImageAccess::StorageWrite(compute))
-            .with(|p| crate::MoversFrame::declare(params.movers, p, compute, true));
+            .with(|p| crate::MoversFrame::declare(params.movers, p, compute, true))
+            .with(|p| crate::SunRings::declare(params.sun_rings, p, compute));
+        for image in [params.lamp_atlas, params.cube_atlas].into_iter().flatten() {
+            pass = pass.image(image, ImageAccess::Sampled(compute));
+        }
         if let Some((last, _)) = last {
             pass = pass.image(last, ImageAccess::Sampled(compute));
         }
@@ -757,6 +781,8 @@ impl FogVolume {
                         [d.anisotropy.clamp(-0.95, 0.95), 1.0, 0.0, 0.0],
                     ]
                 }),
+                rings: crate::SunRings::address(params.sun_rings),
+                rings_pad: [0; 2],
             }],
         );
         pass.run(move |_, commands| {
@@ -846,7 +872,7 @@ mod tests {
     #[test]
     fn the_records_keep_the_shaders_layout() {
         assert_eq!(std::mem::size_of::<GpuFogBox>(), 96);
-        assert_eq!(std::mem::size_of::<GpuFog>(), 464);
+        assert_eq!(std::mem::size_of::<GpuFog>(), 480);
         assert_eq!(std::mem::offset_of!(GpuFog, distance), 384);
         assert_eq!(std::mem::offset_of!(GpuFog, tiles), 356);
         assert_eq!(std::mem::offset_of!(GpuFog, bound), 368);

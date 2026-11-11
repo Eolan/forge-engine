@@ -947,6 +947,65 @@ pub struct RingFrame {
     cells: Option<forge_gpu::BufferHandle>,
 }
 
+/// The sun's shadow rings as a pass of another module reads them (D-108 step 5, `ring_sun` in
+/// `shadow_rings.slang`): the rings' `RingSet` record and their composed layers, which the pass
+/// declares sampled ([`SunRings::declare`]).
+#[derive(Clone, Copy, Debug)]
+pub struct SunRings {
+    /// The `RingSet` record's device address.
+    pub set: u64,
+    /// The composed layers this frame drew.
+    pub layers: [ImageHandle; crate::shadow_rings::RING_COUNT],
+}
+
+impl SunRings {
+    /// Declares the rings' layers sampled by `stages` in `builder`; nothing without rings.
+    pub fn declare<'b, 'f>(
+        rings: Option<Self>,
+        builder: forge_gpu::PassBuilder<'b, 'f>,
+        stages: vk::PipelineStageFlags2,
+    ) -> forge_gpu::PassBuilder<'b, 'f> {
+        let Some(r) = rings else {
+            return builder;
+        };
+        r.layers.iter().fold(builder, |b, &image| {
+            b.image(image, ImageAccess::Sampled(stages))
+        })
+    }
+
+    /// The record's address for a pass's block; 0 without rings (`ring_sun` then sees the sun).
+    pub fn address(rings: Option<Self>) -> u64 {
+        rings.map_or(0, |r| r.set)
+    }
+}
+
+/// The reflection cubes' light as a pass of another module reads it (D-108 step 5,
+/// `cube_ambient_in` in `reflection_cubes.slang`): this frame's cube set and the atlas, which the
+/// pass declares sampled.
+#[derive(Clone, Copy, Debug)]
+pub struct CubeLight {
+    /// The `CubeSet` record's device address.
+    pub set: u64,
+    /// The cubes' atlas.
+    pub atlas: ImageHandle,
+}
+
+impl RingFrame {
+    /// What a pass of another module reads of the rings: see [`SunRings`].
+    pub fn sun(&self) -> SunRings {
+        SunRings {
+            set: self.set,
+            layers: self.composed,
+        }
+    }
+
+    /// The lamps' shadow atlas's composed layer this frame, with the atlas on (D-108 step 2):
+    /// what a pass that reads the frame record's atlas (`atlas_seen`) declares.
+    pub fn lamp_atlas(&self) -> Option<ImageHandle> {
+        self.atlas
+    }
+}
+
 /// The view [`MeshletRenderer::resolve_view`] shades.
 #[derive(Clone, Copy)]
 struct ResolveView<'f> {
@@ -7591,6 +7650,25 @@ impl MeshletRenderer {
             )?,
         });
         Ok(())
+    }
+
+    /// The reflection cubes' atlas this frame (D-108), once [`Self::capture_reflection_cubes`] has
+    /// run: what a pass that reads the frame record's cubes (`cube_ambient`) declares; None
+    /// without cubes.
+    pub fn cube_atlas(&self) -> Option<ImageHandle> {
+        self.cube_atlas.get()
+    }
+
+    /// The cubes' light for a pass of another module this frame, when the shading takes its
+    /// ambient light from them (no probes, `cube_ambient`; once [`Self::capture_reflection_cubes`]
+    /// has run): see [`CubeLight`].
+    pub fn cube_light(&self, slot: FrameSlot) -> Option<CubeLight> {
+        let atlas = self.cube_atlas.get()?;
+        let cubes = self.cubes.as_ref()?;
+        (self.cubes_live() && self.cube_ambient).then(|| CubeLight {
+            set: cubes.sets[slot.index].address(),
+            atlas,
+        })
     }
 
     /// Whether this frame's misses read the cubes.

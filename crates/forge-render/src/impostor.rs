@@ -1111,6 +1111,9 @@ pub struct ImpostorView {
     /// The probes' light, as the resolve's ([`crate::AmbientLight::probes`]): the sky's light on
     /// each impostor where they reach, under a sky; `None`: the open sky's.
     pub probes: Option<crate::probes::ProbeLight>,
+    /// The sun's shadow rings (D-108 step 5): the sun's shadow where there is no structure to
+    /// trace (a device without ray queries). None: the sun is seen there.
+    pub sun_rings: Option<crate::SunRings>,
     /// The render's size.
     pub extent: vk::Extent2D,
 }
@@ -1187,6 +1190,8 @@ struct GpuImpostorFrame {
     cloud_frame: [f32; 4],
     tlas_movers: u64,
     probes: u64,
+    /// The sun's shadow rings' record (D-108), read where there is no structure; 0: none.
+    rings: u64,
 }
 
 const _: () = assert!(std::mem::size_of::<GpuImpostor>() == 80);
@@ -1313,12 +1318,26 @@ impl Impostors {
             device.destroy_shader_module(module);
             pipeline
         };
+        // Without ray queries, the entries that hold none: the sun from the rings (D-108 step 5).
+        let rays = device.features().ray_query;
         let with_motion = pipeline(
-            "impostor_fragment_main",
+            if rays {
+                "impostor_fragment_main"
+            } else {
+                "impostor_fragment_rings_main"
+            },
             &[HDR_FORMAT, MOTION_FORMAT],
             "impostors with motion",
         );
-        let color_only = pipeline("impostor_color_main", &[HDR_FORMAT], "impostors");
+        let color_only = pipeline(
+            if rays {
+                "impostor_color_main"
+            } else {
+                "impostor_color_rings_main"
+            },
+            &[HDR_FORMAT],
+            "impostors",
+        );
         device.destroy_shader_module(vertex);
         Ok(Self {
             kinds,
@@ -1381,6 +1400,7 @@ impl Impostors {
             cloud_frame: clouds.map_or([0.0; 4], |c| c.frame),
             tlas_movers: view.movers_tlas.map_or(0, |(address, _)| address),
             probes: probes.map_or(0, |p| p.address),
+            rings: crate::SunRings::address(view.sun_rings),
         };
         let address = frame_buffer.address();
         let atlases: Vec<ImageHandle> = self
@@ -1393,7 +1413,8 @@ impl Impostors {
         let mut pass = graph
             .pass("impostors/draw")
             .image(color, ImageAccess::ColorAttachment)
-            .image(depth, ImageAccess::DepthAttachment);
+            .image(depth, ImageAccess::DepthAttachment)
+            .with(|b| crate::SunRings::declare(view.sun_rings, b, fragment));
         for &atlas in &atlases {
             pass = pass.image(atlas, ImageAccess::Sampled(fragment));
         }

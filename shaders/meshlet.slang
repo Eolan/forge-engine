@@ -20,6 +20,8 @@
 // the draw of what it kept.
 import bindless;
 import vis64;
+import shadow_rings;
+import reflection_cubes;
 import barycentrics;
 import sh;
 import skyview;
@@ -8734,7 +8736,8 @@ float3 jelly_through(Frame* f, Material mat, uint instance, float3 world, float3
 // rays (`traced`), its mirror ray starts at its surface and skips its own body: the mirror rays'
 // pass starts theirs 1.5 m out (REFLECTION_START, for the cuts standing off the drawn surfaces),
 // under the ground for a small body lying on it, while a skinned body's cut is its surface.
-float3 shade_jelly(Frame* f, Material mat, Surface s, uint instance, bool traced)
+// `RAYS`: the entry traces; without, no ray query is compiled in (D-108 step 5).
+float3 shade_jelly<let RAYS : int>(Frame* f, Material mat, Surface s, uint instance, bool traced)
 {
     float3 albedo;
     if (!debug_albedo(f, s.meshlet_index, s.lod_level, albedo))
@@ -8744,7 +8747,7 @@ float3 shade_jelly(Frame* f, Material mat, Surface s, uint instance, bool traced
     float3 color = sun_light(f, albedo, s.n, s.n, mat.specular_power, mat.specular, s.shadow, s.sky, s.ao, s.view, float3(mat.reflectance), s.world, s.probes, traced, ndl);
     float4 mirror = g_reflection_request;
     float3 mirror_tint = g_reflection_tint;
-    if (traced && mirror.w > 0.0)
+    if (RAYS != 0 && traced && mirror.w > 0.0)
     {
         // The open sky `sky_reflection` leaves to the ray, which a hit replaces below.
         color += mirror.w * mirror_tint * sky_along(s.sky, mirror.xyz);
@@ -9234,7 +9237,8 @@ uint shade_pixel<let SHADOWS : int>(uint class_index, uint2 pixel, uint vis)
     if ((f[0].options & OPTION_SCREEN_GI) != 0u && bounce_image != 0xFFFFFFFFu && !grass)
         g_screen_near = screen_near_at(bounce_image, pixel, mul(f[0].view_proj, float4(surface_relative, 1.0)).w);
     g_near_on = SHADOWS != 0 && f[0].gi_reference != 0u && (s.probes != nullptr || f[0].gi_reference >= GI_REFERENCE_PATH) && s.sky != nullptr && f[0].tlas != 0;
-    if (g_near_on)
+    // The entry's own switch in the test, so an entry without rays holds no ray query (D-108 step 5).
+    if (SHADOWS != 0 && g_near_on)
         g_near_irradiance = near_field_reference(f, s.sky, s.probes, surface_scene, s.n, si.li.n, f[0].gi_reference);
     else if (bounce_image != 0xFFFFFFFFu && s.sky != nullptr && f[0].tlas != 0 && (mat.flags & MATERIAL_FLAG_FOLIAGE) == 0)
     {
@@ -9264,7 +9268,7 @@ uint shade_pixel<let SHADOWS : int>(uint class_index, uint2 pixel, uint vis)
     // stores luminance (cd/m²) times the exposure.
     float3 color = class_index == MATERIAL_CLASS_ICE ? shade_ice(f, mat, s)
         : class_index == MATERIAL_CLASS_LAYERED ? shade_layered(f, row, mat, s)
-        : class_index == MATERIAL_CLASS_JELLY ? shade_jelly(f, mat, s, instance_index, jelly_traced && (f[0].flags & FLAG_SKY_REFLECTIONS) != 0)
+        : class_index == MATERIAL_CLASS_JELLY ? shade_jelly<SHADOWS>(f, mat, s, instance_index, jelly_traced && (f[0].flags & FLAG_SKY_REFLECTIONS) != 0)
         : standard_light(f, mat, s, si);
     if (grass)
         color *= grass_scale;
@@ -9562,109 +9566,7 @@ float4 screen_reflection(Frame* f, float3 start, float3 n, float3 dir, float rou
 
 // ------------------------------------------------------------ the reflection cubes (D-108) ---
 
-// Mirrors `GpuCube`, `GpuCubeSet`.
-public struct Cube
-{
-    public float4 center; // the point its faces were drawn from, in the scene frame; w: how far it has faded in
-    public float4 lo;     // its lowest corner
-    public float4 hi;     // its highest corner
-    public uint4 tile;    // its tile, in tiles
-};
-
-public struct CubeSet
-{
-    public uint image;
-    public uint count;
-    public uint2 pad;
-    public Cube cubes[32]; // `CUBE_LIST`, the nearest first
-};
-
-static const uint CUBE_TILES = 8u;        // `reflection_cubes::CUBE_TILES`
-static const uint CUBE_TILE_TEXELS = 256u;
-static const float CUBE_LAST_LEVEL = 4.0; // the roughest that reads a reflection
-static const uint CUBE_DIFFUSE_LEVEL = 5u; // `CUBE_LEVELS` - 1: the diffuse light, by the normal
-static const float CUBE_ROUGHEST = 0.42;  // where a row stops asking for this reflection
-static const float CUBE_PAST_ITS_WALLS = 1.0; // metres a cube is read beyond its volume
-static const uint CUBE_PICKED = 3u;        // cubes blended at a point
-static const float CUBE_STREET_BLEND = 8.0; // metres over which a street cube's weight rises from its walls
-
-// Where direction `d` falls in a tile, as fractions of the tile, the level's texel and a half kept
-// clear of its edge. `cube_prefilter_main` has the same.
-float2 cube_in_tile(float3 d, uint level)
-{
-    float2 p = oct_encode(d) * 0.5 + float2(0.5);
-    float inset = 1.0 / float(CUBE_TILE_TEXELS >> level);
-    return float2(inset) + p * (1.0 - 2.0 * inset);
-}
-
-// The cubes point `p` is deepest in, up to CUBE_PICKED, and their weights: a room's before a
-// street's whatever their order, so that the room it is in counts most across a wall shared by two.
-// It reaches past its walls a little, for what hangs on them or stands in a doorway. A cube's
-// weight rises over its first half metre inside; a street cube's over CUBE_STREET_BLEND, so that
-// the lightest dropped for a fourth is light and the open sky takes over smoothly where the street
-// cubes end; each by how far it has faded in (`Cube::center.w`); and a street cube's by what the
-// rooms there leave it.
-// `face`: a face being drawn, which counts cubes not yet whole too (they are dark), all at once.
-// `cover`: how much of the point the cubes cover, from their walls and fades, not the street
-// cubes' wider blend: near a street cube's walls the cube still stands for the place, not the sky.
-void cube_pick(CubeSet* set, float3 p, bool face, out uint found[CUBE_PICKED], out float weight[CUBE_PICKED], out float cover)
-{
-    cover = 0.0;
-    float rank[CUBE_PICKED];
-    for (uint k = 0u; k < CUBE_PICKED; k++)
-    {
-        found[k] = set[0].count;
-        weight[k] = 0.0;
-        rank[k] = 0.0;
-    }
-    for (uint i = 0u; i < set[0].count; i++)
-    {
-        Cube c = set[0].cubes[i];
-        if (c.tile.z == 0u && !face)
-            continue;
-        float3 inside = min(p - c.lo.xyz, c.hi.xyz - p) + float3(CUBE_PAST_ITS_WALLS);
-        float edge = min(inside.x, min(inside.y, inside.z));
-        bool room = c.tile.w != 0u;
-        // A street cube fades to the open sky over its outer metres: no line where it ends.
-        float covers = saturate(edge / 0.5) * (room ? 1.0 : saturate(edge / CUBE_STREET_BLEND)) * (face ? 1.0 : c.center.w);
-        cover = max(cover, covers);
-        float w = covers;
-        if (w <= 0.0)
-            continue;
-        float here = w + (room ? 1e4 : 0.0);
-        // In among those kept, the heaviest first.
-        uint at = CUBE_PICKED;
-        for (uint k = 0u; k < CUBE_PICKED; k++)
-        {
-            if (at == CUBE_PICKED && here > rank[k])
-                at = k;
-        }
-        if (at == CUBE_PICKED)
-            continue;
-        for (uint k = CUBE_PICKED - 1u; k > at; k--)
-        {
-            found[k] = found[k - 1u];
-            weight[k] = weight[k - 1u];
-            rank[k] = rank[k - 1u];
-        }
-        found[at] = i;
-        weight[at] = w;
-        rank[at] = here;
-    }
-    // Inside a room its cube is the light: the street cubes' views from outside count only as far
-    // as the rooms leave room for them (they rank after the rooms, so the rooms are all in front).
-    float room_cover = 0.0;
-    for (uint k = 0u; k < CUBE_PICKED; k++)
-    {
-        if (found[k] < set[0].count && set[0].cubes[found[k]].tile.w != 0u)
-            room_cover = max(room_cover, weight[k]);
-    }
-    for (uint k = 0u; k < CUBE_PICKED; k++)
-    {
-        if (found[k] < set[0].count && set[0].cubes[found[k]].tile.w == 0u)
-            weight[k] *= 1.0 - room_cover;
-    }
-}
+// The reflection cubes' records and lookups: reflection_cubes.slang.
 
 // What the cubes show a ray from `p` (the scene frame) along `r`: rgb, and how much of the point
 // they cover, 0 outside every volume. The ray goes to the volume's walls, and from the cube's point
@@ -9703,36 +9605,11 @@ float4 cube_light(Frame* f, float3 p, float3 r, float rough)
     return float4(total > 0.0 ? sum / total : float3(0.0), total > 0.0 ? cover : 0.0);
 }
 
-// A room's light from its cube (D-108, step 4): what the cubes hold for a surface at `p` with
-// normal `n`, rgb in the units of the sky's irradiance; a: how much of the point they cover. A
-// cube's own faces, drawn before it has any light, count a cube not yet whole as dark: its first
-// round is the direct light alone, and the others build on it.
+// A room's light from its cube (D-108, step 4), `cube_ambient_in` for the frame's cubes: a cube's
+// own faces count a cube not yet whole as dark.
 float4 cube_ambient(Frame* f, float3 p, float3 n)
 {
-    CubeSet* set = f[0].reflection_cubes;
-    if (set == nullptr)
-        return float4(0.0);
-    bool face = (f[0].options & OPTION_CUBE_FACE) != 0u;
-    uint found[CUBE_PICKED];
-    float weight[CUBE_PICKED];
-    float cover;
-    cube_pick(set, p, face, found, weight, cover);
-    float3 sum = float3(0.0);
-    float total = 0.0;
-    for (uint k = 0u; k < CUBE_PICKED; k++)
-    {
-        if (found[k] >= set[0].count)
-            continue;
-        float w = weight[k];
-        Cube c = set[0].cubes[found[k]];
-        if (c.tile.z != 0u)
-        {
-            float2 uv = (float2(c.tile.xy) + cube_in_tile(n, CUBE_DIFFUSE_LEVEL)) / float(CUBE_TILES);
-            sum += w * g_sampled_images[NonUniformResourceIndex(set[0].image)].SampleLevel(g_samplers[SAMPLER_LINEAR_CLAMP], uv, float(CUBE_DIFFUSE_LEVEL)).rgb;
-        }
-        total += w;
-    }
-    return float4(total > 0.0 ? sum / total : float3(0.0), total > 0.0 ? cover : 0.0);
+    return cube_ambient_in(f[0].reflection_cubes, p, n, (f[0].options & OPTION_CUBE_FACE) != 0u);
 }
 
 struct CubeFacePush
@@ -10242,38 +10119,7 @@ void sun_shadow_trace_main(uint3 id : SV_DispatchThreadID)
 }
 
 // ------------------------------------------------------ the shadow rings (D-108) ---
-// The sun's shadow without rays. Mirrors `GpuShadowRing` and `GpuRingSet` in shadow_rings.rs.
-
-static const uint RING_COUNT = 5;
-static const float RING_TEXELS = 2048.0;
-static const float GOLDEN_ANGLE = 2.39996323;
-
-struct ShadowRing
-{
-    float4 axis_u;   // across the sun, and what to add to a dot with it for metres across the ring
-    float4 axis_v;
-    float4 axis_s;   // towards the sun, and what to add for metres over the bottom of its depth
-    float texel;     // metres
-    float inv_width;
-    float inv_range;
-    uint image;      // sampled index of its composed layer, or 0xFFFFFFFF: not ready
-};
-
-struct RingSet
-{
-    ShadowRing rings[RING_COUNT];
-    float tan_radius;   // of the sun's disc
-    uint search_taps;
-    uint filter_taps;
-    float max_radius;   // texels
-    float search_reach; // metres along the sun: the widest penumbra the blocker search looks for
-    float bias;         // texels
-    float normal_offset;// texels
-    uint contact_steps; // the contact march's (`ring_contact`), 0: none
-    float contact_reach;    // its length, the ring's texels
-    float contact_thickness;// how far behind what the depth buffer shows a step counts, metres
-    float contact_far;      // how far from the camera it goes on, metres
-};
+// The sun's shadow without rays: the rings' records, their tap and disc in shadow_rings.slang.
 
 struct RingPush
 {
@@ -10291,27 +10137,6 @@ struct RingPush
 
 [[vk::push_constant]]
 RingPush ring_push;
-
-// One percentage-closer tap with bilinear weights: `at` in texels, lit where the stored height is
-// not over `z`.
-float ring_tap(uint image, float2 at, float z)
-{
-    float2 corner = floor(at - 0.5);
-    float2 t = at - 0.5 - corner;
-    float4 g = g_sampled_images_r[NonUniformResourceIndex(image)].GatherRed(g_samplers[SAMPLER_NEAREST_CLAMP], (corner + 1.0) / RING_TEXELS);
-    float4 c = float4(g.x <= z ? 1.0 : 0.0, g.y <= z ? 1.0 : 0.0, g.z <= z ? 1.0 : 0.0, g.w <= z ? 1.0 : 0.0);
-    float top = c.w + (c.z - c.w) * t.x;
-    float bottom = c.x + (c.y - c.x) * t.x;
-    return top + (bottom - top) * t.y;
-}
-
-// A disc's `k`-th of `n` points, `radius` wide, turned by `turn`.
-float2 ring_disc(uint k, uint n, float radius, float turn)
-{
-    float r = sqrt((float(k) + 0.5) / float(n)) * radius;
-    float a = float(k) * GOLDEN_ANGLE + turn;
-    return float2(cos(a), sin(a)) * r;
-}
 
 // What a ring's search found for a point: which ring, where the point is on it, and how much of
 // the sun's disc is in question.

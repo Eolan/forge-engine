@@ -229,6 +229,12 @@ pub struct ParticleParams {
     /// The scene's top-level structure for the sun's shadow (0 for none): one built before the
     /// frame (the static one).
     pub tlas: u64,
+    /// The sun's shadow rings (D-108 step 5): the sun's shadow where there is no structure to
+    /// trace (a device without ray queries). None: the sun is seen there.
+    pub sun_rings: Option<crate::SunRings>,
+    /// With no probes, the reflection cubes' light (D-108 step 5,
+    /// [`crate::MeshletRenderer::cube_light`]): the smoke's light round it where they cover it.
+    pub cubes: Option<crate::CubeLight>,
     /// This frame's light probes (D-036): the ambient light at each particle where they reach,
     /// the open sky's beyond. None: the sky's everywhere.
     pub probes: Option<crate::probes::ProbeLight>,
@@ -386,6 +392,10 @@ struct GpuFrame {
     /// The flipbook: its positive and negative atlases (sampled), its frames and columns.
     flip: [u32; 4],
     tlas: u64,
+    /// The sun's shadow rings' record (D-108), read where there is no structure; 0: none.
+    rings: u64,
+    /// With no probes, the reflection cubes' set (D-108); 0: none.
+    cubes: u64,
     sky: u64,
     ring: u64,
     blocks: u64,
@@ -403,7 +413,7 @@ struct GpuFrame {
     output_size: [f32; 2],
 }
 
-const _: () = assert!(std::mem::size_of::<GpuFrame>() == 272);
+const _: () = assert!(std::mem::size_of::<GpuFrame>() == 288);
 
 /// The ring's bookkeeping on the CPU: slots counted from the start, so a block's are
 /// `first % PARTICLE_CAPACITY` onwards.
@@ -580,7 +590,15 @@ impl Particles {
         Ok(Self {
             effects,
             emit: compute("emit_main", "particles emit")?,
-            advance: compute("advance_main", "particles advance")?,
+            // Without ray queries, the entry that holds none: the sun from the rings (D-108 step 5).
+            advance: compute(
+                if device.features().ray_query {
+                    "advance_main"
+                } else {
+                    "advance_rings_main"
+                },
+                "particles advance",
+            )?,
             lamps: None,
             draw: draw?,
             draw_layer: draw_layer?,
@@ -816,6 +834,8 @@ impl Particles {
                     ]
                 }),
                 tlas: params.tlas,
+                rings: crate::SunRings::address(params.sun_rings),
+                cubes: params.cubes.map_or(0, |c| c.set),
                 sky: sky.address(),
                 ring: self.ring.address(),
                 blocks: blocks_buffer.address(),
@@ -848,9 +868,19 @@ impl Particles {
         let advance = &self.advance;
         let mut pass = graph
             .pass("particles/advance")
-            .queue(QueueKind::Compute)
+            // The rings' layers are render targets, which only the graphics queue may read.
+            .queue(if params.sun_rings.is_some() || params.cubes.is_some() {
+                QueueKind::Graphics
+            } else {
+                QueueKind::Compute
+            })
             .buffer(ring_handle, BufferAccess::ShaderReadWrite(compute))
-            .buffer(sky.light.buffer, BufferAccess::ShaderRead(compute));
+            .buffer(sky.light.buffer, BufferAccess::ShaderRead(compute))
+            .with(|b| crate::SunRings::declare(params.sun_rings, b, compute))
+            .with(|b| match params.cubes {
+                Some(c) => b.image(c.atlas, ImageAccess::Sampled(compute)),
+                None => b,
+            });
         if let Some(p) = params.probes {
             pass = pass
                 .buffer(p.data, BufferAccess::ShaderRead(compute))

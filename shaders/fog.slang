@@ -69,6 +69,8 @@ struct Fog
     float4 distance_near;    // rgb: its colour at its start; a: the sun's light into it
     float4 distance_far;     // rgb: its colour from `far` on; a: the sky's light into it, times the sun's pre-exposed illuminance over 2π
     float4 distance_phase;   // x: the sun's phase anisotropy g; y: 1 when on; zw 0
+    RingSet* rings;          // the sun's shadow rings (D-108), read where there is no structure; null: none
+    uint2 rings_pad;
 };
 
 // A froxel's own offset added to the frame's (pcg3d, Jarzynski and Olano 2020), so that
@@ -321,6 +323,20 @@ bool fog_culled(Fog* g, uint3 id)
 [numthreads(8, 8, 1)]
 void fog_light_main(uint3 id : SV_DispatchThreadID)
 {
+    fog_light<1>(id);
+}
+
+// The same without ray queries (D-108 step 5): the sun from the rings, the strong lamps' shadows
+// from the lamps' atlas, the light round them from the cubes where there are no probes.
+[shader("compute")]
+[numthreads(8, 8, 1)]
+void fog_light_rings_main(uint3 id : SV_DispatchThreadID)
+{
+    fog_light<0>(id);
+}
+
+void fog_light<let RAYS : int>(uint3 id)
+{
     if (id.x >= FOG_FROXELS_X || id.y >= FOG_FROXELS_Y || id.z >= FOG_SLICES)
         return;
     Fog* g = fog_push.fog;
@@ -436,7 +452,10 @@ void fog_light_main(uint3 id : SV_DispatchThreadID)
             // Their shadows: each strong lamp a ray to it, its light taken off where it is met. One
             // ray in a rolled loop (each inlined copy grows the pass, #348); the entry read by
             // constant indices, so the lists stay in registers.
-            if (shadowed > 0u && f[0].tlas != 0)
+            // Traced where the entry traces and the scene has a structure, else through the lamps'
+            // atlas (D-108), where a lamp has no slot its light kept whole.
+            bool traced = RAYS != 0 && f[0].tlas != 0;
+            if (shadowed > 0u && (traced || f[0].lamp_atlas != nullptr))
             {
                 float least_y = FOG_SHADOW_SHARE * dot(lamps, float3(0.2126, 0.7152, 0.0722));
                 [loop]
@@ -464,6 +483,11 @@ void fog_light_main(uint3 id : SV_DispatchThreadID)
                     if (lamp_tube(lamp))
                         d += lamp.beam.xyz * clamp(dot(-d, lamp.beam.xyz), -lamp.beam_edge.x, lamp.beam_edge.x);
                     float dist = length(d);
+                    if (RAYS == 0 || !traced)
+                    {
+                        lamps -= light * (1.0 - atlas_seen(f, lamp, index, world, d / max(dist, 1e-6), 0.0, float2(0.0)));
+                        continue;
+                    }
                     RayDesc ray;
                     ray.Origin = world;
                     ray.Direction = d / max(dist, 1e-6);
@@ -509,7 +533,10 @@ void fog_light_main(uint3 id : SV_DispatchThreadID)
             ray.Direction = sun;
             ray.TMin = 0.0;
             ray.TMax = 1e5;
-            visible = f[0].tlas != 0 && ray_blocked(f, ray) ? 0.0 : 1.0;
+            if (RAYS != 0 && f[0].tlas != 0)
+                visible = ray_blocked(f, ray) ? 0.0 : 1.0;
+            else
+                visible = ring_sun(g[0].rings, world - f[0].camera_in_scene.xyz, frac(dot(world, float3(0.7548777, 0.5698403, 0.3141592))));
         }
         float3 sunlight = g[0].sun.w * g[0].sun_color.rgb * fog_phase(dot(-direction, -sun), sun_anisotropy) * visible;
         // The probes' light (D-099's item 3): the sky's and the scene's bounce, glowing surfaces'
@@ -536,7 +563,20 @@ void fog_light_main(uint3 id : SV_DispatchThreadID)
                 }
             }
             else
-                ambient = sh_irradiance(g[0].sky, float3(0.0, 1.0, 0.0)) + sh_irradiance(g[0].sky, float3(0.0, -1.0, 0.0));
+            {
+                float3 up = float3(0.0, 1.0, 0.0);
+                float3 open_up = sh_irradiance(g[0].sky, up);
+                float3 open_down = sh_irradiance(g[0].sky, -up);
+                ambient = open_up + open_down;
+                // No probes: the cubes' light where they cover the froxel (D-108 step 5), as a
+                // surface's; a bar's haze took the street's light from the open sky.
+                if ((f[0].options & OPTION_CUBE_AMBIENT) != 0u)
+                {
+                    float4 room_up = cube_ambient(f, world, up);
+                    float4 room_down = cube_ambient(f, world, -up);
+                    ambient = lerp(open_up, room_up.rgb, room_up.a) + lerp(open_down, room_down.rgb, room_down.a);
+                }
+            }
             ambient *= ambient_extinction * f[0].sun_illuminance * f[0].exposure / 6.28318531;
         }
         scattered = albedo * tint * (extinction * (lamps * (f[0].exposure * g[0].scales.y) + sunlight * g[0].scales.x) + ambient);

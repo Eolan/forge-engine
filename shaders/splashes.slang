@@ -19,6 +19,7 @@
 import bindless;
 import skyframe;
 import sh;
+import shadow_rings;
 
 static const float PI = 3.14159265358979;
 static const float GRAVITY = 9.81;
@@ -113,6 +114,7 @@ struct SplashFrame
     uint capacity;
     uint pad;
     uint64_t tlas;       // the scene's structure, for the sun's shadow (0: none)
+    RingSet* rings;      // the sun's shadow rings (D-108), read where there is no structure; null: none
     Sky* sky;
     SplashParticle* ring;
     SplashBlock* blocks;
@@ -314,11 +316,12 @@ float henyey_greenstein(float cos_theta, float g)
     return (1.0 - g * g) / (4.0 * PI * d * sqrt(d));
 }
 
-// Whether the sun reaches `p` (the sea's frame, which is the scene's).
-float sun_visibility(SplashFrame* f, float3 p)
+// Whether the sun reaches `p` (the sea's frame, which is the scene's): a ray where the entry traces
+// (`RAYS`) and the scene has a structure, else the sun's shadow rings (D-108 step 5).
+float sun_visibility<let RAYS : int>(SplashFrame* f, float3 p)
 {
-    if (f[0].tlas == 0)
-        return 1.0;
+    if (RAYS == 0 || f[0].tlas == 0)
+        return ring_sun(f[0].rings, p - f[0].camera.xyz, frac(dot(p, float3(0.7548777, 0.5698403, 0.3141592))));
     RayDesc ray;
     ray.Origin = p;
     ray.Direction = f[0].sun.xyz;
@@ -334,6 +337,18 @@ float sun_visibility(SplashFrame* f, float3 p)
 
 [shader("vertex")]
 SplashVaryings vert_main(uint vertex : SV_VertexID)
+{
+    return vert<1>(vertex);
+}
+
+// The same without ray queries (D-108 step 5): the sun from the rings.
+[shader("vertex")]
+SplashVaryings vert_rings_main(uint vertex : SV_VertexID)
+{
+    return vert<0>(vertex);
+}
+
+SplashVaryings vert<let RAYS : int>(uint vertex)
 {
     SplashFrame* f = splash_push.frame;
     SplashVaryings o;
@@ -396,7 +411,7 @@ SplashVaryings vert_main(uint vertex : SV_VertexID)
     float3 view = rel / max(length(rel), 1e-4);
     float cos_theta = dot(f[0].sun.xyz, view);
     float phase = FORWARD_SHARE * henyey_greenstein(cos_theta, FORWARD) + (1.0 - FORWARD_SHARE) / (4.0 * PI);
-    float sun = sun_visibility(f, q.position);
+    float sun = sun_visibility<RAYS>(f, q.position);
     Sky* sky = f[0].sky;
     float scale = f[0].sun_radiance.w;
     // Without the share a scene gives its surfaces, as the particles' (`SkyParams::light_share`).

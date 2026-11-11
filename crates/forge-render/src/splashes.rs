@@ -182,6 +182,9 @@ pub struct SplashParams {
     /// The scene's top-level structure for the sun's shadow (0 for none). Only a structure built
     /// before the frame: the static one.
     pub tlas: u64,
+    /// The sun's shadow rings (D-108 step 5): the sun's shadow where there is no structure to
+    /// trace (a device without ray queries). None: the sun is seen there.
+    pub sun_rings: Option<crate::SunRings>,
 }
 
 /// The splashes' counters, for the log.
@@ -240,6 +243,8 @@ struct GpuSplashFrame {
     capacity: u32,
     pad: u32,
     tlas: u64,
+    /// The sun's shadow rings' record (D-108), read where there is no structure; 0: none.
+    rings: u64,
     sky: u64,
     ring: u64,
     blocks: u64,
@@ -250,7 +255,7 @@ struct GpuSplashFrame {
     pad_foam: [u32; 2],
 }
 
-const _: () = assert!(std::mem::size_of::<GpuSplashFrame>() == 240);
+const _: () = assert!(std::mem::size_of::<GpuSplashFrame>() == 248);
 
 /// The foam field's cells a side, metres a cell, and the seconds its foam takes to fall by e
 /// (#107's polish): 64 m round the camera.
@@ -358,8 +363,14 @@ impl WaterSplashes {
             device.destroy_shader_module(module);
             pipeline
         };
+        // Without ray queries, the entry that holds none: the sun from the rings (D-108 step 5).
+        let vertex_entry = if device.features().ray_query {
+            "vert_main"
+        } else {
+            "vert_rings_main"
+        };
         let vertex = device.create_shader_module(
-            &shaders.compile("splashes.slang", "vert_main", ShaderStage::Vertex)?,
+            &shaders.compile("splashes.slang", vertex_entry, ShaderStage::Vertex)?,
             "splashes vertex",
         )?;
         let fragment = device.create_shader_module(
@@ -367,7 +378,7 @@ impl WaterSplashes {
             "splashes fragment",
         )?;
         let draw = device.create_vertex_pipeline(&VertexPipelineDesc {
-            vertex: (vertex, "vert_main"),
+            vertex: (vertex, vertex_entry),
             fragment: (fragment, "frag_main"),
             color_formats: &[HDR_FORMAT, REACTIVE_FORMAT],
             depth_format: None,
@@ -599,6 +610,7 @@ impl WaterSplashes {
                 capacity: SPLASH_CAPACITY,
                 pad: 0,
                 tlas: params.tlas,
+                rings: crate::SunRings::address(params.sun_rings),
                 sky: sky.address(),
                 ring: self.ring.address(),
                 blocks: blocks_buffer.address(),
@@ -654,6 +666,7 @@ impl WaterSplashes {
         graph
             .pass("splashes/draw")
             .buffer(ring_handle, BufferAccess::ShaderRead(vertex))
+            .with(|b| crate::SunRings::declare(params.sun_rings, b, vertex))
             .buffer(sky.light.buffer, BufferAccess::ShaderRead(vertex))
             .image(sky.aerial(), ImageAccess::Sampled(vertex))
             .image(depth, ImageAccess::Sampled(fragment))

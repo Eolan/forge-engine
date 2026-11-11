@@ -2402,9 +2402,11 @@ impl Gallery {
                     })
                     .collect()
             });
+        // Lit by the rays where there are any, else by the sun's rings, the lamps' atlas and the
+        // cubes (D-108 step 5).
         let fog = if !fogged {
             None
-        } else if ctx.device.features().ray_query && scene.rays().is_some() {
+        } else {
             tracing::info!(
                 boxes = fog_boxes.len(),
                 lamps = fog_lamps.len(),
@@ -2417,9 +2419,6 @@ impl Gallery {
                 lamps: fog_lamps,
                 environment: fog_environment,
             })
-        } else {
-            tracing::warn!("fog volumes need ray queries: left out");
-            None
         };
         // Where ReSTIR lights the lamps rather than the light lists (#372): every lamp, or past
         // the nearest.
@@ -4646,6 +4645,7 @@ impl Demo for Gallery {
                         (address != 0).then_some((address, storage))
                     }),
                     probes,
+                    sun_rings: targets.rings.map(|r| r.sun()),
                     extent,
                 },
                 taa_frame.color,
@@ -4980,6 +4980,7 @@ impl Demo for Gallery {
                     },
                     shutter: 0.5 * self.step,
                     tlas: self.scene.rays().map_or(0, |r| r.tlas_address()),
+                    sun_rings: targets.rings.map(|r| r.sun()),
                 },
                 taa_frame.color,
                 targets.depth,
@@ -5024,6 +5025,8 @@ impl Demo for Gallery {
                     wind: self.wind,
                     time,
                     tlas: self.scene.rays().map_or(0, |r| r.tlas_address()),
+                    sun_rings: targets.rings.map(|r| r.sun()),
+                    cubes: self.renderer.cube_light(frame.slot),
                     probes,
                     after_upscale: particles_after,
                     frame: self.renderer.frame_address(frame.slot),
@@ -5179,6 +5182,9 @@ impl Demo for Gallery {
                     exposure,
                     cull: !self.args.no_fog_cull,
                     distance: environment.and_then(|e| e.distance),
+                    sun_rings: targets.rings.map(|r| r.sun()),
+                    lamp_atlas: targets.rings.and_then(|r| r.lamp_atlas()),
+                    cube_atlas: self.renderer.cube_atlas(),
                 },
                 boxes,
                 fog_lamps,

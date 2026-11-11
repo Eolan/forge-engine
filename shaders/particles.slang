@@ -21,6 +21,8 @@ import bindless;
 import skyframe;
 import sh;
 import probes;
+import shadow_rings;
+import reflection_cubes;
 
 static const float PI = 3.14159265358979;
 static const float GRAVITY = 9.81;
@@ -126,6 +128,8 @@ struct ParticleFrame
     uint4 flip;          // the smoke's flipbook: its positive and negative atlases (sampled),
                          // its frames and its columns (smoke_bake.rs)
     uint64_t tlas;       // the scene's structure, for the sun's shadow (0: none)
+    RingSet* rings;      // the sun's shadow rings (D-108), read where there is no structure; null: none
+    CubeSet* cubes;      // with no probes, the reflection cubes whose light the smoke takes (D-108); null: none
     Sky* sky;
     Particle* ring;
     Block* blocks;
@@ -253,11 +257,12 @@ float henyey_greenstein(float cos_theta, float g)
     return (1.0 - g * g) / (4.0 * PI * d * sqrt(d));
 }
 
-// Whether the sun reaches `p` (the scene's frame).
-float sun_visibility(ParticleFrame* f, float3 p)
+// Whether the sun reaches `p` (the scene's frame): a ray where the entry traces (`RAYS`) and the
+// scene has a structure, else the sun's shadow rings (D-108 step 5), which see it past their last.
+float sun_visibility<let RAYS : int>(ParticleFrame* f, float3 p)
 {
-    if (f[0].tlas == 0)
-        return 1.0;
+    if (RAYS == 0 || f[0].tlas == 0)
+        return ring_sun(f[0].rings, p - f[0].camera.xyz, frac(dot(p, float3(0.7548777, 0.5698403, 0.3141592))));
     RayDesc ray;
     ray.Origin = p;
     ray.Direction = f[0].sun.xyz;
@@ -271,10 +276,10 @@ float sun_visibility(ParticleFrame* f, float3 p)
     return q.CommittedStatus() == COMMITTED_NOTHING ? 1.0 : 0.0;
 }
 
-// Whether nothing of the scene stands between `p` and `p + offset`.
-bool open_between(ParticleFrame* f, float3 p, float3 offset)
+// Whether nothing of the scene stands between `p` and `p + offset`; without rays, nothing known.
+bool open_between<let RAYS : int>(ParticleFrame* f, float3 p, float3 offset)
 {
-    if (f[0].tlas == 0)
+    if (RAYS == 0 || f[0].tlas == 0)
         return true;
     float span = length(offset);
     if (span < 1e-4)
@@ -296,7 +301,7 @@ bool open_between(ParticleFrame* f, float3 p, float3 offset)
 // points half its radius out across the sun's way (turned by its seed), averaged. One ray from
 // its middle turned a puff metres wide from lit to shaded in a frame as it crossed a shadow's
 // edge: the steam in a sunlit street flickered (the owner, 2026-11-05: "this one pops a lot").
-float sun_share(ParticleFrame* f, float3 p, float radius, uint seed)
+float sun_share<let RAYS : int>(ParticleFrame* f, float3 p, float radius, uint seed)
 {
     float3 t;
     float3 b;
@@ -305,15 +310,15 @@ float sun_share(ParticleFrame* f, float3 p, float radius, uint seed)
     float3 u = (t * cos(a) + b * sin(a)) * (0.5 * radius);
     float3 v = (b * cos(a) - t * sin(a)) * (0.5 * radius);
     float3 around[4] = { u, -u, v, -v };
-    float lit = sun_visibility(f, p);
+    float lit = sun_visibility<RAYS>(f, p);
     float count = 1.0;
     // A point a surface stands between (in the ground under a grate's steam, in the wall a puff
     // leans on) is left out: its ray would start inside it and darken the puff.
     for (uint i = 0u; i < 4u; i++)
     {
-        if (open_between(f, p, around[i]))
+        if (open_between<RAYS>(f, p, around[i]))
         {
-            lit += sun_visibility(f, p + around[i]);
+            lit += sun_visibility<RAYS>(f, p + around[i]);
             count += 1.0;
         }
     }
@@ -364,6 +369,19 @@ float3 hit_normal(ParticleFrame* f, float3 origin, float3 dir, float t)
 [numthreads(64, 1, 1)]
 void advance_main(uint3 id : SV_DispatchThreadID)
 {
+    advance<1>(id);
+}
+
+// The same without ray queries (D-108 step 5): the sun from the rings, no collisions.
+[shader("compute")]
+[numthreads(64, 1, 1)]
+void advance_rings_main(uint3 id : SV_DispatchThreadID)
+{
+    advance<0>(id);
+}
+
+void advance<let RAYS : int>(uint3 id)
+{
     ParticleFrame* f = particle_push.frame;
     if (id.x >= f[0].live)
         return;
@@ -393,7 +411,7 @@ void advance_main(uint3 id : SV_DispatchThreadID)
             // Into the scene (D-064's point 2, the TLAS for sparks and debris): stopped at the
             // surface its step meets, its velocity bounced off it, the share along it slowed.
             // The static structure only: the movers are not met.
-            if ((e.draw & DRAW_COLLIDE) != 0u && f[0].tlas != 0)
+            if (RAYS != 0 && (e.draw & DRAW_COLLIDE) != 0u && f[0].tlas != 0)
             {
                 float3 move = q.velocity * h;
                 float len = length(move);
@@ -435,22 +453,34 @@ void advance_main(uint3 id : SV_DispatchThreadID)
         float3 sky_down = sh_irradiance(sky[0].irradiance, -up);
         float3 from_up = sky_up;
         float3 from_down = sky_down;
+        // With no probes, the cubes' light where they cover the puff (D-108 step 5): a bar's smoke
+        // took the street's from the open sky. Measured round it as a room's probes are, so the
+        // scene's share of the sky is not taken off it.
+        float cubes_cover = 0.0;
         if (f[0].probes != nullptr)
         {
             from_up = probe_irradiance(f[0].probes, q.position, up, up, -view, sky_up);
             from_down = probe_irradiance(f[0].probes, q.position, -up, -up, -view, sky_down);
+        }
+        else if (f[0].cubes != nullptr)
+        {
+            float4 cube_up = cube_ambient_in(f[0].cubes, q.position, up, false);
+            float4 cube_down = cube_ambient_in(f[0].cubes, q.position, -up, false);
+            from_up = lerp(sky_up, cube_up.rgb, cube_up.a);
+            from_down = lerp(sky_down, cube_down.rgb, cube_down.a);
+            cubes_cover = max(cube_up.a, cube_down.a);
         }
         // Without the share a scene gives its surfaces (`SkyParams::light_share`): a fit to a scene's walls,
         // which lit its steam from above as a lamp. The probes' light can't be told apart, so what lamps
         // and the sun put in them falls with it: a puff under a street lamp takes it at that share too. A
         // room's probes don't hold it (`room_weight`), eased across a doorway as their light is.
         float3 straight_up = float3(0.0, 1.0, 0.0);
-        float share = lerp(sky_light_share(sky[0].irradiance), 1.0, room_weight(f[0].probes, q.position, straight_up, straight_up));
+        float share = lerp(sky_light_share(sky[0].irradiance), 1.0, max(room_weight(f[0].probes, q.position, straight_up, straight_up), cubes_cover));
         q.light = 0.5 * (from_up + from_down) * f[0].sun_radiance.w / (PI * share);
         // The sun's share of the puff, eased over SUN_EASE seconds: its five rays' steps as it
         // crosses a shadow's edge blend.
         float radius = lerp(e.radius.x, e.radius.y, saturate((now - q.birth) / q.life));
-        float lit = sun_share(f, q.position, radius, q.seed);
+        float lit = sun_share<RAYS>(f, q.position, radius, q.seed);
         q.lit = q.lit < 0.0 ? lit : lerp(lit, q.lit, exp(-max(span, 0.0) / SUN_EASE));
         q.sun = 4.0 * phase * q.lit * e.sun;
     }

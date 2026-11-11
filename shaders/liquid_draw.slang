@@ -447,10 +447,11 @@ float3 foam_light(LiquidView* v)
     return 0.85 * (sky + v[0].sun_radiance.rgb * saturate(v[0].sun.y) / PI);
 }
 
-// Whether the bent rays are traced: a frame block whose scene has its rays' structure.
-bool traces(LiquidView* v)
+// Whether the bent rays are traced: an entry that traces (`RAYS`; D-108 step 5: one without holds no
+// ray query) and a frame block whose scene has its rays' structure.
+bool traces<let RAYS : int>(LiquidView* v)
 {
-    return v[0].frame != nullptr && v[0].frame[0].tlas != 0;
+    return RAYS != 0 && v[0].frame != nullptr && v[0].frame[0].tlas != 0;
 }
 
 // The scene's first surface along the ray from `p` (tank coordinates) along `d`, within `far`.
@@ -589,6 +590,20 @@ void plain_background(LiquidView* v, uint2 pixel, float depth)
 [numthreads(8, 8, 1)]
 void march_main(uint3 id : SV_DispatchThreadID)
 {
+    march<1>(id);
+}
+
+// The same without ray queries (D-108 step 5): the bent rays go to the tank's box, as with no
+// structure.
+[shader("compute")]
+[numthreads(8, 8, 1)]
+void march_rings_main(uint3 id : SV_DispatchThreadID)
+{
+    march<0>(id);
+}
+
+void march<let RAYS : int>(uint3 id)
+{
     LiquidView* v = view_push.view;
     if (id.x >= v[0].width || id.y >= v[0].height)
         return;
@@ -680,7 +695,7 @@ void march_main(uint3 id : SV_DispatchThreadID)
         float to_box = box_exit(p, dir, float3(0.0), size, face);
         // What the scene shows inside the tank ends the ray: straight, where the depth says; bent,
         // where the ray meets it (the depth says nothing of a bent ray).
-        float limit = !bent_any ? left : (traces(v) ? scene_hit(v, p, dir, to_box).t : to_box);
+        float limit = !bent_any ? left : (RAYS != 0 && traces<RAYS>(v) ? scene_hit(v, p, dir, to_box).t : to_box);
         float span = min(to_box, limit);
         float foam_path = 0.0;
         float s = crossing(v, p, dir, span, water, steps, foam_path);
@@ -777,7 +792,7 @@ void march_main(uint3 id : SV_DispatchThreadID)
     float3 straight = g_sampled_images[v[0].scene].Load(int3(id.xy, 0)).rgb;
     float3 behind = straight;
     uint landed = trapped ? LANDED_TRAPPED : LANDED_STRAIGHT;
-    if (bent_any && !trapped && traces(v))
+    if (RAYS != 0 && bent_any && !trapped && traces<RAYS>(v))
     {
         Landing l = landing(v, p, dir);
         behind = l.colour;

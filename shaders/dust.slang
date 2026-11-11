@@ -5,6 +5,7 @@
 // side in 2-D atlases. Driven by crates/forge-render/src/dust.rs.
 import bindless;
 import noise;
+import shadow_rings;
 
 // Must match GpuDust in dust.rs.
 struct Dust
@@ -17,6 +18,7 @@ struct Dust
     float4 fill;            // rgb: light scattered from the surroundings, pre-exposed units per unit extinction
     uint64_t tlas;          // 0: no shafts
     uint64_t tlas_movers;   // the movers' structure (#79), traced after the static one; 0: none
+    RingSet* rings;         // the sun's shadow rings (D-108): the shafts where there is no structure; null: none
     uint light;            // storage index of the lit froxels: rgb scattered light, a extinction
     uint light_sampled;
     uint volume;            // storage index of the integrated volume: rgb in-scattered, a transmittance
@@ -91,6 +93,19 @@ float henyey_greenstein(float cos_theta, float g)
 [numthreads(8, 8, 1)]
 void light_main(uint3 id : SV_DispatchThreadID)
 {
+    light<1>(id);
+}
+
+// The same without ray queries (D-108 step 5): the shafts from the sun's shadow rings.
+[shader("compute")]
+[numthreads(8, 8, 1)]
+void light_rings_main(uint3 id : SV_DispatchThreadID)
+{
+    light<0>(id);
+}
+
+void light<let RAYS : int>(uint3 id)
+{
     if (id.x >= FROXELS_X || id.y >= FROXELS_Y || id.z >= SLICES)
         return;
     Dust* d = push.dust;
@@ -105,7 +120,9 @@ void light_main(uint3 id : SV_DispatchThreadID)
     float extinction = d[0].params.x * saturate(shape * 1.6 - 0.25);
     float3 sun = d[0].sun.xyz;
     float visible = 1.0;
-    if (d[0].tlas != 0 && extinction > 0.0)
+    if ((RAYS == 0 || d[0].tlas == 0) && d[0].rings != nullptr && extinction > 0.0)
+        visible = ring_sun(d[0].rings, direction * t, jitter.y);
+    else if (RAYS != 0 && d[0].tlas != 0 && extinction > 0.0)
     {
         RayDesc ray;
         ray.Origin = world;
