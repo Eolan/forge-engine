@@ -12990,6 +12990,60 @@ screen, kept until that is well off. A cone takes a slot; anything else six, a c
 
 *Its check.* 0 pixels with rays against `main`; validation and sync validation without ray queries on both paths; the bar with its smoke and its fog against the rays' at one exposure; the cost of each part.
 
+**Step 6 proposed, 2026-11-11 🟡 (waiting for the owner's go): the light the city leaves a surface, from its heights seen from above.**
+
+*What the tables' quarter stop is (#410).* Without probes, a surface no cube covers takes the open sky's light: the whole sky above it and a sunlit ground below, as if it stood alone in a field. Each term of T0 was put into the traced path one at a time, or taken out of T0, in the same linear captures:
+
+| The city | T0 | Traced, with T0's ambient (open sky, GTAO) | Its screen reflections | Its near light | Its rings | Its street cubes |
+|---|---|---|---|---|---|---|
+| From above, noon | +0.35 | +0.28 | +0.04 | +0.01 | +0.006 | 0.000 |
+| From above, night | +0.31 | +0.25 | +0.04 | | | |
+| The street, evening | +0.29 | +0.67 | +0.09 | | | −0.43 |
+
+- **The ambient is the quarter stop:** the probes in place of the traced bounce leave +0.014, so a right ambient would leave about the reflections' share.
+- **Where it lies:** on what is in shadow. From above, the facades in the shade of their neighbours are a whole stop too bright and the sunlit ones a third; the roofs are right. In the street at evening, against the traced image: its shaded road +0.31 (the open sky's +0.75), the near facade in shade +0.70 (+1.68), the sunlit facade +0.06.
+- **Why:** a facade sees the building across the street and a street in its shadow, not a sky and a sunlit field. GTAO reaches 1.5 m on the screen. A street cube is one point's view: the camera's, lent to every surface within its 40 m, a shaded road and facade included.
+- **The street's windows,** +0.09: the screen's reflections miss what is off the screen. Not this step's.
+
+*The plan, three parts:*
+
+*Part 1, the heights from above.* The rings' tiles (step 1), their axis straight up: the static casters' highest point in each texel, a tile drawn when the camera comes within its reach and kept. Nothing to redraw when the sun turns, and no movers: a parked bus is not what darkens a street, and its shadow is the rings'. Two levels round the camera, 512 m across at 25 cm a texel and 2,048 m at 1 m, about 32 MB.
+
+*Part 2, what a pixel gathers from them.* A pass at half resolution, before the resolve, as the near light's.
+- **Directions:** eight a pixel each frame, cosine-weighted round its normal, turned by a noise from frame to frame. The history holds the rest.
+- **The march:** each direction is marched against the heights in steps that lengthen with the distance, out to `r.gi.heights_reach` (256 m). Each step's level comes from its index. A direction is open while it stays above the heights; it ends where it first goes under them.
+- **The light of an open direction:** the sky's in that direction. One going down that is still open at its reach takes the open ground's light, as now.
+- **The light of a blocked one:** what it met, lit once.
+  - **Its face:** a wall facing back along the direction, or the ground or a roof facing up.
+  - **Its sun:** from the rings at that point.
+  - **Its sky:** the open sky's light on that face.
+  - **Its reflectance:** a guess, `r.gi.heights_reflectance` (0.3, the open sky's ground).
+  A shaded street then sends back the sky's share only, and a sunlit facade across the street its sun.
+- **Its filter:** the near light's: one 3 × 3 spatial pass, then one temporal one with its depth test, and the resolve takes the half-resolution texel nearest in depth.
+- **The mirror direction,** marched once more: the sky's reflection on rough rows dims by what it meets there, as under the probes (#68).
+
+*Part 3, where it is read.* In the resolve's open-sky term, wherever there are no probes.
+- **Rooms first:** where a room's cube covers a point, its light stays the point's, as now. The gathered light takes only the share the rooms leave.
+- **The street cubes' ambient:** measured both ways, over the gathered light and left out of it, and the better kept. They stay for the reflections either way.
+- **A cube's faces:** they take the same gathered light, marched for the face's own texels when it is drawn, so that its rounds start from it.
+- **Where there are probes,** as on a device with rays, nothing changes.
+
+*Settings:* `r.gi.heights` (on where there are no rays), `r.gi.heights_reach`, `r.gi.heights_reflectance`. The heights' tiles and the pass are graph passes, in the profiler and `docs/PROFILE.md`.
+
+*Left out:* the fog's froxels, the particles and the far plants' impostors keep the cubes' light or the open sky's.
+
+*Expected limits:*
+- **Two and a half dimensions:** a column of the heights stands solid down to the ground. Under a bridge, an arcade or a balcony, a direction along the street meets the deck's column, and the place under it takes too little light.
+- **One bounce, guessed:** the reflectance and the hit's own sky are guesses.
+
+*Cost, estimated:* the pass 0.3 to 0.5 ms at 1600 × 900; the heights' tiles a few draws of the static casters as the camera moves on.
+
+*Its check.*
+- 0 pixels with rays against `main`; validation without rays in every demo.
+- D-108's tables again (the city's three views at four times of day, the bar at four hours): a long run, asked for first.
+- The 80 m walk down the street (step 4's frame-to-frame ꟻLIP); the cost of each part.
+
+
 **Amended 2026-11-11: step 5 built** (the owner's go for step 5). The rings' records and a point's share of the sun in `shaders/shadow_rings.slang`, the cubes' records and lookups in `shaders/reflection_cubes.slang`, both imported by `meshlet.slang` and the passes below; `SunRings` and `CubeLight` hand them to the passes of other modules. Where the device has ray queries nothing changes: 0 pixels against `main` in the city, the gallery and the island.
 
 - **No module asks for ray queries on a device without them.** Every entry of the frame's shaders compiled offline: 74 hold no ray query, 18 do, and those are only the traced entries and the passes that exist only with rays. Each pass a device without ray queries creates has its own entry without the traced code (`advance_rings_main`, `vert_rings_main`, `light_rings_main`, `impostor_*_rings_main`, `fog_light_rings_main`, `march_rings_main`), picked by the device's features. The resolve's plain entries had two traced calls behind run-time switches; their tests now carry the entry's own. Validation with `FORGE_NO_RAY_QUERY=1`: 0 errors in the city (16 before), the private bar (24 before) and the island.
