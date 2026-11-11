@@ -401,9 +401,9 @@ pub trait Running: Send {
     /// Its cells streamed round the camera (D-096, #338's `CellStreamer`), for a scene built to be
     /// edited (`MeshletSceneBuilder::reserve_dynamic`): the app sends the streamer the camera's
     /// place in the scene frame each frame (the partition's frame must be the scene's) and applies
-    /// its edits, every change the camera asks for settled before the frame (a capture's runs, as
-    /// the physics lab's), or one edit a frame unwaited as a game takes them with
-    /// `FORGE_CELLS_REALTIME=1`. The cells' sets (rooms, panes, lamps) are not taken yet: give the
+    /// its edits, every change the camera asks for settled before the frame in a scripted run (a
+    /// capture's, as the physics lab's), one edit a frame unwaited when played, as a game takes
+    /// them (`FORGE_CELLS_REALTIME=1` or `0` says which). The cells' sets (rooms, panes, lamps) are not taken yet: give the
     /// lamps through [`Running::lamps`]. None by default.
     fn cells(&mut self) -> Option<&mut forge_render::CellStreamer> {
         None

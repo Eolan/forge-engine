@@ -3872,7 +3872,22 @@ impl Demo for Gallery {
                 lamps: &mut table,
             };
             let started = std::time::Instant::now();
-            let took = if std::env::var_os("FORGE_CELLS_REALTIME").is_some() {
+            // A scripted run (frames counted, a capture) waits for the worker: its picture must
+            // not hang on the worker's timing. A played one never waits: it takes an edit a frame
+            // as they come. Waiting, a flight over an authored city stalled 35 to 67 ms whenever
+            // an edit brought thousands of pieces (the owner, 2026-11-11), and every frame paid
+            // the worker's test of the pieces in reach. `FORGE_CELLS_REALTIME=1` or `0` says
+            // which, whatever the run.
+            let realtime = match std::env::var("FORGE_CELLS_REALTIME").ok().as_deref() {
+                Some("0") => false,
+                Some(_) => true,
+                None => {
+                    self.args.frames.is_none()
+                        && self.args.capture.is_none()
+                        && self.args.capture_every.is_none()
+                }
+            };
+            let took = if realtime {
                 streamer.update(&ctx.device, &mut self.scene, &mut systems, 1, None)
             } else {
                 streamer.update_settled(seq, &ctx.device, &mut self.scene, &mut systems)

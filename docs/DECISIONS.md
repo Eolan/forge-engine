@@ -11138,7 +11138,8 @@ Quality, the street's end):** the source's instances bucketed by its own sector 
 streamer's cells (64 m to 1 km: 86 cells over the ±256 m square), added through the editor
 (`add_instance_stretched`) as `CellStreamer` plans them; every mesh registered at the start, its
 pages streamed through a pool; the app driving the streamer (`Running::cells`, settled before the
-frame by default, `FORGE_CELLS_REALTIME=1` one edit a frame).
+frame in a scripted run, one edit a frame unwaited when played since 2026-11-11;
+`FORGE_CELLS_REALTIME=1` or `0` says which).
 
 | | resident | streamed |
 |---|---|---|
