@@ -12996,7 +12996,17 @@ screen, kept until that is well off. A cone takes a slot; anything else six, a c
 - **The sun without rays from the rings** for the particles, the splashes, the dust's shafts and the far plants' impostors: the finest ring that holds the point, four taps round it, the sun seen past the last ring. The particles' advance reads the rings' layers, render targets, so it runs on the graphics queue when it has them.
 - **The fog volumes without rays** (until now left out): the sun from the rings; the strong lamps' shadows from the lamps' atlas, a lamp without a slot unshadowed; with no probes, the light round a froxel from the cubes, as a white surface facing up and one facing down take it, the open sky's where no cube covers it. **The smoke** takes the cubes' light the same way: without it, the bar's smoke stood white in the room, lit by the open sky.
 - **Results.** The private bar with its smoke and its fog, `FORGE_NO_RAY_QUERY=1` against the traced image at one exposure: -0.07 stops, ꟻLIP 0.095 (0.109 before with both left out). Its frame is 11.8 ms against 18.0 traced; `fog/light` 0.39 ms against 0.41.
-- **Limits.** Without rays the particles collide with nothing and the tank's bent rays go to its box. A point's share of the sun has no blocker search, so its penumbra is the ring's texel and four taps, soft and fixed. The fog's lamps beyond the atlas's 48 go unshadowed. The tables of error and cost per view and per time of day, D-108's last item, wait for the owner's go: a long run.
+- **Limits.** Without rays the particles collide with nothing and the tank's bent rays go to its box. A point's share of the sun has no blocker search, so its penumbra is the ring's texel and four taps, soft and fixed. The fog's lamps beyond the atlas's 48 go unshadowed.
+- **D-108's tables** (the owner's go, 2026-11-11), `FORGE_NO_RAY_QUERY=1` against the traced path: linear captures in cd/m² with the anti-aliasing off at 1600 x 900, as `tools/gi-compare.sh` takes them, and `tools/gi-measure.py`'s tiles. The signed mean in stops, the mean |log2| of the 16 x 9 tiles in brackets; the city at `--time-of-day` 0.12, 0.5, 0.88 and 1.5, the private bar at 9:00, 13:00, 16:35 and 21:00:
+
+| View | Morning | Noon | Evening | Night |
+|---|---|---|---|---|
+| The city's street | +0.05 (0.23) | +0.19 (0.19) | +0.29 (0.33) | +0.23 (0.25) |
+| Its avenue | +0.28 (0.29) | +0.23 (0.23) | +0.25 (0.25) | +0.24 (0.24) |
+| The city from above | +0.24 (0.24) | +0.35 (0.35) | +0.24 (0.24) | +0.31 (0.31) |
+| A private district's bar | -0.07 (0.25) | -0.07 (0.27) | -0.06 (0.24) | -0.02 (0.25) |
+
+  The bar stays within a tenth of a stop at every hour. The city stands a quarter of a stop bright at every hour, most where the view reaches past the street cubes (from above, the open sky's light on every roof), and by night too, its lamps' light round the street as the cubes and the near light carry it against the traced bounce's. The frame (the same runs, the anti-aliasing off): the city 2.1 to 2.9 ms against 5.4 to 6.0 traced; the bar 9.1 to 9.9 ms against 15.7 to 16.7.
 
 **Amended 2026-11-11: step 4 built** (the owner's go for step 4; step 5 stays proposed). The cubes' diffuse level and their rounds in `crates/forge-render/src/reflection_cubes.rs` and `cube_prefilter_main`, their reading in `cube_pick` and `cube_ambient` of `shaders/meshlet.slang`, the near light in `crates/forge-render/src/screen_gi.rs` and `shaders/screen_gi.slang`. Where the device has ray queries nothing changes: 0 pixels against main in the city, the gallery and the island.
 

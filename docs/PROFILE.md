@@ -3149,6 +3149,8 @@ The no-ray path complete (D-108, step 5). The private district's bar with its sm
 | `particles/draw` | 0.129 | 0.113 |
 | The frame | 11.76 | 18.03 |
 
+D-108's tables' runs (1600 x 900, the anti-aliasing off, the frame's GPU ms without rays against traced, over four times of day each): the city's street 2.1 to 2.3 against 5.5 to 6.0, its avenue 2.1 to 2.3 against 5.4 to 5.7, the city from above 2.7 to 2.9 against 5.6 to 6.0, the private bar 9.1 to 9.9 against 15.7 to 16.7.
+
 ## Not measured yet
 
 - **Streaming**: residency pools, request queue depth, drive and decompression throughput.
