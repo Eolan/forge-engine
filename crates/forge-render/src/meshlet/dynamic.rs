@@ -4,6 +4,10 @@
 //! - **Room.** [`MeshletSceneBuilder::reserve_dynamic`] makes every table at a capacity: the
 //!   cluster records, the mesh records, the instances, the page numbers, the rays' cuts. A
 //!   shared [`Room`] hands out their free ranges, first fit.
+//! - **Small meshes share pages** (#387, as a built scene's): a mesh whose clusters fill at most
+//!   half a page takes no page of its own. Its bytes go into a page pinned for the small meshes,
+//!   first fit; the page leaves with its last mesh. An authored city's props are thousands of
+//!   meshes of a few kilobytes: a page each, their roots alone filled the pool.
 //! - **The worker's side** ([`SceneEditor`], from [`MeshletScene::editor`]): a new mesh's
 //!   cluster records, its record and its rays' cut go into ranges no frame reads, through
 //!   staged copies beside the frames; its structure is built on the compute queue. Its root
@@ -123,6 +127,11 @@ impl Ranges {
         Some(start)
     }
 
+    /// Whether [`Ranges::take`] would find `len` entries.
+    fn fits(&self, len: u32) -> bool {
+        len == 0 || self.free.iter().any(|&(_, l)| l >= len)
+    }
+
     /// Gives back `len` entries from `start`.
     pub(crate) fn give(&mut self, start: u32, len: u32) {
         if len == 0 {
@@ -155,6 +164,23 @@ struct Room {
     /// roots don't fit: past this point an edit has been promised to whoever built it, and the
     /// streaming that fails on it leaves the editor's view of the scene wrong.
     root_room: u32,
+    /// The pages the small meshes share (#387), in the order they were opened.
+    shared: Vec<SharedPage>,
+}
+
+/// A page the small meshes of a dynamic scene share (#387): pinned like a root, a mesh's bytes
+/// at an offset of it.
+#[derive(Debug)]
+struct SharedPage {
+    /// Its number in the scene's page table.
+    page: u32,
+    /// Its free bytes.
+    free: Ranges,
+    /// The meshes in it: it leaves with the last.
+    meshes: u32,
+    /// Whether an edit that pins it was finished ([`SceneEditor::finish`]): until then every
+    /// edit writing into it brings it, so an edit lost on the way leaves it usable.
+    sent: bool,
 }
 
 /// The share of a streamed scene's page pool its meshes' roots may pin, numerator and
@@ -177,7 +203,8 @@ pub(super) fn root_room(pool_pages: u32, pinned: usize) -> u32 {
 }
 
 /// Where a mesh lies in the tables: (first, count) of its cluster records, its pages, its
-/// rays' vertices and triangles; and the root pages it pins.
+/// rays' vertices and triangles; and the root pages it pins. A small mesh has no page and no
+/// root of its own: `shared` is the page it shares, its bytes' offset there and how many.
 #[derive(Clone, Copy, Debug, Default)]
 struct MeshRanges {
     meshlets: (u32, u32),
@@ -185,6 +212,7 @@ struct MeshRanges {
     ray_vertices: (u32, u32),
     ray_triangles: (u32, u32),
     roots: u32,
+    shared: Option<(u32, u32, u32)>,
 }
 
 impl Room {
@@ -241,12 +269,14 @@ impl Room {
                 ray_vertices: (firsts[2], sizes[2]),
                 ray_triangles: (firsts[3], sizes[3]),
                 roots,
+                shared: None,
             },
         ))
     }
 
-    /// Gives back mesh slot `slot`'s ranges and its root pages' room.
-    fn give_mesh(&mut self, slot: u32, r: &MeshRanges) {
+    /// Gives back mesh slot `slot`'s ranges and its root pages' room, and a small mesh's bytes:
+    /// returns the shared page its going emptied, which is no longer one ([`Room::give_shared`]).
+    fn give_mesh(&mut self, slot: u32, r: &MeshRanges) -> Option<u32> {
         self.meshes.give(slot, 1);
         self.meshlets.give(r.meshlets.0, r.meshlets.1);
         self.pages.give(r.pages.0, r.pages.1);
@@ -254,6 +284,73 @@ impl Room {
         self.ray_triangles
             .give(r.ray_triangles.0, r.ray_triangles.1);
         self.root_room = self.root_room.saturating_add(r.roots);
+        r.shared
+            .and_then(|(page, at, bytes)| self.give_shared(page, at, bytes))
+    }
+
+    /// Whether [`Room::take_shared`] would find `bytes`.
+    fn shared_fits(&self, bytes: u32) -> bool {
+        self.shared.iter().any(|s| s.free.fits(bytes)) || (self.root_room > 0 && self.pages.fits(1))
+    }
+
+    /// `bytes` of a page the small meshes share: the page, the offset in it, and whether the
+    /// page is new, to be pinned. The first page with room, or a new one, which takes a page
+    /// number and a root page's room; the name of what is short otherwise, nothing taken.
+    fn take_shared(&mut self, bytes: u32) -> std::result::Result<(u32, u32, bool), &'static str> {
+        debug_assert!(bytes as usize <= PAGE_SIZE);
+        for s in &mut self.shared {
+            if let Some(at) = s.free.take(bytes) {
+                s.meshes += 1;
+                return Ok((s.page, at, false));
+            }
+        }
+        if self.root_room == 0 {
+            return Err("root pages");
+        }
+        let Some(page) = self.pages.take(1) else {
+            return Err("pages");
+        };
+        self.root_room -= 1;
+        let mut free = Ranges::new(PAGE_SIZE as u32, 0);
+        let at = free.take(bytes).expect("a small mesh fits a page");
+        self.shared.push(SharedPage {
+            page,
+            free,
+            meshes: 1,
+            sent: false,
+        });
+        Ok((page, at, true))
+    }
+
+    /// Gives back a small mesh's `bytes` at `at` of shared page `page`. Returns the page when
+    /// the mesh was its last: its number and its root's room are given back, and the streamer
+    /// is to release it.
+    fn give_shared(&mut self, page: u32, at: u32, bytes: u32) -> Option<u32> {
+        let i = self.shared.iter().position(|s| s.page == page)?;
+        let s = &mut self.shared[i];
+        s.free.give(at, bytes);
+        s.meshes -= 1;
+        if s.meshes > 0 {
+            return None;
+        }
+        self.shared.remove(i);
+        self.pages.give(page, 1);
+        self.root_room = self.root_room.saturating_add(1);
+        Some(page)
+    }
+
+    /// The pages the small meshes share, and the bytes taken in them.
+    fn shared_use(&self) -> (u32, u64) {
+        let free: u64 = self
+            .shared
+            .iter()
+            .flat_map(|s| &s.free.free)
+            .map(|&(_, l)| u64::from(l))
+            .sum();
+        (
+            self.shared.len() as u32,
+            (self.shared.len() * PAGE_SIZE) as u64 - free,
+        )
     }
 }
 
@@ -421,6 +518,7 @@ impl SceneDynamic {
             ray_vertices: Ranges::new(c.ray_vertices, ray_used.0),
             ray_triangles: Ranges::new(c.ray_triangles, ray_used.1),
             root_room: seed.root_room,
+            shared: Vec::new(),
         };
         let mut pinned = seed.pinned.to_vec();
         pinned.sort_unstable();
@@ -447,6 +545,7 @@ impl SceneDynamic {
                         roots: (pinned.partition_point(|&p| p < end)
                             - pinned.partition_point(|&p| p < first))
                             as u32,
+                        shared: None,
                     },
                 })
             })
@@ -602,6 +701,8 @@ struct NewMesh {
     parents: Vec<Vec<u32>>,
     root_pages: u32,
     cut: Option<Cut>,
+    /// A small mesh's bytes for its shared page (`ranges.shared`).
+    small: Option<Vec<u8>>,
 }
 
 /// How the rays take a dynamic scene's new mesh ([`SceneEditor::add_mesh`]).
@@ -638,6 +739,11 @@ pub struct SceneEditor {
     /// Per mesh slot, its record and its highest section, while it is in the scene and may be
     /// instanced (not a skinned mesh).
     mesh_records: Vec<Option<(GpuMesh, u32)>>,
+    /// Per mesh slot this editor filled, the bytes it keeps resident
+    /// ([`SceneEditor::mesh_pinned_bytes`]).
+    pinned_bytes: Vec<u64>,
+    /// Whether small meshes share pages (#387): `FORGE_NO_PAGE_PACKING=1` gives each its own.
+    pack: bool,
     /// The movers' slots, which the frames' CPU writes: no edit touches them.
     movers: std::ops::Range<u32>,
     /// Per mesh slot of the build, whether a mover shows it or it is skinned: no edit removes it.
@@ -707,9 +813,32 @@ impl SceneEditor {
     /// Adds `mesh`, its rays cut as `rays` says: its records and its cut go into free ranges of
     /// the scene's tables. Fails when a table has no room for it.
     pub fn add_mesh(&mut self, mesh: &MeshletMesh, rays: MeshRays) -> Result<MeshId> {
-        // Before its rays' cut, the slow part: a world short of room asks again and again.
-        if self.room.lock().expect("the room").root_room < mesh.root_pages {
-            return no_room("root pages");
+        // A small mesh's bytes, for a page it shares (#387).
+        let small = match self.pack {
+            true => {
+                super::small_mesh_bytes(&mesh.meshlets, (0, mesh.page_count), mesh.uvs, || {
+                    if mesh.page_file.is_none() || !mesh.pages.is_empty() {
+                        return Ok(Cow::Borrowed(mesh.pages.as_slice()));
+                    }
+                    let sources = PageSource::of_mesh(mesh, |_| PageSource::Absent);
+                    read_sources(sources.iter(), &[]).map(Cow::Owned)
+                })?
+                // A mesh with no cluster has nothing to share a page for.
+                .filter(|(bytes, _)| !bytes.is_empty())
+            }
+            false => None,
+        };
+        // Before its pages' copy and its rays' cut, the slow parts: a world short of room asks
+        // again and again.
+        {
+            let room = self.room.lock().expect("the room");
+            let fits = match &small {
+                Some((bytes, _)) => room.shared_fits(bytes.len() as u32),
+                None => room.root_room >= mesh.root_pages,
+            };
+            if !fits {
+                return no_room("root pages");
+            }
         }
         // Its pages as a store of their own, numbered from 0, for its cut.
         let shared = (mesh.page_file.is_none() || !mesh.pages.is_empty())
@@ -735,43 +864,109 @@ impl SceneEditor {
         let (vertices, triangles) = cut.as_ref().map_or((0, 0), |c| {
             (c.positions.len() as u32, c.indices.len() as u32 / 3)
         });
-        let sizes = [
-            mesh.meshlets.len() as u32,
-            mesh.page_count,
-            vertices,
-            triangles,
-        ];
-        let taken = self
-            .room
-            .lock()
-            .expect("the room")
-            .take_mesh(sizes, mesh.root_pages);
+        // A small mesh: no page and no root of its own, its bytes in a shared page.
+        let (pages, roots) = match &small {
+            Some(_) => (0, 0),
+            None => (mesh.page_count, mesh.root_pages),
+        };
+        let sizes = [mesh.meshlets.len() as u32, pages, vertices, triangles];
+        let taken = {
+            let mut room = self.room.lock().expect("the room");
+            room.take_mesh(sizes, roots)
+                .and_then(|(slot, mut ranges)| match &small {
+                    None => Ok((slot, ranges)),
+                    Some((bytes, _)) => match room.take_shared(bytes.len() as u32) {
+                        Ok((page, at, _)) => {
+                            ranges.shared = Some((page, at, bytes.len() as u32));
+                            Ok((slot, ranges))
+                        }
+                        Err(what) => {
+                            room.give_mesh(slot, &ranges);
+                            Err(what)
+                        }
+                    },
+                })
+        };
         let (slot, ranges) = match taken {
             Ok(taken) => taken,
             Err(what) => return no_room(what),
         };
-        let page_base = ranges.pages.0;
         let (record, finest, sections) = mesh_record(mesh, ranges.meshlets.0);
-        let parents = ResidentSet::parents_of(mesh.page_count as usize, &mesh.meshlets)
-            .into_iter()
-            .map(|list| list.into_iter().map(|p| p + page_base).collect())
-            .collect();
-        self.new_meshes.push(NewMesh {
-            slot,
-            record,
-            finest,
-            ranges,
-            meshlets: rebased(&mesh.meshlets, page_base).collect(),
-            sources,
-            parents,
-            root_pages: mesh.root_pages,
-            cut,
-        });
+        let pinned_bytes = match &small {
+            Some((bytes, _)) => bytes.len() as u64,
+            None => u64::from(mesh.root_pages) * PAGE_SIZE as u64,
+        };
+        let new = match (small, ranges.shared) {
+            (Some((bytes, starts)), Some((page, at, _))) => NewMesh {
+                slot,
+                record,
+                finest,
+                ranges,
+                // Every cluster in the shared page, its children too: always resident.
+                meshlets: mesh
+                    .meshlets
+                    .iter()
+                    .map(|m| GpuMeshlet {
+                        page,
+                        payload: m.payload + at + starts[m.page as usize],
+                        child_page: if m.child_page == PAGE_NONE {
+                            PAGE_NONE
+                        } else {
+                            page
+                        },
+                        ..*m
+                    })
+                    .collect(),
+                sources: Vec::new(),
+                parents: Vec::new(),
+                root_pages: 0,
+                cut,
+                small: Some(bytes),
+            },
+            _ => {
+                let page_base = ranges.pages.0;
+                NewMesh {
+                    slot,
+                    record,
+                    finest,
+                    ranges,
+                    meshlets: rebased(&mesh.meshlets, page_base).collect(),
+                    sources,
+                    parents: ResidentSet::parents_of(mesh.page_count as usize, &mesh.meshlets)
+                        .into_iter()
+                        .map(|list| list.into_iter().map(|p| p + page_base).collect())
+                        .collect(),
+                    root_pages: mesh.root_pages,
+                    cut,
+                    small: None,
+                }
+            }
+        };
+        self.new_meshes.push(new);
         if self.mesh_records.len() <= slot as usize {
             self.mesh_records.resize(slot as usize + 1, None);
         }
         self.mesh_records[slot as usize] = Some((record, sections));
+        if self.pinned_bytes.len() <= slot as usize {
+            self.pinned_bytes.resize(slot as usize + 1, 0);
+        }
+        self.pinned_bytes[slot as usize] = pinned_bytes;
         Ok(MeshId(slot))
+    }
+
+    /// The bytes mesh `mesh`, added by this editor, keeps resident in the page pool while it is
+    /// in the scene: its root pages, or a small mesh's bytes in the page it shares (#387). 0 for
+    /// a mesh of the build.
+    pub fn mesh_pinned_bytes(&self, mesh: MeshId) -> u64 {
+        self.pinned_bytes.get(mesh.0 as usize).copied().unwrap_or(0)
+    }
+
+    /// The root pages the scene's pool can still pin, the pages its small meshes share (#387)
+    /// and the bytes taken in them.
+    pub fn page_room(&self) -> (u32, u32, u64) {
+        let room = self.room.lock().expect("the room");
+        let (pages, bytes) = room.shared_use();
+        (room.root_room, pages, bytes)
     }
 
     /// Adds an instance of `mesh` standing at `position` in the world, turned by `rotation` and
@@ -1090,6 +1285,9 @@ impl SceneEditor {
             mesh.0
         );
         self.mesh_records[mesh.0 as usize] = None;
+        if let Some(bytes) = self.pinned_bytes.get_mut(mesh.0 as usize) {
+            *bytes = 0;
+        }
         self.removed_meshes.push(mesh.0);
     }
 
@@ -1169,6 +1367,10 @@ impl SceneEditor {
         let mut read_preload: Vec<&PageSource> = Vec::new();
         let mut preload: Vec<(u32, f32)> = Vec::new();
         for m in &new_meshes {
+            // A small mesh has no page of its own: its bytes go after the pages.
+            if m.small.is_some() {
+                continue;
+            }
             let first = m.ranges.pages.0;
             for p in 0..m.root_pages {
                 pages.roots.push((first + p, 0));
@@ -1197,7 +1399,24 @@ impl SceneEditor {
                 }
             }
         }
-        let bytes = read_sources(read_roots.into_iter().chain(read_preload), &[])?;
+        let mut bytes = read_sources(read_roots.into_iter().chain(read_preload), &[])?;
+        // The small meshes' bytes, each for its shared page (#387), which comes with them until
+        // an edit bringing it is finished.
+        for m in &new_meshes {
+            if let (Some(small), Some((page, at, _))) = (&m.small, m.ranges.shared) {
+                let sent = {
+                    let room = self.room.lock().expect("the room");
+                    room.shared.iter().any(|s| s.page == page && s.sent)
+                };
+                if !sent && !pages.shared.contains(&page) {
+                    pages.shared.push(page);
+                }
+                pages
+                    .writes
+                    .push((page, at, bytes.len() as u64, small.len() as u32));
+                bytes.extend_from_slice(small);
+            }
+        }
         let roots = pages.roots.len();
         for (k, root) in pages.roots.iter_mut().enumerate() {
             root.1 = (k * PAGE_SIZE) as u64;
@@ -1232,7 +1451,7 @@ impl SceneEditor {
         let table_at = records_at + changed.len() as u64 * instance_size;
         let new_pages: u64 = new_meshes.iter().map(|m| u64::from(m.ranges.pages.1)).sum();
         // An entry per new page, and one per page evicted for those loaded.
-        let entries = new_pages + (roots + preload.len()) as u64;
+        let entries = new_pages + (roots + preload.len() + 2 * pages.shared.len()) as u64;
         // The fades this edit sets, into slots no frame reads.
         if let Some(fades) = &self.fades {
             let size = std::mem::size_of::<GpuInstanceFade>() as u64;
@@ -1330,7 +1549,14 @@ impl SceneEditor {
                 (slot, live)
             })
             .collect();
-        let page_high = self.room.lock().expect("the room").pages.high;
+        // Nothing fails from here on: the shared pages this edit brings are on their way.
+        let page_high = {
+            let mut room = self.room.lock().expect("the room");
+            for s in &mut room.shared {
+                s.sent |= pages.shared.contains(&s.page);
+            }
+            room.pages.high
+        };
         Ok(SceneEdit {
             staging,
             preloaded: preload.len() as u32,
@@ -1484,6 +1710,8 @@ impl MeshletScene {
             material_count: self.material_count,
             instances,
             mesh_records,
+            pinned_bytes: Vec::new(),
+            pack: !std::env::var("FORGE_NO_PAGE_PACKING").is_ok_and(|v| v != "0"),
             movers,
             held,
             new_meshes: Vec::new(),
@@ -1683,11 +1911,16 @@ impl MeshletScene {
                     if let Some(rays) = self.rays.as_mut() {
                         drop(rays.take_blas(slot));
                     }
-                    dynamic
+                    let emptied = dynamic
                         .room
                         .lock()
                         .expect("the room")
                         .give_mesh(slot, &mesh.ranges);
+                    // The shared page a small mesh was the last of (#387). Its number may be
+                    // taken again at once: the edit that brings it back is applied after this.
+                    if let (Some(page), Some(streamer)) = (emptied, self.streamer.as_mut()) {
+                        streamer.release(page..page + 1);
+                    }
                 }
                 Leaving::Item(item) => drop(item),
             }
@@ -1729,6 +1962,7 @@ mod tests {
             ray_vertices: Ranges::new(100, 0),
             ray_triangles: Ranges::new(10, 0),
             root_room: 5,
+            shared: Vec::new(),
         };
         let (slot, ranges) = room.take_mesh([40, 4, 30, 8], 3).unwrap();
         assert_eq!((slot, ranges.pages), (0, (0, 4)));
@@ -1744,9 +1978,53 @@ mod tests {
         // Too many roots: refused before anything is taken.
         assert_eq!(room.take_mesh([1, 1, 0, 0], 3).unwrap_err(), "root pages");
         assert_eq!(room.meshes.free, vec![(1, 3)]);
-        room.give_mesh(slot, &ranges);
+        assert_eq!(room.give_mesh(slot, &ranges), None);
         assert_eq!(room.meshlets.free, vec![(0, 100)]);
         assert_eq!(room.root_room, 5);
+    }
+
+    #[test]
+    fn small_meshes_share_pages_that_leave_with_their_last() {
+        let mut room = Room {
+            meshes: Ranges::new(8, 0),
+            instances: Ranges::new(8, 0),
+            meshlets: Ranges::new(100, 0),
+            pages: Ranges::new(3, 0),
+            ray_vertices: Ranges::new(100, 0),
+            ray_triangles: Ranges::new(100, 0),
+            root_room: 2,
+            shared: Vec::new(),
+        };
+        let half = (PAGE_SIZE / 2) as u32;
+        // The first opens a page: a page number and a root's room; the second fits beside it.
+        assert_eq!(room.take_shared(half), Ok((0, 0, true)));
+        assert_eq!(room.take_shared(half - 16), Ok((0, half, false)));
+        assert_eq!((room.root_room, room.pages.free.clone()), (1, vec![(1, 2)]));
+        // 16 bytes left there: the third opens another, the fourth takes the first's rest.
+        assert_eq!(room.take_shared(32), Ok((1, 0, true)));
+        assert_eq!(room.take_shared(16), Ok((0, 2 * half - 16, false)));
+        assert_eq!(room.shared_use(), (2, u64::from(2 * half) + 32));
+        // No root's room left: a mesh that fits no shared page is refused, nothing taken.
+        assert!(room.shared_fits(half) && !room.shared_fits(2 * half));
+        assert_eq!(room.take_shared(2 * half), Err("root pages"));
+        assert_eq!(room.shared.len(), 2);
+        // A page stays while a mesh is in it, and its freed bytes are taken again.
+        assert_eq!(room.give_shared(0, 0, half), None);
+        assert_eq!(room.take_shared(half - 32), Ok((0, 0, false)));
+        assert_eq!(room.give_shared(0, 0, half - 32), None);
+        assert_eq!(room.give_shared(0, half, half - 16), None);
+        // Its last mesh gone, it is no longer shared: its number and its root's room are back.
+        assert_eq!(room.give_shared(0, 2 * half - 16, 16), Some(0));
+        assert_eq!(
+            (room.root_room, room.pages.free.clone()),
+            (1, vec![(0, 1), (2, 1)])
+        );
+        // A mesh's ranges give its bytes back with the rest.
+        let (slot, mut ranges) = room.take_mesh([10, 0, 5, 5], 0).unwrap();
+        ranges.shared = Some((1, 0, 32));
+        assert_eq!(room.give_mesh(slot, &ranges), Some(1));
+        assert_eq!((room.root_room, room.pages.free.clone()), (2, vec![(0, 3)]));
+        assert!(room.shared.is_empty());
     }
 
     #[test]

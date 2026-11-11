@@ -2998,6 +2998,11 @@ Quality: 6,048 of its 6,959 meshes packed, its pages 12,539 → 2,436 (768 share
 1,074 MB, VRAM 3.64 → 2.38 GB; the frame 6.66 → 6.62 ms. A first rule (one page each, half full at
 most) took 1,225 meshes and 151 MB: most props span two or three thin pages.
 
+**In a streamed scene's edits too (2026-11-11, D-106).** A mesh an edit brings shares pages the same way (`SceneEditor::add_mesh`), first fit, the page leaving with its
+last mesh. The private district flown in real time, 6,200 frames, 2560 × 1440 under DLSS Quality: 16,300 meshes held, 1,776 shared pages 95 % full; the pool's 16,384
+pages all taken → 10,200; 12 to 29 pages uploaded a frame → 0 to 1; up to 1,100 wanted pages absent → 31 at most; up to 768 pieces refused in one update → none. The
+frame: p50 10.4 → 10.2 ms, p99 14.4 → 13.9. With a 1,536 MiB pool: the same, and VRAM 88.9 → 85.5 %.
+
 ## Moving materials (D-104, #398, 2026-11-07)
 
 No pass of its own. Each frame the CPU writes the moving rows, 240 bytes each, into the frame slot's

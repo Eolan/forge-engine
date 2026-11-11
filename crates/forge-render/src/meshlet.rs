@@ -1913,6 +1913,64 @@ fn table_with_room<T: Pod>(
 /// page, often over two or three pages (its roots' and its finer levels').
 const PACK_BYTES: usize = PAGE_SIZE / 2;
 
+/// A small mesh's pages' used bytes one after the other, and where each of its pages starts in
+/// them (#387): `clusters` are its records, on pages `first..first + count`, which `read` gives
+/// whole, one after the other. `None` for a mesh that is not small: more than a few pages, or
+/// more than [`PACK_BYTES`] used over them.
+fn small_mesh_bytes<'a>(
+    clusters: &[GpuMeshlet],
+    (first, count): (u32, u32),
+    uvs: bool,
+    read: impl FnOnce() -> std::io::Result<std::borrow::Cow<'a, [u8]>>,
+) -> Result<Option<(Vec<u8>, Vec<u32>)>> {
+    // A mesh of more than a few pages is not small: its pages are not read.
+    if count == 0
+        || count > 8
+        || clusters
+            .iter()
+            .any(|c| c.page < first || c.page - first >= count)
+    {
+        return Ok(None);
+    }
+    // The last payload's start in each page is under its used bytes: too many already, the
+    // pages are not read (a file's are unpacked to read them, #215).
+    let mut starts_at = vec![0usize; count as usize];
+    for c in clusters {
+        let local = (c.page - first) as usize;
+        starts_at[local] = starts_at[local].max(c.payload as usize);
+    }
+    if starts_at.iter().sum::<usize>() > PACK_BYTES {
+        return Ok(None);
+    }
+    let pages = read().map_err(|e| GpuError::Unsupported(format!("a small mesh's pages: {e}")))?;
+    let mut used = vec![0usize; count as usize];
+    for c in clusters {
+        let local = (c.page - first) as usize;
+        let at = local * PAGE_SIZE + c.payload as usize;
+        let header = (c.section & forge_geom::page::SECTION_PACKED != 0).then(|| {
+            forge_geom::page::Packed::from_header(
+                &pages[at..at + forge_geom::page::PACKED_HEADER_BYTES],
+            )
+        });
+        let bytes = forge_geom::page::payload_bytes(c.vertex_count, c.triangle_count, uvs, header);
+        used[local] = used[local].max(c.payload as usize + bytes);
+    }
+    let used: Vec<usize> = used
+        .iter()
+        .map(|u| u.next_multiple_of(forge_geom::page::PAYLOAD_ALIGN))
+        .collect();
+    if used.iter().sum::<usize>() > PACK_BYTES {
+        return Ok(None);
+    }
+    let mut bytes = Vec::new();
+    let mut starts = Vec::with_capacity(used.len());
+    for (local, u) in used.iter().enumerate() {
+        starts.push(bytes.len() as u32);
+        bytes.extend_from_slice(&pages[local * PAGE_SIZE..local * PAGE_SIZE + u]);
+    }
+    Ok(Some((bytes, starts)))
+}
+
 impl MeshletSceneBuilder {
     /// Packs the clusters of every mesh whose pages hold at most [`PACK_BYTES`] together into
     /// shared pages after the others, always resident (#387): its pages' used bytes one after
@@ -1938,60 +1996,16 @@ impl MeshletSceneBuilder {
         let mut packed: Vec<Option<(Vec<u8>, Vec<u32>)>> = vec![None; self.meshes.len()];
         for (m, record) in self.meshes.iter().enumerate() {
             let (first, end) = pages_of(m, &self.mesh_pages);
-            // A mesh of more than a few pages is not small: its pages are not read.
-            if end <= first || end - first > 8 || skinned.contains(&(m as u32)) {
+            if end <= first || skinned.contains(&(m as u32)) {
                 continue;
             }
             let clusters =
                 &self.meshlets[record.meshlet_offset as usize..][..record.meshlet_count as usize];
-            if clusters.iter().any(|c| c.page < first || c.page >= end) {
-                continue;
-            }
-            // The last payload's start in each page is under its used bytes: too many already,
-            // the pages are not read (a file's are unpacked to read them, #215).
-            let mut starts_at = vec![0usize; (end - first) as usize];
-            for c in clusters {
-                let local = (c.page - first) as usize;
-                starts_at[local] = starts_at[local].max(c.payload as usize);
-            }
-            if starts_at.iter().sum::<usize>() > PACK_BYTES {
-                continue;
-            }
-            let pages = self
-                .store
-                .read_pages(first..end)
-                .map_err(|e| GpuError::Unsupported(format!("a small mesh's pages: {e}")))?;
-            let mut used = vec![0usize; (end - first) as usize];
-            for c in clusters {
-                let local = (c.page - first) as usize;
-                let at = local * PAGE_SIZE + c.payload as usize;
-                let header = (c.section & forge_geom::page::SECTION_PACKED != 0).then(|| {
-                    forge_geom::page::Packed::from_header(
-                        &pages[at..at + forge_geom::page::PACKED_HEADER_BYTES],
-                    )
-                });
-                let bytes = forge_geom::page::payload_bytes(
-                    c.vertex_count,
-                    c.triangle_count,
-                    record.uvs != 0,
-                    header,
-                );
-                used[local] = used[local].max(c.payload as usize + bytes);
-            }
-            let used: Vec<usize> = used
-                .iter()
-                .map(|u| u.next_multiple_of(forge_geom::page::PAYLOAD_ALIGN))
-                .collect();
-            if used.iter().sum::<usize>() > PACK_BYTES {
-                continue;
-            }
-            let mut bytes = Vec::new();
-            let mut starts = Vec::with_capacity(used.len());
-            for (local, u) in used.iter().enumerate() {
-                starts.push(bytes.len() as u32);
-                bytes.extend_from_slice(&pages[local * PAGE_SIZE..local * PAGE_SIZE + u]);
-            }
-            packed[m] = Some((bytes, starts));
+            packed[m] = small_mesh_bytes(clusters, (first, end - first), record.uvs != 0, || {
+                self.store
+                    .read_pages(first..end)
+                    .map(std::borrow::Cow::Owned)
+            })?;
         }
         let count = packed.iter().filter(|p| p.is_some()).count();
         if count == 0 {

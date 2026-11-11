@@ -764,6 +764,12 @@ pub(crate) struct PageEdit {
     /// Pages the new meshes' first view wants, loaded with them as room allows: the neediest
     /// first and a parent before its children, each with its need and where its bytes lie.
     pub preload: Vec<(u32, f32, u64)>,
+    /// New pages the scene's small meshes share (#387), made resident for good as they are:
+    /// `writes` fill them.
+    pub shared: Vec<u32>,
+    /// The new small meshes' bytes: (the shared page, resident since an earlier edit or among
+    /// `shared`; the offset in it; where the bytes lie in the edit's staging; how many).
+    pub writes: Vec<(u32, u32, u64, u32)>,
 }
 
 /// The copies an edit's pages need ([`PageStreamer::apply`]): (staging offset, pool offset,
@@ -913,12 +919,22 @@ impl PageStreamer {
     /// room allows (pages no longer wanted giving way). Returns the copies to make; nothing
     /// changes when the roots don't fit.
     pub fn apply(&mut self, edit: PageEdit, frame: u64) -> std::result::Result<PagePlan, String> {
-        if self.residency.pin_room() < edit.roots.len() {
+        let pins = edit.roots.len() + edit.shared.len();
+        if self.residency.pin_room() < pins {
             return Err(format!(
                 "{} root pages for a pool of {} pages with {} it can give up",
-                edit.roots.len(),
+                pins,
                 self.config.pool_pages,
                 self.residency.pin_room()
+            ));
+        }
+        // A small mesh's page is this edit's or an earlier one's: checked before anything
+        // changes.
+        if let Some(&(page, ..)) = edit.writes.iter().find(|&&(page, ..)| {
+            !edit.shared.contains(&page) && self.residency.table()[page as usize] == PAGE_NONE
+        }) {
+            return Err(format!(
+                "shared page {page} is not resident: an earlier edit was not applied"
             ));
         }
         let mut table = std::collections::BTreeMap::new();
@@ -946,6 +962,26 @@ impl PageStreamer {
                 table.insert(evicted, PAGE_NONE);
             }
             load(&mut plan, &mut table, page, slot, at);
+        }
+        // The small meshes' shared pages (#387): pinned as they are, nothing reading what a
+        // mesh's bytes don't cover; then each mesh's bytes into its page.
+        for &page in &edit.shared {
+            self.store.sources[page as usize] = PageSource::Absent;
+            self.residency.add_pages(page, vec![Vec::new()]);
+            let (slot, evicted) = self.residency.pin(page).expect("pin_room said it fits");
+            if let Some(evicted) = evicted {
+                table.insert(evicted, PAGE_NONE);
+            }
+            table.insert(page, slot);
+        }
+        for &(page, offset, at, bytes) in &edit.writes {
+            let slot = self.residency.table()[page as usize];
+            debug_assert_ne!(slot, PAGE_NONE, "checked above");
+            plan.pages.push((
+                at,
+                u64::from(slot) * PAGE_SIZE as u64 + u64::from(offset),
+                u64::from(bytes),
+            ));
         }
         for &(page, need, _) in &edit.preload {
             self.residency.want(page, need, frame);
