@@ -4575,6 +4575,16 @@ across and down, and a room's size in the mesh's metres.
 - **Which picture:** a room's own, by a hash of where it stands.
 - **Its light:** the row's `emissive` lights it whole, and no curtain is drawn. A far window reads
   the mip level its pixel covers, down to the atlas's mean.
+- **Windows facing any way (2026-11-11, `pane_frame`):** the room stood in the mesh's own space, its glass
+  facing the mesh's +z: right for a window made on its own, wrong for a building made as one mesh,
+  whose windows on its three other sides showed bare glass and no room. The room now stands in the
+  mesh's space turned about its up until the pane faces +z; a pane that already does is unchanged.
+- **Its blinds (2026-11-11, `RoomBlinds`):** a kit's windows have blinds of their own: a colour, the
+  least and the most of a window's height they cover, how much they hide. They hang from each
+  window's top, each window its own length, and take the daylight the window gets where the room
+  takes a third of it. Without them a tower's facade by day was the rooms' dim pictures, black panes
+  beside a sunlit wall, where the kit's own far stand-in shows the same windows mid-grey (the owner:
+  "a strange, large shadow" as the camera came near).
 - **Rays:** a mirror or a bounce that meets it takes the pictures' mean under the same lamp, so
   they agree with the view.
 - **The row:** it needs `interior`, and it reads no UVs, since the rooms stand in the mesh's metres.

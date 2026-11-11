@@ -1425,6 +1425,11 @@ pub fn gpu_rows(table: &MaterialTable, textures: Option<&TextureSet>) -> Vec<Gpu
             let r = &m.render;
             // A window's pictures of rooms: only behind glass, and they take the UVs' slots.
             let atlas = r.room_atlas.filter(|_| r.interior);
+            // Its blinds: their colour in the second colour's slot, their cover in the scatter's
+            // (no leaf behind glass), how much they hide beside the atlas's shape.
+            let blinds = atlas
+                .and_then(|a| a.blinds)
+                .filter(|b| b.opacity > 0.0 && b.cover[1] > 0.0);
             let mapping = r.uv.filter(|_| atlas.is_none());
             let uv = mapping.unwrap_or_default();
             // A layered material whose layers lie inside the table (else drawn as its own colours).
@@ -1438,11 +1443,14 @@ pub fn gpu_rows(table: &MaterialTable, textures: Option<&TextureSet>) -> Vec<Gpu
             GpuMaterial {
                 color_a: r.color_a,
                 class_index: r.class.index(),
-                color_b: r.color_b,
+                color_b: blinds.map_or(r.color_b, |b| b.colour),
                 cavity: r.cavity,
                 emissive: r.emissive,
                 specular_power: r.specular_power(),
-                scatter: r.scatter,
+                scatter: blinds.map_or(r.scatter, |b| {
+                    let most = b.cover[1].clamp(0.0, 1.0);
+                    [b.cover[0].clamp(0.0, most), most, 0.0]
+                }),
                 specular: r.specular,
                 albedo_texture: texture(atlas.map(|a| a.texture).or(r.albedo_texture)),
                 normal_texture: texture(r.normal_texture),
@@ -1560,7 +1568,7 @@ pub fn gpu_rows(table: &MaterialTable, textures: Option<&TextureSet>) -> Vec<Gpu
                     [
                         a.cells[0].round().max(1.0),
                         a.cells[1].round().max(1.0),
-                        0.0,
+                        blinds.map_or(0.0, |b| b.opacity.min(1.0)),
                     ]
                 }),
                 roughness: r.roughness,
@@ -1939,6 +1947,12 @@ mod tests {
             texture: TextureId(0),
             cells: [2.2, 0.0],
             room: [3.0, 0.0, 4.0],
+            blinds: None,
+        };
+        let blinds = forge_core::material::RoomBlinds {
+            colour: [0.1, 0.2, 0.3],
+            cover: [1.4, 0.8],
+            opacity: 0.9,
         };
         let mapping = UvMapping {
             alpha_cutoff: Some(0.5),
@@ -1962,7 +1976,23 @@ mod tests {
                 ..RenderLayer::default()
             },
         ));
+        table.add(Material::new(
+            "rooms with blinds",
+            RenderLayer {
+                interior: true,
+                room_atlas: Some(forge_core::material::RoomAtlas {
+                    blinds: Some(blinds),
+                    ..atlas
+                }),
+                ..RenderLayer::default()
+            },
+        ));
         let rows = gpu_rows(&table, None);
+        // Blinds: their colour, their cover (the least never over the most), how much they hide.
+        let hung = &rows[3];
+        assert_eq!(hung.color_b, [0.1, 0.2, 0.3]);
+        assert_eq!(hung.scatter, [0.8, 0.8, 0.0]);
+        assert_eq!(hung.uv_v, [2.0, 1.0, 0.9]);
         let rooms = &rows[1];
         assert_ne!(rooms.flags & MATERIAL_ROOM_ATLAS, 0);
         assert_eq!(rooms.flags & (MATERIAL_UV | MATERIAL_MASKED), 0);

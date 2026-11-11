@@ -231,6 +231,24 @@ pub struct RoomAtlas {
     /// A room's width, height and depth in the mesh's metres, the rooms in rows from its origin
     /// and the glass on its `z` plane, the room towards -z.
     pub room: [f32; 3],
+    /// The blinds at its glass; `None`: bare windows.
+    pub blinds: Option<RoomBlinds>,
+}
+
+/// Blinds at the glass of a window whose rooms are pictures ([`RoomAtlas::blinds`]): they hang
+/// from each window's top over a share of its height, each window its own, and take the daylight
+/// the window gets where the room behind takes a part of it. By day a facade of such windows
+/// reads by its blinds: without them its panes are the rooms' dim pictures, near black beside
+/// the sunlit wall.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct RoomBlinds {
+    /// Their colour, linear.
+    pub colour: [f32; 3],
+    /// The least and the most of a window's height they cover, 0 to 1: each window takes its
+    /// own between the two, by where it stands.
+    pub cover: [f32; 2],
+    /// How much of the room they hide where they hang, 0 to 1.
+    pub opacity: f32,
 }
 
 /// What the renderer needs of a material. Colours are linear, in units of the light a white
@@ -295,7 +313,8 @@ pub struct RenderLayer {
     /// with the room towards −z.
     pub interior: bool,
     /// With `interior` (ignored without it): the rooms as pictures of rooms ([`RoomAtlas`]) in place
-    /// of the drawn ones: no curtain, and the row's `emissive` lights them whole. The rooms stand in
+    /// of the drawn ones: no curtain but the atlas's own blinds ([`RoomBlinds`]), and the row's
+    /// `emissive` lights them whole. The rooms stand in
     /// the mesh's own metres, so such a row reads no UVs: its `uv` is ignored.
     pub room_atlas: Option<RoomAtlas>,
     /// With `interior`: a shop behind the glass rather than a home: its floor level with the

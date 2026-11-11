@@ -6395,6 +6395,44 @@ float3 interior_atlas(Material mat, float3 o, float3 d, uint id, float footprint
     return sample_image_level(mat.albedo_texture, mat.sampler, at, level).rgb;
 }
 
+// The space a window's room stands in (`interior_room`, `interior_atlas`: the glass on its z plane,
+// the room towards -z, y up), for a pane whose normal in its mesh's space is `n`: the mesh's own
+// when the pane faces its +z, as a window made on its own does; else the mesh's turned about its up
+// until the pane does. A building made as one mesh has windows on every side: taken in the mesh's
+// space, all but its +z face's showed bare glass, black by day (the private district's towers,
+// 2026-11-11). A pane facing up or down keeps the mesh's space.
+float3x3 pane_frame(float3 n)
+{
+    float3x3 same = float3x3(float3(1.0, 0.0, 0.0), float3(0.0, 1.0, 0.0), float3(0.0, 0.0, 1.0));
+    float flat = length(n.xz);
+    if (flat < 1e-3)
+        return same;
+    float3 z = float3(n.x, 0.0, n.z) / flat;
+    if (z.z > 0.999)
+        return same;
+    return float3x3(cross(float3(0.0, 1.0, 0.0), z), float3(0.0, 1.0, 0.0), z);
+}
+
+// How much of the room behind a picture's window its blinds hide at `o` (`RoomBlinds`: how much they
+// hide in `uv_v.z`, 0 for none; the least and the most of a window's height they cover in `scatter`):
+// they hang from each window's top, each window its own length by where it stands (as
+// `interior_atlas` picks its picture). Their lower edge is a pixel wide, and a window smaller than a
+// pixel takes the windows' mean.
+float atlas_blinds(Material mat, float3 o, uint id, float footprint)
+{
+    if (mat.uv_v.z <= 0.0)
+        return 0.0;
+    float3 size = mat.uv_u;
+    float2 cell = floor(o.xy / size.xy);
+    float3 h = hash_color(id ^ uint(int(cell.x) * 7919 + int(cell.y) * 104729));
+    float cover = lerp(mat.scatter.x, mat.scatter.y, h.y);
+    float up = o.y / size.y - cell.y;
+    float pixel = max(footprint / size.y, 1e-4);
+    float hung = saturate((up - (1.0 - cover)) / pixel + 0.5);
+    float mean = 0.5 * (mat.scatter.x + mat.scatter.y);
+    return mat.uv_v.z * lerp(hung, mean, smoothstep(0.25, 1.0, pixel));
+}
+
 // A standard row's light inputs (D-086): worked out before its lamps, so their highlights take
 // the pixel's own normal, lobe and reflectance; `n` the surface's normal before a pane's bend (its
 // room's daylight takes it), `uv` read by its UVs, `interior` a pane over a room.
@@ -6529,8 +6567,11 @@ float3 standard_light(Frame* f, Material mat, Surface s, StandardInputs si)
     if (si.interior && (f[0].options & OPTION_CUBE_FACE) == 0u)
     {
         float3 pane = lit;
-        // The room behind, seen along the view into the mesh's space.
-        float3 d = normalize(mul(transpose(s.normal_frame), -s.view));
+        // The room behind, seen along the view into the pane's space: the mesh's, turned about
+        // its up until the pane faces +z (`pane_frame`).
+        float3x3 turned = pane_frame(s.object_normal);
+        float3 d = normalize(mul(turned, mul(transpose(s.normal_frame), -s.view)));
+        float3 o = mul(turned, s.object_position);
         if (d.z > -1e-3)
             return pane;
         // Each window's room by where it stands, so a city that gains or loses an instance
@@ -6539,12 +6580,14 @@ float3 standard_light(Frame* f, Material mat, Surface s, StandardInputs si)
         bool atlas = (mat.flags & MATERIAL_FLAG_ROOM_ATLAS) != 0;
         float3 room;
         if (atlas)
-            room = interior_atlas(mat, s.object_position, d, s.instance_place, max(length(s.dpdx), length(s.dpdy)));
+            room = interior_atlas(mat, o, d, s.instance_place, max(length(s.dpdx), length(s.dpdy)));
         else
-            room = interior_room(s.object_position, d, s.instance_place, max(length(s.dpdx), length(s.dpdy)), shop);
+            room = interior_room(o, d, s.instance_place, max(length(s.dpdx), length(s.dpdy)), shop);
         float3 h = hash_color(s.instance_place);
-        // A shop keeps its window bare, and a picture of a room has its own.
+        // A shop keeps its window bare, and a picture of a room has its atlas's blinds.
         float curtain = !atlas && !shop && h.x < ROOM_CURTAINS ? 0.35 + 0.5 * h.x / ROOM_CURTAINS : 0.0;
+        if (atlas)
+            curtain = atlas_blinds(mat, o, s.instance_place, max(length(s.dpdx), length(s.dpdy)));
         // Lit by the daylight the window gets (a white wall's facing out), or the row's lamp.
         float ndl_white;
         // Its own `sky_reflection` would overwrite the pane's mirror ray's request.
@@ -7846,10 +7889,11 @@ RayHit ray_hit_seen(Frame* f, uint instance, uint primitive, float2 b, float3 or
     if ((mat.flags & MATERIAL_FLAG_ROOM_ATLAS) != 0)
     {
         // The rooms as the view reads them, at their pictures' mean: lit whole by the row's lamp,
-        // the daylight through the glass, and no curtain.
+        // the daylight through the glass, and their blinds' mean cover (`atlas_blinds`).
         float3 rooms = sample_image_level(mat.albedo_texture, SAMPLER_LINEAR_REPEAT, float2(0.5, 0.5), 16.0).rgb;
-        hit.albedo = rooms * ROOM_DAYLIGHT;
-        hit.emissive *= rooms;
+        float hung = mat.uv_v.z * 0.5 * (mat.scatter.x + mat.scatter.y);
+        hit.albedo = lerp(rooms * ROOM_DAYLIGHT, mat.color_b, hung);
+        hit.emissive *= lerp(rooms, mat.color_b, hung);
     }
     else if ((mat.flags & MATERIAL_FLAG_INTERIOR) != 0)
         hit.emissive *= ((mat.flags & MATERIAL_FLAG_SHOP) != 0 ? ROOM_SHOP_LAMP : ROOM_LAMP) * 0.55;
