@@ -5883,7 +5883,8 @@ static const float LEAF_POWER = 4.0;
 // is its own.
 bool sun_through_thin(Material mat)
 {
-    return (mat.flags & MATERIAL_FLAG_FOLIAGE) == 0 && mat.class_index == MATERIAL_CLASS_STANDARD && any(mat.scatter > 0.0);
+    // Nor a pane over a room: its `scatter` holds its blinds' cover (`atlas_blinds`).
+    return (mat.flags & (MATERIAL_FLAG_FOLIAGE | MATERIAL_FLAG_INTERIOR)) == 0 && mat.class_index == MATERIAL_CLASS_STANDARD && any(mat.scatter > 0.0);
 }
 
 // Whether a row takes the sun through it (`leaf_transmission`): a leaf card's or a thin surface's.
@@ -6207,21 +6208,22 @@ LightInputs multilayer_light(Frame* f, Material mat, Surface s)
 
 // A faked window's pane condition (#339, `glass.slang`'s for the clear glass): a tilt of up to
 // WINDOW_TILT radians each way and roller waves of up to WINDOW_WAVE every WINDOW_WAVE_LENGTH
-// metres across and up the pane (the window mesh's x and y), from a hash of where the window
+// metres across and up the pane (`pane_frame`'s x and y), from a hash of where the window
 // stands, the waves faded out where a pixel covers a quarter of one so they never shimmer.
 static const float WINDOW_TILT = 0.006;
 static const float WINDOW_WAVE = 0.003;
 static const float WINDOW_WAVE_LENGTH = 0.9;
 
-float3 window_pane_normal(float3 n, Surface s)
+float3 window_pane_normal(Material mat, float3 n, Surface s)
 {
     float3 h = hash_color(s.instance_place * 0x2C1B3C6Du + 0x297A2D39u);
     float3 w = hash_color(s.instance_place * 0x9E3779B9u + 0x7F4A7C15u);
-    float3 across = normalize(mul(s.frame, float3(1.0, 0.0, 0.0)));
+    float3x3 turned = surface_pane_frame(mat, s);
+    float3 across = normalize(mul(s.frame, turned[0]));
     float3 rise = normalize(mul(s.frame, float3(0.0, 1.0, 0.0)));
     float footprint = max(length(s.dpdx), length(s.dpdy));
     float fade = saturate(1.0 - footprint / (0.25 * WINDOW_WAVE_LENGTH));
-    float2 waves = sin(s.object_position.xy * (6.2831853 / WINDOW_WAVE_LENGTH) + w.xy * 6.2831853);
+    float2 waves = sin(mul(turned, s.object_position).xy * (6.2831853 / WINDOW_WAVE_LENGTH) + w.xy * 6.2831853);
     float2 lean = (h.xy * 2.0 - 1.0) * WINDOW_TILT + waves * w.z * (WINDOW_WAVE * fade);
     return normalize(n + across * lean.x + rise * lean.y);
 }
@@ -6413,6 +6415,20 @@ float3x3 pane_frame(float3 n)
     return float3x3(cross(float3(0.0, 1.0, 0.0), z), float3(0.0, 1.0, 0.0), z);
 }
 
+// `pane_frame` for the pane under `s`, by its face: the vertices' normals, smoothed across a curved
+// wall or shared with a bevel, would turn the room from pixel to pixel. The face's side is the
+// vertices'. A two-sided pane keeps the mesh's space: seen from behind its normals turn to the
+// viewer, and its room would stand outside.
+float3x3 surface_pane_frame(Material mat, Surface s)
+{
+    float3 face = cross(s.dpdx, s.dpdy);
+    float size = length(face);
+    if ((mat.flags & MATERIAL_FLAG_DOUBLE_SIDED) != 0 || size < 1e-20)
+        return pane_frame(float3(0.0, 0.0, 1.0));
+    face /= size;
+    return pane_frame(dot(face, s.object_normal) < 0.0 ? -face : face);
+}
+
 // How much of the room behind a picture's window its blinds hide at `o` (`RoomBlinds`: how much they
 // hide in `uv_v.z`, 0 for none; the least and the most of a window's height they cover in `scatter`):
 // they hang from each window's top, each window its own length by where it stands (as
@@ -6506,7 +6522,7 @@ StandardInputs standard_inputs(Frame* f, Material mat, Surface s)
             // (#339, as the clear glass's): neighbouring windows reflect the street askew.
             interior = true;
             li.albedo = mat.color_a;
-            li.n = window_pane_normal(n, s);
+            li.n = window_pane_normal(mat, n, s);
             li.emissive = float3(0.0);
         }
         else
@@ -6569,7 +6585,7 @@ float3 standard_light(Frame* f, Material mat, Surface s, StandardInputs si)
         float3 pane = lit;
         // The room behind, seen along the view into the pane's space: the mesh's, turned about
         // its up until the pane faces +z (`pane_frame`).
-        float3x3 turned = pane_frame(s.object_normal);
+        float3x3 turned = surface_pane_frame(mat, s);
         float3 d = normalize(mul(turned, mul(transpose(s.normal_frame), -s.view)));
         float3 o = mul(turned, s.object_position);
         if (d.z > -1e-3)
