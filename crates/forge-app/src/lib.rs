@@ -207,6 +207,9 @@ pub struct Context {
     pub settings: Settings,
     /// The sound output, when the demo asked for it and the run is interactive (#318).
     pub sound: Option<sound::Sound>,
+    /// Lines for the console that come after their command (an answer read back from the GPU,
+    /// #409): printed there after the demo's update, then emptied.
+    pub notes: Vec<String>,
     /// The game's HUD this frame (#328): drawn after the frame, under the debug overlay, in
     /// order, then emptied ([`hud`]).
     pub hud: Vec<hud::HudQuad>,
@@ -1822,6 +1825,7 @@ impl<D: Demo> State<D> {
             preparing: false,
             settings,
             sound: None,
+            notes: Vec::new(),
             hud: Vec::new(),
             magnifier: None,
             ssaa: 1,
@@ -2247,6 +2251,9 @@ impl<D: Demo> State<D> {
             #[cfg(feature = "profiling")]
             let _zone = tracy_client::span!("update");
             self.demo.update(&mut self.ctx, &self.input, dt);
+        }
+        for line in std::mem::take(&mut self.ctx.notes) {
+            self.console.print(line, Color::Green);
         }
         if was_loading && !self.ctx.loading {
             // The demo started in this update, behind the loading screen (issue #25): its

@@ -12422,3 +12422,55 @@ void grass_motion_main(uint3 id : SV_DispatchThreadID)
     float2 previous_uv = float2(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5);
     g_storage_images_rg16f[p[0].motion][id.xy] = previous_uv - uv;
 }
+
+// ------------------------------------------------------------------- picking (#409) ---
+
+// Must match `PickPush` in `meshlet/pick.rs`.
+struct PickPush
+{
+    Frame* frame;
+    uint* out;       // 8 uints a pixel, as `pick_main` writes them
+    uint vis_image;  // sampled (u32): the visibility buffer
+    uint width;
+    uint height;
+    uint count;      // pixels asked, 8 at most
+    uint pixels[8];  // x | y << 16
+};
+
+[[vk::push_constant]]
+PickPush pick_push;
+
+// What a few pixels show, for the question "what is that?": per pixel the visibility id, the
+// instance, its mesh, the material row its triangle takes, the triangle's section, the metres to
+// the camera (a float's bits), the instance's flags and its cluster's detail level. An empty
+// pixel writes its id alone, a grass blade its id and its distance.
+[shader("compute")]
+[numthreads(8, 1, 1)]
+void pick_main(uint3 id : SV_DispatchThreadID)
+{
+    PickPush p = pick_push;
+    if (id.x >= p.count)
+        return;
+    uint at = id.x * 8u;
+    uint packed = p.pixels[id.x];
+    uint2 pixel = min(uint2(packed & 0xFFFFu, packed >> 16), uint2(p.width - 1u, p.height - 1u));
+    uint vis = g_sampled_images_u32[NonUniformResourceIndex(p.vis_image)].Load(int3(pixel, 0));
+    p.out[at] = vis;
+    for (uint k = 1u; k < 8u; ++k)
+        p.out[at + k] = 0u;
+    if (vis == VISIBILITY_EMPTY)
+        return;
+    Frame* f = p.frame;
+    PixelSurface s = pixel_surface(f, vis, pixel, p.width, p.height);
+    p.out[at + 5u] = asuint(length(s.relative));
+    if (is_grass(vis))
+        return;
+    uint tri = vis & ((1u << VISIBILITY_TRIANGLE_BITS) - 1u);
+    uint section = triangle_section(s.m, tri);
+    p.out[at + 1u] = f[0].visible[vis >> VISIBILITY_TRIANGLE_BITS].x;
+    p.out[at + 2u] = s.inst.mesh;
+    p.out[at + 3u] = s.inst.material + section;
+    p.out[at + 4u] = section;
+    p.out[at + 6u] = s.inst.flags;
+    p.out[at + 7u] = s.m.lod_level;
+}

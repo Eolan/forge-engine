@@ -57,7 +57,12 @@ surface did at their last update (1 their state: red young or reset, green settl
 settled one whose update lowered what it keeps; 2 and 3 how much it changed their irradiance or
 their distances, black 0.01 % to red 10 %), `r.show.wireframe` wireframe, `r.tonemap` tone
 curve, `r.sky.real` the real night sky (`--real-sky`, D-046); `camera.where` logs the view as
-`--view` takes it (to start a run where something was seen).
+`--view` takes it (to start a run where something was seen). `scene.what` names what the centre
+of the picture shows, or the pixel `scene.what x y` gives (#409): the instance, its mesh, its
+material row and detail level, how far it is and where, and the scene's own name for it when it
+has one. The answer comes a few frames later, in the console and the log, and four ticks mark
+the pixel for two seconds. It reads the visibility buffer: decals, glass, holograms, particles
+and water are drawn over it, so such a pixel names the surface behind.
 
 Options:
 - `--gallery` shows the twenty props side by side instead of the city.
@@ -69,6 +74,9 @@ Options:
   city's edge and the hills (in real time; `--fixed-step` advances 1/60 s a frame instead);
   `--dolly M` glides straight ahead from the start view at M m/s, a steady approach for
   measuring LOD pops (#131).
+- `--what x,y[,x,y…]` names what up to eight pixels of the picture show at frame
+  `--capture-frame` (`scene.what`, #409), in the log two frames later: the run must last that
+  long (`--frames` at least `--capture-frame` + 3, or it says so).
 - `--capture-every N` also writes every N-th frame beside `--capture`'s path
   (`<stem>-NNNNN.png`): a sequence for `imgdiff --then`.
 - `--stone-normals K` weighs the island's stones' normals when they are cooked, per metre of

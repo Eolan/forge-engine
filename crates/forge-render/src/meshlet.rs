@@ -40,7 +40,9 @@ use glam::{DQuat, DVec3, IVec3, Mat4, Quat, Vec2, Vec3, Vec4};
 
 pub(crate) mod dynamic;
 mod feedback;
+mod pick;
 pub(crate) use feedback::{NEED_BIAS, NO_WANT};
+pub use pick::{MAX_PICKS, Picked, PickedInstance, PickedWhat};
 mod static_edits;
 pub use dynamic::{DynamicCapacity, InstanceFadeEdge, MeshRays, SceneEdit, SceneEditor};
 
@@ -5309,6 +5311,9 @@ pub struct MeshletRenderer {
     texture_feedback: Option<feedback::TextureFeedback>,
     /// The shader file its entry is compiled from.
     texture_feedback_shading: &'static str,
+    /// What pixels of the camera's view show (#409), once asked for
+    /// ([`MeshletRenderer::enable_picking`]).
+    picker: Option<pick::Picker>,
     /// Slots of the visible-cluster list, its raster lists and, on the fallback path, its draw
     /// commands, transients of the frame's graph (#78; see [`MeshletRenderer::begin_frame`]).
     visible_target: u32,
@@ -5977,6 +5982,7 @@ impl MeshletRenderer {
             stats_readback,
             texture_feedback: feedback::TextureFeedback::from_env(device, shaders, shading)?,
             texture_feedback_shading: shading,
+            picker: None,
             visible_target,
             rejects_target: REJECTS_INITIAL_CAPACITY,
             visible_max,
@@ -6240,6 +6246,42 @@ impl MeshletRenderer {
         Ok(())
     }
 
+    /// Makes the pass that says what a pixel shows (#409): one more entry of the renderer's
+    /// shader file compiled, the first time. Before [`MeshletRenderer::request_picks`].
+    pub fn enable_picking(&mut self, device: &Arc<Device>, shaders: &ShaderCompiler) -> Result<()> {
+        if self.picker.is_none() {
+            self.picker = Some(pick::Picker::new(
+                device,
+                shaders,
+                self.texture_feedback_shading,
+            )?);
+        }
+        Ok(())
+    }
+
+    /// Asks what the camera's view shows at `at`: fractions of the view from its top left
+    /// corner, the first [`MAX_PICKS`] of them, read on the next frame drawn. A request not
+    /// drawn yet is replaced. Returns false, asking nothing, before
+    /// [`MeshletRenderer::enable_picking`].
+    ///
+    /// What is drawn over the visibility buffer is not seen (decals, glass, holograms,
+    /// particles, water): such a pixel names the surface behind.
+    pub fn request_picks(&self, at: &[glam::Vec2]) -> bool {
+        match &self.picker {
+            Some(picker) => {
+                picker.request(at);
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// The answer to the last [`MeshletRenderer::request_picks`], once, in the order asked:
+    /// none until the frame that read it is done, two or three frames after the request.
+    pub fn take_picks(&self) -> Option<Vec<Picked>> {
+        self.picker.as_ref()?.take_done()
+    }
+
     /// Call once per frame, after waiting for `slot` and before [`MeshletRenderer::draw`]:
     /// reads and clears the statistics of the frame that last used `slot` (`None` for the
     /// first frames in flight) and sizes the slot's visible-cluster list. A frame that
@@ -6255,6 +6297,9 @@ impl MeshletRenderer {
         // frame's pages over the residency they changed (#220).
         scene.begin_scene_frame(slot.frame_number);
         scene.begin_dynamic_frame(slot.frame_number);
+        if let Some(picker) = &self.picker {
+            picker.begin_frame(slot);
+        }
         let streaming = scene.streams_textures();
         let wants = self.texture_feedback.as_ref().and_then(|feedback| {
             feedback.take(
@@ -9824,6 +9869,9 @@ impl MeshletRenderer {
         }
         if let Some(feedback) = self.texture_feedback.as_ref().filter(|_| view.camera) {
             feedback.record(graph, slot, frame_address, targets.visibility, extent);
+        }
+        if let Some(picker) = self.picker.as_ref().filter(|_| view.camera) {
+            picker.record(graph, slot, frame_address, targets.visibility, extent);
         }
     }
 

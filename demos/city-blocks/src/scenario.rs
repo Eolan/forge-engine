@@ -328,6 +328,11 @@ pub trait Running: Send {
     fn follow(&mut self, camera: &mut FlyCamera);
     /// Its movers, skins, morph targets and fields into the scene, before the frame's draw.
     fn movers(&mut self, scene: &mut MeshletScene);
+    /// Its own name for an instance a pixel shows (`scene.what`, #409): what it was made from,
+    /// in the scene's words. None by default.
+    fn describe(&self, _picked: &forge_render::PickedInstance) -> Option<String> {
+        None
+    }
     /// The liquid's substeps the ticks since the last frame owe it, and the scene's tick.
     fn liquid_steps(&mut self) -> (Vec<LiquidStep>, u64) {
         (Vec::new(), 0)

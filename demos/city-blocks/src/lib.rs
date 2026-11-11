@@ -122,6 +122,11 @@ pub struct Args {
     /// Which frame to capture.
     #[arg(long, default_value_t = 60)]
     capture_frame: u64,
+    /// Name what these pixels of the picture show at frame `--capture-frame` (`scene.what`,
+    /// #409): `x,y` from its top left, up to eight pairs (`--what 640,360,1200,400`). The
+    /// answers are logged two frames later: `--frames` at least `--capture-frame` + 3.
+    #[arg(long, value_delimiter = ',')]
+    what: Vec<f32>,
     /// Also capture every N-th frame (`<capture stem>-NNNNN.png`), for a sequence (LOD pops,
     /// `imgdiff --then`).
     #[arg(long)]
@@ -917,6 +922,14 @@ struct Gallery {
     fsr_mode: forge_render::FsrMode,
     /// The scene's size: the window's, or the upscaler's input size in its modes (#377).
     render_extent: forge_gpu::vk::Extent2D,
+    /// Pixels `scene.what` or `--what` asked about (#409), as fractions of the picture: asked of
+    /// the renderer by the next frame.
+    what_asked: Option<Vec<Vec2>>,
+    /// Where `scene.what` last looked, and when: marked on the picture for two seconds.
+    what_mark: Option<(Vec2, Instant)>,
+    /// The camera the last pixels were asked under: its place, where it looked and its vertical
+    /// field of view, for the answers' points (the answers come frames later).
+    what_camera: (Vec3, Vec3, f32),
     /// The textures' bias `r.texture.lod_bias` asks for, and the upscaler's own added to it
     /// (log2 of the render's width over the output's, 0 at the output's size).
     texture_bias: f32,
@@ -2491,6 +2504,9 @@ impl Gallery {
             fsr,
             fsr_mode: forge_render::FsrMode::NativeAa,
             render_extent: ctx.extent(),
+            what_asked: None,
+            what_mark: None,
+            what_camera: (Vec3::ZERO, Vec3::NEG_Z, 1.0),
             texture_bias: 0.0,
             upscale_bias: 0.0,
             ffx,
@@ -2763,6 +2779,58 @@ impl Gallery {
     }
 }
 
+impl Gallery {
+    /// `scene.what`'s answer for one pixel (#409): what the renderer read there, where that is
+    /// in the scene's metres (as `--view` counts them), and the scene's own name for it.
+    fn describe_pick(&self, ctx: &Context, picked: &forge_render::Picked) -> String {
+        let size = ctx.swapchain.extent();
+        let (width, height) = (size.width.max(1) as f32, size.height.max(1) as f32);
+        let pixel = format!(
+            "pixel {:.0}, {:.0}",
+            picked.at.x * width,
+            picked.at.y * height
+        );
+        // The point the pixel's ray meets, from the camera the pixel was asked under.
+        let (eye, forward, fov_y) = self.what_camera;
+        let point = |distance: f32| {
+            let right = forward.cross(Vec3::Y).normalize_or_zero();
+            let up = right.cross(forward);
+            let tan = (0.5 * fov_y).tan();
+            let ndc = picked.at * 2.0 - Vec2::ONE;
+            let ray = (forward + right * (ndc.x * tan * width / height) - up * (ndc.y * tan))
+                .normalize_or_zero();
+            let at = eye + ray * distance;
+            format!(
+                "{distance:.1} m away, at {:.1}, {:.1}, {:.1}",
+                at.x, at.y, at.z
+            )
+        };
+        match picked.what {
+            forge_render::PickedWhat::Nothing => format!("{pixel}: no surface (the sky)"),
+            forge_render::PickedWhat::Grass { distance } => {
+                format!("{pixel}: a grass blade, {}", point(distance))
+            }
+            forge_render::PickedWhat::Instance(i) => {
+                let name = self
+                    .running
+                    .as_ref()
+                    .and_then(|r| r.describe(&i))
+                    .map_or(String::new(), |n| format!(": {n}"));
+                format!(
+                    "{pixel}: instance {}, mesh {}, material row {} (section {}), detail level \
+                     {}, {}{name}",
+                    i.instance,
+                    i.mesh,
+                    i.material,
+                    i.section,
+                    i.lod_level,
+                    point(i.distance)
+                )
+            }
+        }
+    }
+}
+
 impl Demo for Gallery {
     fn networked(&self) -> bool {
         self.running.as_ref().is_some_and(|r| r.networked())
@@ -2818,13 +2886,22 @@ impl Demo for Gallery {
              (F9 before D-069).",
             false,
         );
+        ctx.settings.add_command(
+            "scene.what",
+            "[x y]",
+            "What the pixel at x, y of the picture shows (its centre without them): the instance, \
+             its mesh, its material row and the scene's own name for it, a few frames later, \
+             here and in the log. Decals, glass, holograms, particles and water are not seen: \
+             such a pixel names the surface behind.",
+            false,
+        );
     }
 
     fn command(
         &mut self,
-        _ctx: &mut Context,
+        ctx: &mut Context,
         name: &str,
-        _args: &[String],
+        args: &[String],
     ) -> Option<std::result::Result<String, String>> {
         match name {
             "camera.where" => {
@@ -2839,6 +2916,25 @@ impl Demo for Gallery {
                 );
                 tracing::info!("the view: {view}");
                 Some(Ok(view))
+            }
+            "scene.what" => {
+                let size = ctx.swapchain.extent();
+                let (width, height) = (size.width.max(1) as f32, size.height.max(1) as f32);
+                let at = match args {
+                    [] => Vec2::splat(0.5),
+                    [x, y] => match (x.parse::<f32>(), y.parse::<f32>()) {
+                        (Ok(x), Ok(y)) => Vec2::new(x / width, y / height),
+                        _ => return Some(Err("scene.what [x y]: two numbers, in pixels".into())),
+                    },
+                    _ => return Some(Err("scene.what [x y]: a pixel, or nothing".into())),
+                };
+                self.what_asked = Some(vec![at]);
+                self.what_mark = Some((at, Instant::now()));
+                Some(Ok(format!(
+                    "looking at pixel {:.0}, {:.0} of {width:.0} x {height:.0}",
+                    at.x * width,
+                    at.y * height
+                )))
             }
             _ => None,
         }
@@ -2950,6 +3046,24 @@ impl Demo for Gallery {
         // The camera behind the vehicle the scene follows (C in the physics lab, #138).
         if let Some(running) = &mut self.running {
             running.follow(&mut self.camera);
+        }
+        // `scene.what`'s mark (#409): four ticks round the pixel it looked at, for two seconds.
+        if let Some((at, since)) = self.what_mark {
+            if since.elapsed().as_secs_f32() < 2.0 {
+                let e = ctx.swapchain.extent();
+                let (x, y) = (at.x * e.width as f32, at.y * e.height as f32);
+                for rect in [
+                    [x - 10.0, y - 1.0, x - 3.0, y + 1.0],
+                    [x + 3.0, y - 1.0, x + 10.0, y + 1.0],
+                    [x - 1.0, y - 10.0, x + 1.0, y - 3.0],
+                    [x - 1.0, y + 3.0, x + 1.0, y + 10.0],
+                ] {
+                    ctx.hud
+                        .push(forge_app::hud::HudQuad::solid(rect, [1.0, 0.15, 0.9, 0.9]));
+                }
+            } else {
+                self.what_mark = None;
+            }
         }
         // `--hud-test` (#328): a 2× lens and a crosshair at the window's middle, and a translucent
         // panel; the lens glints as with a sun above the window's top right.
@@ -3251,11 +3365,59 @@ impl Demo for Gallery {
             }
             h.begin(&mut frame.graph, frame.slot);
         }
-        if let Some(stats) = self.renderer.begin_frame(frame.slot, &mut self.scene)? {
+        // `scene.what`, `--what` (#409): the pixels asked about go to the renderer, and the
+        // answers of a few frames ago to the console and the log.
+        if !self.args.what.is_empty() && ctx.frames_rendered == self.args.capture_frame {
+            let size = ctx.swapchain.extent();
+            let (width, height) = (size.width.max(1) as f32, size.height.max(1) as f32);
+            let (pairs, odd) = self.args.what.as_chunks::<2>();
+            if !odd.is_empty() || pairs.len() > forge_render::MAX_PICKS {
+                tracing::warn!(
+                    values = self.args.what.len(),
+                    "--what takes x,y pairs, {} at most: the rest is left out",
+                    forge_render::MAX_PICKS
+                );
+            }
+            if self
+                .args
+                .frames
+                .is_some_and(|n| n < self.args.capture_frame + 3)
+            {
+                tracing::warn!(
+                    "--what answers two frames after --capture-frame: this run ends before \
+                     (--frames at least {})",
+                    self.args.capture_frame + 3
+                );
+            }
+            self.what_asked = Some(
+                pairs
+                    .iter()
+                    .map(|p| Vec2::new(p[0] / width, p[1] / height))
+                    .collect(),
+            );
+        }
+        if let Some(at) = self.what_asked.take().filter(|at| !at.is_empty()) {
+            self.renderer.enable_picking(&ctx.device, &ctx.shaders)?;
+            self.renderer.request_picks(&at);
+            self.what_camera = (
+                self.camera.position,
+                self.camera.forward(),
+                self.camera.fov_y,
+            );
+        }
+        let stats = self.renderer.begin_frame(frame.slot, &mut self.scene)?;
+        // After the slot's last frame was read: an answer waits no frame more than it must.
+        let picks = self.renderer.take_picks();
+        if let Some(stats) = stats {
             self.stats.push(stats);
             if let Some(ms) = frame.slot.previous_gpu_ms {
                 self.gpu_ms.push(ms);
             }
+        }
+        for picked in picks.into_iter().flatten() {
+            let line = self.describe_pick(ctx, &picked);
+            tracing::info!("{line}");
+            ctx.notes.push(line);
         }
         if let Some(streaming) = self.scene.streaming() {
             let started = *self.started.get_or_insert_with(Instant::now);
