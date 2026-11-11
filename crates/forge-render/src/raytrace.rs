@@ -155,9 +155,11 @@ pub(crate) fn mesh_cut(
     mesh_cut_at(meshlets, store, cut_error(&[meshlets], budget), budget, uvs)
 }
 
-/// The error of the coarsest cut of `meshlets` (one mesh's clusters) that stands no further
-/// than `most` from the mesh as drawn up close: the largest of its clusters' errors at or
-/// under it, 0 (the finest cut) when none is.
+/// The error of the coarsest cut of `meshlets` (one mesh's clusters) whose clusters' own
+/// errors are all at or under `most`: the largest of them, 0 (the finest cut) when none is. A
+/// cluster's error is its level's against the level below, the largest down to the finest, not
+/// their sum: a cut several levels up may stand a little further than `most` from the mesh as
+/// drawn up close, as a cut to a budget always could.
 pub(crate) fn error_within(meshlets: &[GpuMeshlet], most: f32) -> f32 {
     meshlets
         .iter()
@@ -1159,6 +1161,36 @@ mod tests {
             triangle_count: triangles,
             ..GpuMeshlet::default()
         }
+    }
+
+    #[test]
+    fn a_cut_within_an_error_is_the_coarsest_under_it_and_its_size_the_clusters() {
+        // Two finest clusters under one of error 0.004, under a root of error 0.03.
+        let vertices = |mut c: GpuMeshlet, n: u32| {
+            c.vertex_count = n;
+            c
+        };
+        let mesh = [
+            vertices(cluster(0.0, 0.004, 100), 60),
+            vertices(cluster(0.0, 0.004, 80), 50),
+            vertices(cluster(0.004, 0.03, 90), 55),
+            vertices(cluster(0.03, f32::INFINITY, 40), 30),
+        ];
+        assert_eq!(error_within(&mesh, 0.0), 0.0);
+        assert_eq!(error_within(&mesh, 0.003), 0.0, "none under it: the finest");
+        assert_eq!(error_within(&mesh, 0.01), 0.004);
+        assert_eq!(error_within(&mesh, 0.03), 0.03, "at the limit counts");
+        assert_eq!(
+            error_within(&mesh, f32::INFINITY),
+            0.03,
+            "the roots at the most"
+        );
+        assert_eq!(error_within(&mesh, f32::NAN), 0.0);
+        // Each cut covers the mesh once: its clusters' vertices and triangles.
+        assert_eq!(cut_size(&mesh, 0.0), (110, 180));
+        assert_eq!(cut_size(&mesh, 0.004), (55, 90));
+        assert_eq!(cut_size(&mesh, 0.03), (30, 40));
+        assert_eq!(cut_size(&mesh, 0.004).1, cut_triangles(&mesh, 0.004));
     }
 
     #[test]

@@ -12612,6 +12612,8 @@ assumption fails, and it failed exactly where the owner saw it. Found by turning
 | within 3 cm | 5,259 MiB | 75.3 % | 19.1 M | 10.0 / 13.3 ms |
 
 - **Kept: 1 cm.** Two still views against the finest cut at one exposure: 0.36 % and 0.13 % of the pixels over 2 codes, the level of two runs of one setting. At 3 cm one of the two views changed over 20 % of its pixels for 113 MiB more.
+- **What the error is:** in the mesh's own metres, and each level's against the one below, not the distance from the finest. A host whose instances are larger than their mesh divides it by their largest scale (the shadow rays' start grows with the instance's scale): done so, the flight reads the same (5,376 MiB, 75.6 %).
+- **The room's slack:** sized by the cuts, the room no longer holds twice what is taken; a host keeps its own margin for the holes that coming and going leave (the flight took 25.2 M vertices at most of 32.2 M).
 - **Left:** the structures themselves are built without compaction.
 
 **Amended 2026-11-11: a streamed scene's small meshes share pages (#387 for the edits).** A built scene packed its small meshes into shared pages; a mesh an edit brought took whole pages of its own, one at least pinned for its roots. The private district holds 16,000 meshes at once in its centre, most of a few kilobytes: their roots alone filled the 16,384 pages, pieces were refused (up to 768 in one update), and what was left for the finer pages thrashed.

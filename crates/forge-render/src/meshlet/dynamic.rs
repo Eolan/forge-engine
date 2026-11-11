@@ -720,11 +720,14 @@ struct NewMesh {
 pub struct MeshRays {
     /// The most triangles of its cut ([`MeshletSceneBuilder::set_ray_budget`]).
     pub budget: u32,
-    /// How far its cut may stand from the mesh as drawn up close, in the mesh's metres: the
-    /// coarsest cut within it is taken (coarser still where `budget` asks). 0: the finest. An
-    /// authored world's rays held every mesh's finest triangles, the larger half of its
-    /// geometry's memory; a shadow ray starts 2 cm off its surface at the least, twice a cut's
-    /// error beyond that, so a centimetre of it shows nowhere.
+    /// The most its cut's clusters may err, in the mesh's own metres: the coarsest cut within
+    /// it is taken (coarser still where `budget` asks). 0: the finest. An authored world's rays
+    /// held every mesh's finest triangles, the larger half of its geometry's memory; a shadow
+    /// ray starts 2 cm off its surface at the least, and twice its cut's error times its
+    /// instance's scale beyond that, so a centimetre shows nowhere on an instance at scale 1.
+    /// A host whose instances are larger divides by their largest scale: at scale 5 the same
+    /// cut starts the shadows 10 cm off, and contact shadows go. The error is each level's
+    /// against the one below (`raytrace::error_within`), not the distance from the finest.
     pub error: f32,
     /// Whether it is ground to the rays ([`MeshletSceneBuilder::set_ray_terrain`]).
     pub terrain: bool,
