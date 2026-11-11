@@ -3876,13 +3876,15 @@ impl Demo for Gallery {
             // not hang on the worker's timing. A played one never waits: it takes an edit a frame
             // as they come. Waiting, a flight over an authored city stalled 35 to 67 ms whenever
             // an edit brought thousands of pieces (the owner, 2026-11-11), and every frame paid
-            // the worker's test of the pieces in reach. `FORGE_CELLS_REALTIME=1` or `0` says
-            // which, whatever the run.
+            // the worker's test of the pieces in reach. Its first frames wait all the same: the
+            // world it opens on is whole. `FORGE_CELLS_REALTIME=1` or `0` says which, whatever
+            // the run.
             let realtime = match std::env::var("FORGE_CELLS_REALTIME").ok().as_deref() {
                 Some("0") => false,
                 Some(_) => true,
                 None => {
-                    self.args.frames.is_none()
+                    self.frame > 2
+                        && self.args.frames.is_none()
                         && self.args.capture.is_none()
                         && self.args.capture_every.is_none()
                 }
