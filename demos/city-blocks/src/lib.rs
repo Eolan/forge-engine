@@ -824,9 +824,13 @@ pub struct Args {
     /// (plain colours), to compare.
     #[arg(long, value_enum, default_value_t = TextureMode::Full)]
     textures: TextureMode,
-    /// The rock, concrete and brick rows take their relief from their height maps (D-107; `r.pom`
-    /// turns it off at run time): no asset carries one yet.
+    /// The rock, concrete and brick rows without the relief of their height maps (D-107, on by
+    /// default since 2026-11-11; `r.pom` turns it off at run time too).
     #[arg(long)]
+    no_pom_sets: bool,
+    /// Kept for the scripts of before 2026-11-11, when the relief was off by default: it changes
+    /// nothing.
+    #[arg(long, hide = true)]
     pom_sets: bool,
     /// Let the tank's water bend the scene as drawn, aliased, rather than anti-aliased by an FSR
     /// of its own (#156: the A/B of that anti-aliasing).
@@ -6004,7 +6008,8 @@ impl CityMaterials {
             "city textures"
         );
 
-        // Their relief (D-107, `--pom-sets`), the height maps their normal maps were made from.
+        // Their relief (D-107; off with `--no-pom-sets`), the height maps their normal maps were
+        // made from.
         let mut relief = Vec::new();
         if POM_SETS.get().copied().unwrap_or(false) {
             for (set, map, depth) in [
@@ -7178,7 +7183,7 @@ enum TextureMode {
 
 /// Set once from `--textures` before the materials are made.
 static TEXTURES: std::sync::OnceLock<TextureMode> = std::sync::OnceLock::new();
-/// Set once from `--pom-sets` before the materials are made.
+/// Set once from `--no-pom-sets` before the materials are made: whether the sets take their relief.
 static POM_SETS: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
 
 /// The island's rivers as the water draws them ([`island_ribbons`]), in the sea's frame.
@@ -9008,8 +9013,13 @@ pub fn run_making(
         .set(args.textures)
         .expect("the textures' mode, set once");
     POM_SETS
-        .set(args.pom_sets)
+        .set(!args.no_pom_sets)
         .expect("the relief's sets, set once");
+    if args.pom_sets {
+        tracing::info!(
+            "--pom-sets: the sets' relief is on by default now (--no-pom-sets to leave it out)"
+        );
+    }
     // The generated textures kept between starts, with the worlds' products (#274).
     forge_render::textures::keep_in(forge_core::derived::DerivedCache::new(
         forge_core::derived::cache_dir(forge_core::derived::CacheKind::World),
