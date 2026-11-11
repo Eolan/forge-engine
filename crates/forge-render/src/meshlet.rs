@@ -148,6 +148,9 @@ const INSTANCE_VACANT: u32 = 2;
 const INSTANCE_FADES: u32 = 128;
 /// `Instance::flags`: a coarse stand-in ([`Visibility::coarse`], `INSTANCE_COARSE` in the shader).
 const INSTANCE_COARSE: u32 = 512;
+/// `Instance::flags`: a hull the shadow rays pass out of ([`Visibility::hull`], `INSTANCE_HULL` in
+/// the shader).
+const INSTANCE_HULL: u32 = 1024;
 /// `Instance::flags`: an instance with a side it goes across (D-106, a stand-in): its shadow rays
 /// start clear of the pieces replacing it (`INSTANCE_GOES` in the shader).
 const INSTANCE_GOES: u32 = 256;
@@ -174,6 +177,11 @@ pub struct Visibility {
     /// traced bounce, and a traced ray meeting its back takes the probes' light too. As anything
     /// else, those rays' hits on backs came back black.
     pub coarse: bool,
+    /// A hull round other instances (D-106: a stand-in for a building, some of whose finer
+    /// pieces are in the scene with it): a shadow ray meets it from its front alone, so a ray
+    /// that starts inside it passes out. For a shell that encloses a volume with its triangles
+    /// wound to face out; a sheet marked so would cast from one side only.
+    pub hull: bool,
 }
 
 impl Visibility {
@@ -185,6 +193,7 @@ impl Visibility {
         probes: true,
         mirrors: true,
         coarse: false,
+        hull: false,
     };
 
     /// Nothing sees it: hidden (#323, [`MeshletScene::set_static_visibility`]).
@@ -195,6 +204,7 @@ impl Visibility {
         probes: false,
         mirrors: false,
         coarse: false,
+        hull: false,
     };
 
     /// Only the probes' rays meet it: a stand-in for their light (#297's crown proxies).
@@ -205,6 +215,7 @@ impl Visibility {
         probes: true,
         mirrors: false,
         coarse: false,
+        hull: false,
     };
 
     /// Only the shadow rays from far points meet it (D-075 step 3): a tree's opaque proxy, its
@@ -216,6 +227,7 @@ impl Visibility {
         probes: false,
         mirrors: false,
         coarse: false,
+        hull: false,
     };
 
     /// Its `Instance::flags` bits (`INSTANCE_NO_*` in the shader).
@@ -242,6 +254,7 @@ impl Visibility {
                 INSTANCE_NO_MIRROR_RAYS
             })
             | (if self.coarse { INSTANCE_COARSE } else { 0 })
+            | (if self.hull { INSTANCE_HULL } else { 0 })
     }
 }
 
@@ -279,6 +292,7 @@ fn ray_worlds(flags: u32) -> u32 {
 /// Every `Instance::flags` bit [`Visibility`] sets.
 const INSTANCE_VISIBILITY: u32 = INSTANCE_NO_RASTER
     | INSTANCE_COARSE
+    | INSTANCE_HULL
     | INSTANCE_NO_SHADOW_RAYS
     | INSTANCE_NO_FAR_SHADOW_RAYS
     | INSTANCE_NO_PROBE_RAYS

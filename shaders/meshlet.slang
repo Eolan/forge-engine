@@ -195,6 +195,7 @@ static const uint INSTANCE_FADES = 128;        // Instance::flags: dissolves in 
 static const uint INSTANCE_GOES = 256;         // Instance::flags: a stand-in that goes as pieces come (D-106): its shadow rays start clear of them
 static const uint INSTANCE_COARSE = 512;       // Instance::flags: a coarse stand-in, a hollow shell (D-106): the probes' light on it, and on a traced ray meeting its back
 static const float STAND_IN_SHADOW_START = 4.0; // metres, for INSTANCE_GOES; only ever seen from afar
+static const uint INSTANCE_HULL = 1024;        // Instance::flags: a hull round other instances (D-106): a shadow ray meets it from its front alone (`ray_blocked`)
 static const uint INSTANCE_NO_FAR_SHADOW_RAYS = 64; // Instance::flags: not met by the shadow rays from far points (D-075 step 3, `shadow_world`)
 // The TLAS records' mask bits, one a world of rays (#301): an instance a kind of ray does not meet
 // leaves its bit out, and a pass's rays carry their own (`g_ray_mask`).
@@ -7402,10 +7403,20 @@ bool ray_candidate_kept(Frame* f, uint instance, uint primitive, float2 b)
 }
 
 // Whether a ray meets anything (a shadow ray: the first hit it keeps ends it).
+//
+// A stand-in for a building (D-106) is a hull round the finer pieces it stands for, and some of
+// those are in the scene with it (the ones that show farther than it goes): a ray from one of them
+// starts inside the hull. It passes out: an INSTANCE_HULL's triangles are met from their front
+// alone (`tlas_instances_main` leaves the facing cull on for them and off for every other
+// instance, so the flag here touches nothing else). A roof under its building's stand-in stood in
+// full shadow until the building's own pieces came, then lit up in one frame.
+//
+// The other queries that ask whether light is blocked (the particles', the splashes', the dust's,
+// the impostors', the jelly's) and the shadow rings (D-108) still meet a hull from inside.
 bool ray_blocked(Frame* f, RayDesc ray)
 {
     RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_SKIP_CLOSEST_HIT_SHADER> q;
-    q.TraceRayInline(RaytracingAccelerationStructure(f[0].tlas), ray_opacity(f), g_ray_mask, ray);
+    q.TraceRayInline(RaytracingAccelerationStructure(f[0].tlas), ray_opacity(f) | RAY_FLAG_CULL_BACK_FACING_TRIANGLES, g_ray_mask, ray);
     while (q.Proceed())
     {
         if (shadow_candidate_kept(f, q.CandidateInstanceID(), cut_triangle(f, q.CandidateInstanceID(), q.CandidateGeometryIndex(), q.CandidatePrimitiveIndex()), q.CandidateTriangleBarycentrics()))
@@ -7416,7 +7427,7 @@ bool ray_blocked(Frame* f, RayDesc ray)
     if (movers_tlas(f) == 0)
         return false;
     RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_SKIP_CLOSEST_HIT_SHADER> m;
-    m.TraceRayInline(RaytracingAccelerationStructure(movers_tlas(f)), ray_opacity(f), g_ray_mask, ray);
+    m.TraceRayInline(RaytracingAccelerationStructure(movers_tlas(f)), ray_opacity(f) | RAY_FLAG_CULL_BACK_FACING_TRIANGLES, g_ray_mask, ray);
     while (m.Proceed())
     {
         if (shadow_candidate_kept(f, m.CandidateInstanceID(), cut_triangle(f, m.CandidateInstanceID(), m.CandidateGeometryIndex(), m.CandidatePrimitiveIndex()), m.CandidateTriangleBarycentrics()))
@@ -7502,8 +7513,10 @@ ClosestHit trace_closest(Frame* f, RayDesc ray, bool shadow = false, bool probe 
     o.barycentrics = 0.0;
     o.t = ray.TMax;
     o.mover = false;
+    // A shadow ray passes out of a hull (INSTANCE_HULL), as `ray_blocked`'s.
+    uint flags = ray_opacity(f) | (shadow ? RAY_FLAG_CULL_BACK_FACING_TRIANGLES : RAY_FLAG_NONE);
     RayQuery<RAY_FLAG_NONE> q;
-    q.TraceRayInline(RaytracingAccelerationStructure(f[0].tlas), ray_opacity(f), g_ray_mask, ray);
+    q.TraceRayInline(RaytracingAccelerationStructure(f[0].tlas), flags, g_ray_mask, ray);
     while (q.Proceed())
     {
         if ((!probe || probe_leaf_kept(f, q.CandidateInstanceID(), cut_triangle(f, q.CandidateInstanceID(), q.CandidateGeometryIndex(), q.CandidatePrimitiveIndex()), seed)) && (shadow
@@ -7524,7 +7537,7 @@ ClosestHit trace_closest(Frame* f, RayDesc ray, bool shadow = false, bool probe 
         // Only what stands nearer than the static hit.
         ray.TMax = o.t;
         RayQuery<RAY_FLAG_NONE> m;
-        m.TraceRayInline(RaytracingAccelerationStructure(movers_tlas(f)), ray_opacity(f), g_ray_mask, ray);
+        m.TraceRayInline(RaytracingAccelerationStructure(movers_tlas(f)), flags, g_ray_mask, ray);
         while (m.Proceed())
         {
             if ((!probe || probe_leaf_kept(f, m.CandidateInstanceID(), cut_triangle(f, m.CandidateInstanceID(), m.CandidateGeometryIndex(), m.CandidatePrimitiveIndex()), seed)) && (shadow
@@ -11812,7 +11825,8 @@ void resolve_jelly_rt_main(uint3 group : SV_GroupID, uint3 thread : SV_GroupThre
 // The top-level acceleration structure's records (issue #45, crates/forge-render/src/raytrace.rs):
 // a thread per instance writes its VkAccelerationStructureInstanceKHR, 64 bytes: the model's
 // top three rows, the instance index (24 bits) and a full mask (none for a vacant slot, #220), no
-// SBT offset, back faces traced too, and the address of its mesh's bottom-level structure.
+// SBT offset, back faces traced too (but a hull's by the shadow rays, INSTANCE_HULL), and the
+// address of its mesh's bottom-level structure.
 struct TlasPush
 {
     Instance* instances;
@@ -11893,8 +11907,10 @@ void tlas_instances_main(uint3 id : SV_DispatchThreadID)
         if (rt.opacity_material != RT_NO_OPACITY && (!opacity_rows_match(inst, rt) || (probes && rt.opacity_probes == 0u)))
             opacity |= 0x20u; // VK_GEOMETRY_INSTANCE_DISABLE_OPACITY_MICROMAPS_EXT
     }
-    // VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT, and the opacity.
-    r[13] = (0x1u | opacity) << 24;
+    // VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT, and the opacity. A hull keeps the cull:
+    // the shadow rays, which cull back faces, pass out of it (`ray_blocked`).
+    uint facing = (inst.flags & INSTANCE_HULL) != 0u ? 0x0u : 0x1u;
+    r[13] = (facing | opacity) << 24;
     uint64_t blas = vacant ? 0 : tlas_push.blas[inst.mesh];
     r[14] = uint(blas);
     r[15] = uint(blas >> 32);
