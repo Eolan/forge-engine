@@ -12608,7 +12608,7 @@ assumption fails, and it failed exactly where the owner saw it. Found by turning
 2. The area first: the district's present reach, about ±1,100 m. The whole city once step 2 is measured.
 3. The fade: after walking the hard swap, if it shows pops.
 
-## D-107 — Relief without geometry: a height map marched in the resolve, its shadow along the sun and the strongest lamp, the micro-shadows of occlusion and normal maps 🟡 (proposed 2026-11-08; the code written beside it on the owner's word, "you can work on the research and the code"; first run the same day on the owner's "Yes, run it")
+## D-107 — Relief without geometry: a height map marched in the resolve, its shadow along the sun and the strongest lamp, the micro-shadows of occlusion and normal maps ✅ (proposed 2026-11-08; the code written beside it on the owner's word, "you can work on the research and the code"; first run the same day on the owner's "Yes, run it"; accepted 2026-11-11: "I will follow recommendations for D-107 and D-108")
 
 **Why:** up close, surfaces are flat. Normal maps bend the light and nothing else, and every direct
 shadow comes from rays against the true triangles. Nothing in the engine reads a height (searched
@@ -12741,7 +12741,18 @@ micro-shadows, the settings, `--pom-sets`. A CPU mirror's tests and mock-up:
 **For the owner to decide:** this design; which heights come first (2 for the UV path, then 3 or 4);
 whether the micro-shadows and `min` become defaults after the A/B.
 
-## D-108 — A tier without rays: shadow rings on the clusters, a lamp atlas, screen-space reflections, and D-097's relit probes 🟡 (proposed 2026-11-08 on the owner's "start phase 2"; reopens D-008; D-094, D-097; designed without running the engine: every cost here is an estimate)
+**Decided** (the owner, 2026-11-11: "I will follow recommendations for D-107 and D-108"):
+- **The design as built.**
+- **The heights, in this order:** the procedural sets' own (option 1), on by default rather than
+  behind `--pom-sets`, as they were checked still, backing away and strafing; then heights integrated
+  from tiled normal maps when a package is cooked (option 4), relief for the layered walls with no new
+  asset; scanned displacement maps for the UV path (option 2) in a private lab only, once the owner has
+  signed in to Fab and their licence is read again; relief on decals (option 3) last.
+- **Defaults:** `r.ao.material min` and `r.micro.bump` on, if an A/B of stills on the Bistro and the
+  gallery shows no loss; `r.micro.ao` stays off, since it needs occlusion maps authored for direct light.
+- **No motion-vector correction:** the strafe showed no smear.
+
+## D-108 — A tier without rays: shadow rings on the clusters, a lamp atlas, screen-space reflections, and D-097's relit probes ✅ (proposed 2026-11-08 on the owner's "start phase 2"; reopens D-008; D-094, D-097; designed without running the engine: every cost here is an estimate; accepted 2026-11-11: "I will follow recommendations for D-107 and D-108")
 
 **Why, and what it reopens.** D-008 kept its raster tier (T0) "only for tools and servers", with ray
 tracing required for players, and never built it. D-094's amendment has since asked for "a rasterised
@@ -12849,6 +12860,18 @@ in stops, stills side by side), the moving-camera shimmer of D-107, GPU timings 
 
 **For the owner to decide:** T0 as a player's tier (D-008); this order; rings before virtual maps;
 D-097 in place of the SDF updater for authored worlds; and step 1, its addendum being the section above.
+
+**Decided** (the owner, 2026-11-11: "I will follow recommendations for D-107 and D-108"; steps 1 to 4 built, on `main`):
+- **T0 is a player's tier:** what a device without ray queries draws, and a choice where it has them.
+  Rays stay the default wherever the device has them.
+- **The order as built,** and the rings before virtual shadow maps, to reconsider only if a walk shows
+  the rings failing.
+- **For authored worlds, neither D-097's bricks nor the distance field for now:** the cubes put the
+  private bar within 0.02 stops of the traced light with no bake. Either comes back when a view shows
+  the cubes' limits (a room whose volumes leave gaps, a facade far from every cube).
+- **Step 5 next:** no shader module that asks for ray queries on a device without them, the particles'
+  and the fog's sun from the rings, and the error tables per view and time of day.
+- **The contact march stays off by default,** as step 2 measured no gain.
 
 **Step 2 in detail, before its code (the owner's go, 2026-11-09).**
 
