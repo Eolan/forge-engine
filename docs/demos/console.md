@@ -206,6 +206,8 @@ command line": `--no-ao` and `--set r.ao=0` give the same image to the pixel.
 | `r.exposure.shade_adapt` | by day, outdoors, how far the automatic exposure follows a scene darker than a sunlit street (a wood): 1 all the way, the wood as bright as the street; less keeps it darker and the sky between its leaves blue. A room adapts fully, whatever it says (D-093) | 0..1 | 1; the village 0.25 |
 | `r.ao`, `r.ao.radius` | ambient occlusion, its reach | 0, 1; 0.05..16 m | 1; 1.5 m |
 | `r.ao.contact` | the ambient occlusion's reach under D-088's traced bounce: the contacts its denoiser blurs, the bounce's rays seeing the rest | 0.05..16 m | 0.6 m |
+| `r.gi.cube_ambient` | with no probes, a room's ambient light from its reflection cube, and a street's from cubes made where the camera has been, else the open sky's (D-108; needs the cubes) | 0, 1 | 1 |
+| `r.gi.screen`, `r.gi.screen_radius`, `r.gi.screen_slices` | without rays, the near light from the screen over the ambient light (D-108): on or off, how far a surface lights another, metres, and the slices per pixel | 0, 1; 0.25 to 8; 1 to 4 | 1 without rays; 2; 2 |
 | `r.ao.ignore_nearer` | what the ambient occlusion leaves out near the camera: a first-person weapon or hands cast no dark halo on the wall behind them (#337) | 0..2 m | 0 |
 | `r.probes` | the probes' diffuse light | 0, 1 | 1 |
 | `r.sky_light` | the sky's light | 0, 1 | 1 |

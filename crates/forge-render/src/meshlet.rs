@@ -845,6 +845,10 @@ const CUBE_LOD_ERROR: f32 = 2.0;
 
 /// `options` of a reflection cube's face: it leaves out what moves (`OPTION_CUBE_FACE`).
 const OPTION_CUBE_FACE: u32 = 1 << 20;
+/// `options`: with no probes, a room's ambient light from its cube (`OPTION_CUBE_AMBIENT`).
+const OPTION_CUBE_AMBIENT: u32 = 1 << 21;
+/// `options`: the resolve's `diffuse_bounce` names the near light from the screen (`OPTION_SCREEN_GI`).
+const OPTION_SCREEN_GI: u32 = 1 << 22;
 /// `options` of a shadow ring's draw: orthographic, its LOD by its texels (`OPTION_RING`).
 const OPTION_RING: u32 = 1 << 16;
 /// With [`OPTION_RING`]: it draws the movers, not the casters that stay.
@@ -932,6 +936,27 @@ struct ResolveView<'f> {
     imported: Option<[forge_gpu::BufferHandle; 2]>,
     /// The lamps' atlas the view's shading reads, where it is not the camera's.
     atlas: Option<ImageHandle>,
+    /// The cubes' atlas, whose diffuse level a face's shading reads.
+    cube_light: Option<ImageHandle>,
+}
+
+/// Declares what a view's shading reads of the reflection cubes' atlas: a face's, the diffuse level
+/// only, which no face writes.
+fn reads_cubes<'b, 'f>(
+    builder: forge_gpu::PassBuilder<'b, 'f>,
+    camera: Option<ImageHandle>,
+    face: Option<ImageHandle>,
+) -> forge_gpu::PassBuilder<'b, 'f> {
+    let compute = vk::PipelineStageFlags2::COMPUTE_SHADER;
+    match (camera, face) {
+        (Some(atlas), _) => builder.image(atlas, ImageAccess::Sampled(compute)),
+        (_, Some(atlas)) => builder.image_mip(
+            atlas,
+            crate::reflection_cubes::CUBE_LEVELS - 1,
+            ImageAccess::Sampled(compute),
+        ),
+        _ => builder,
+    }
 }
 
 /// Mirrors `CubeFacePush` in `meshlet.slang`.
@@ -5222,6 +5247,12 @@ pub struct MeshletRenderer {
     pub cubes_on: bool,
     /// The faces a frame may draw (`r.reflections.cube_budget`).
     pub cube_budget: usize,
+    /// Whether, with no probes, a room's ambient light comes from its cube (`r.gi.cube_ambient`).
+    pub cube_ambient: bool,
+    /// Whether this frame's ambient light has the near light from the screen over it.
+    pub screen_gi_on: bool,
+    /// Whether, nothing else lighting them, the streets get cubes where the camera has been.
+    pub cube_streets: bool,
     /// This frame's atlas in its graph, for the reflections' pass.
     cube_atlas: Cell<Option<ImageHandle>>,
     /// The frame's block for the shadow rings, which a cube's starts from; and the lists' sizes.
@@ -5910,6 +5941,9 @@ impl MeshletRenderer {
             cube_changes: RefCell::new(Vec::new()),
             cubes_on: true,
             cube_budget: 1,
+            cube_ambient: true,
+            cube_streets: false,
+            screen_gi_on: false,
             cube_atlas: Cell::new(None),
             ring_base: Cell::new(None),
             lamp_atlas: RefCell::new(crate::shadow_atlas::LampAtlas::new()),
@@ -6495,6 +6529,16 @@ impl MeshletRenderer {
             options: u32::from(self.decal_mirrors && scene.decals_smooth)
                 | if self.screen_reflections_on() {
                     OPTION_SCREEN_REFLECTIONS
+                } else {
+                    0
+                }
+                | if self.cubes_live() && self.cube_ambient {
+                    OPTION_CUBE_AMBIENT
+                } else {
+                    0
+                }
+                | if self.screen_gi_on {
+                    OPTION_SCREEN_GI
                 } else {
                     0
                 },
@@ -7311,6 +7355,13 @@ impl MeshletRenderer {
                 let (width, height) = size(level);
                 let pass = graph.pass(zone);
                 let pass = if level == 0 {
+                    // The colour's first level reads back what the class passes wrote: behind a
+                    // full barrier, as the mirror rays' pass (#349).
+                    let pass = if depth_of_colour.is_some() {
+                        pass.full_barrier()
+                    } else {
+                        pass
+                    };
                     pass.image(source, ImageAccess::Sampled(compute)).with(
                         |b| match depth_of_colour {
                             Some(depth) => b.image(depth, ImageAccess::Sampled(compute)),
@@ -7459,7 +7510,7 @@ impl MeshletRenderer {
             && self.cubes.is_some()
             && self.screen_reflections_on()
             && self.shadow_rings
-            && !self.cube_set.borrow().is_empty()
+            && (self.cube_streets || !self.cube_set.borrow().is_empty())
     }
 
     /// Draws this frame's faces of the reflection cubes (D-108, step 3), before the camera's
@@ -7497,11 +7548,13 @@ impl MeshletRenderer {
         );
         let sun = Vec3::from_array(base.sun_dir).normalize_or_zero();
         let mut set = self.cube_set.borrow_mut();
+        let bounced = self.cube_ambient && ambient.probes.is_none() && self.cube_streets;
         let plan = set.plan(
             camera,
             sun,
             &changes,
             self.cube_budget.min(CUBE_CHAINS as usize),
+            bounced,
         );
         let atlas = graph.import(&cubes.atlas);
         self.cube_atlas.set(Some(atlas));
@@ -7583,6 +7636,10 @@ impl MeshletRenderer {
         bracket(graph, BufferAccess::TransferDst);
         let side = CUBE_FACE_TEXELS as f32;
         let keep = CullFlags::FRUSTUM | CullFlags::LOD | CullFlags::GROUP_WINDOW_OFF;
+        // The sky's reflection, which reads the sky alone (dimmed by the cube's light, by a ratio
+        // of at most 1): no reflection reads the cubes, so none feeds back round after round.
+        // Without it a glass front or a metal came out black in the cubes' reflections. The sun's
+        // and the lamps' glints stay out (`sun_light`, `shade_pixel`).
         let shading = CullFlags::SHADOWS
             | CullFlags::SKY_REFLECTIONS
             | CullFlags::SINGLE_SCATTER
@@ -7631,14 +7688,14 @@ impl MeshletRenderer {
                 cluster_groups: cull_groups(work),
                 page_need: 0,
                 ladder: 0,
-                options: OPTION_CUBE_FACE,
+                options: OPTION_CUBE_FACE | (base.options & OPTION_CUBE_AMBIENT),
+                sw_raster_area: 0.0,
                 ring_mover_first: mover_first,
                 ring_mover_end: mover_end,
                 tlas: 0,
                 rt_scene: 0,
                 tlas_movers: 0,
                 movers_rays: 0,
-                reflection_cubes: 0,
                 ring_offset: (draw.center - camera).to_array(),
                 ..base
             };
@@ -7709,6 +7766,7 @@ impl MeshletRenderer {
                     camera: false,
                     imported: Some(face_tiles),
                     atlas: rings.atlas,
+                    cube_light: Some(atlas),
                 },
                 DrawTargets {
                     depth,
@@ -7739,8 +7797,11 @@ impl MeshletRenderer {
             let pipeline = &cubes.face;
             let (face, tile) = (draw.face, draw.tile);
             let sky_address = sky.address;
+            // It reads back the colour the class passes wrote: behind a full barrier (#349's
+            // kind; without it, whole tiles of a face's layered ground held the memory as before).
             graph
                 .pass("reflections/cube face")
+                .full_barrier()
                 .image(colour, ImageAccess::Sampled(compute))
                 .image(vis, ImageAccess::Sampled(compute))
                 .image_mip(atlas, 0, ImageAccess::StorageWrite(compute))
@@ -8806,7 +8867,17 @@ impl MeshletRenderer {
                 None => b,
             })
             .run(move |resources, commands| {
-                let push = self.push(address);
+                // A face has its own target: the camera's pipelines must not also write the
+                // camera's 64-bit visibility, a buffer of its size.
+                let push = if capture.is_some() {
+                    Push {
+                        vis64: 0,
+                        target_width: area,
+                        ..self.push(address)
+                    }
+                } else {
+                    self.push(address)
+                };
                 let depth = vk::RenderingAttachmentInfo::default()
                     .image_view(resources.view(target))
                     .image_layout(vk::ImageLayout::DEPTH_ATTACHMENT_OPTIMAL)
@@ -9380,6 +9451,7 @@ impl MeshletRenderer {
             camera: true,
             imported: None,
             atlas: None,
+            cube_light: None,
         };
         self.resolve_view(
             graph, slot, view, targets, color, extent, background, ambient,
@@ -9444,6 +9516,9 @@ impl MeshletRenderer {
             })
         });
         let frame_address = view.frame;
+        // The light of a room's cube (D-108): a face's reads the level no face writes.
+        let camera_cubes = self.cube_atlas.get().filter(|_| view.camera);
+        let face_cubes = view.cube_light;
         let push = move |resources: &forge_gpu::Resources<'_>| ResolvePush {
             frame: frame_address,
             tiles: tiles_buffer.address(),
@@ -9502,6 +9577,7 @@ impl MeshletRenderer {
                 Some(atlas) => b.image(atlas, ImageAccess::Sampled(compute)),
                 None => b,
             })
+            .with(|b| reads_cubes(b, camera_cubes, face_cubes))
             .buffer(tiles, BufferAccess::ShaderWrite(compute))
             .buffer(args, BufferAccess::ShaderReadWrite(compute));
         if let Some(sky) = ambient.sky {
@@ -9575,6 +9651,7 @@ impl MeshletRenderer {
                     Some(atlas) => b.image(atlas, ImageAccess::Sampled(compute)),
                     None => b,
                 })
+                .with(|b| reads_cubes(b, camera_cubes, face_cubes))
                 .buffer(tiles, BufferAccess::ShaderRead(compute))
                 .buffer(args, BufferAccess::IndirectArgsAndShaderRead(compute));
             if let Some(sky) = ambient.sky {

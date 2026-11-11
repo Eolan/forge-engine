@@ -71,6 +71,14 @@ pub(crate) struct RenderVars {
     reflection_cubes: Var<bool>,
     /// The faces of the cubes a frame may draw.
     cube_budget: Var<i64>,
+    /// Whether, with no probes, a room's ambient comes from its cube.
+    cube_ambient: Var<bool>,
+    /// The near light from the screen.
+    screen_gi: Var<bool>,
+    /// How far a surface lights another by it, metres.
+    screen_gi_radius: Var<f64>,
+    /// Its slices per pixel.
+    screen_gi_slices: Var<i64>,
     /// The rings' filter and cost (`r.shadows.*`, D-108).
     ring_search_taps: Var<i64>,
     ring_filter_taps: Var<i64>,
@@ -375,6 +383,28 @@ impl Gallery {
                 0..=6,
                 "Reflection cubes: the faces a frame may draw.",
             )),
+            screen_gi: s.add(Spec::bool(
+                "r.gi.screen",
+                self.scene.rays().is_none(),
+                "Without rays, the near light from the screen over the ambient light (D-108).",
+            )),
+            screen_gi_radius: s.add(Spec::float(
+                "r.gi.screen_radius",
+                f64::from(self.screen_gi_settings.radius),
+                0.25..=8.0,
+                "Near light from the screen: how far a surface lights another, metres.",
+            )),
+            screen_gi_slices: s.add(Spec::int(
+                "r.gi.screen_slices",
+                i64::from(self.screen_gi_settings.slices),
+                1..=4,
+                "Near light from the screen: slices per pixel.",
+            )),
+            cube_ambient: s.add(Spec::bool(
+                "r.gi.cube_ambient",
+                self.renderer.cube_ambient,
+                "With no probes, a room's ambient light from its reflection cube, else the sky's.",
+            )),
             shadow_mode: s.add(Spec::choice(
                 "r.shadows.mode",
                 SHADOW_MODES,
@@ -509,7 +539,11 @@ impl Gallery {
         } else {
             self.renderer.reflections_on_screen = false;
         }
-        if on_screen && !self.cubes_given && !self.cube_volumes.is_empty() {
+        self.renderer.cube_streets = self.scene.rays().is_none();
+        if on_screen
+            && !self.cubes_given
+            && (!self.cube_volumes.is_empty() || self.renderer.cube_streets)
+        {
             self.cubes_given = true;
             if let Err(error) = self.renderer.set_reflection_cubes(
                 &ctx.device,
@@ -521,6 +555,27 @@ impl Gallery {
         }
         self.renderer.cubes_on = s.get(v.reflection_cubes);
         self.renderer.cube_budget = s.get(v.cube_budget) as usize;
+        self.renderer.cube_ambient = s.get(v.cube_ambient);
+        self.screen_gi_on = s.get(v.screen_gi);
+        self.renderer.screen_gi_on = self.screen_gi_on && self.scene.rays().is_none();
+        self.screen_gi_settings.radius = s.get(v.screen_gi_radius) as f32;
+        self.screen_gi_settings.slices = s.get(v.screen_gi_slices) as u32;
+        if self.screen_gi_on && self.screen_gi.is_none() && !self.screen_gi_failed {
+            match forge_render::screen_gi::ScreenGi::new(
+                &ctx.device,
+                &ctx.shaders,
+                self.screen_gi_extent,
+            ) {
+                Ok(gi) => self.screen_gi = Some(gi),
+                Err(error) => {
+                    tracing::error!(%error, "the near light from the screen could not be made");
+                    self.screen_gi_failed = true;
+                }
+            }
+        }
+        if self.screen_gi.is_none() {
+            self.renderer.screen_gi_on = false;
+        }
         self.renderer.screen_steps = s.get(v.screen_steps) as u32;
         self.renderer.screen_thickness = s.get(v.screen_thickness) as f32;
         let rings = SHADOW_MODES[s.get(v.shadow_mode)] == "rings";

@@ -17,8 +17,10 @@ pub const CUBE_TILE_TEXELS: u32 = 256;
 pub const CUBE_TILES: u32 = 8;
 /// Texels along a side of the atlas.
 pub const CUBE_ATLAS_TEXELS: u32 = CUBE_TILES * CUBE_TILE_TEXELS;
-/// The atlas's levels: level 0 a mirror, the last the roughest that reads it.
-pub const CUBE_LEVELS: u32 = 5;
+/// The atlas's levels: level 0 a mirror, to the roughest that reads it, and last the diffuse light.
+pub const CUBE_LEVELS: u32 = 6;
+/// Rounds a new cube is drawn after its first, each lit by the ambient of the one before.
+const BOUNCE_ROUNDS: u8 = 3;
 /// The most cubes the atlas holds.
 pub const CUBE_CAPACITY: usize = (CUBE_TILES * CUBE_TILES) as usize;
 /// The most cubes the shading looks through (`CubeSet` in `meshlet.slang`).
@@ -27,12 +29,28 @@ pub const CUBE_LIST: usize = 32;
 pub const CUBE_FACE_TEXELS: u32 = 256;
 /// How far from a cube's point a face begins, metres.
 const CUBE_NEAR: f32 = 0.1;
+/// Frames over which a cube's weight in the shading rises from none to whole once its six faces are
+/// drawn: a street cube made where the camera stands took over the facades round it at once, a
+/// step the eye catches as the camera walks (D-108, step 4).
+const FADE_IN_FRAMES: u32 = 45;
+/// Where a cube's faces are drawn from, off the point it stands for: a centimetre or two along each
+/// axis, by amounts no metre grid holds. A vertex in a face's own plane (w = 0: a street's middle
+/// line under a cube placed on it) made its triangle's barycentrics infinite, and the ground's
+/// pixels there came out NaN.
+const EYE_OFF_THE_GRID: Vec3 = Vec3::new(0.0193, 0.0117, 0.0151);
 /// How near the camera a cube must be to be drawn, metres: past this, what it holds is not wanted.
 const CUBE_REACH: f32 = 96.0;
 /// The least distance a face sees, metres, whatever the volume's size.
 const LEAST_FACE_REACH: f32 = 64.0;
 /// Frames between the starts of a cube's rounds of drawing, however often what it holds changes.
 const ROUND_APART: u32 = 240;
+/// How far the camera goes from every street cube before one is made where it stands, metres.
+const STREET_SPACING: f32 = 32.0;
+/// A street cube's volume round its point, metres: what it stands for. Its light fades to the open
+/// sky's over its outer 8 m (`cube_pick`), so no line shows where it ends.
+const STREET_HALF: Vec3 = Vec3::new(40.0, 40.0, 40.0);
+/// The most street cubes kept: of the atlas's tiles, the others are the rooms'.
+const MOST_STREET_CUBES: usize = 40;
 /// The sun's turn past which a cube is drawn again, as the cosine of the angle.
 const SUN_MOVED_COSINE: f32 = 0.9962; // 5 degrees
 
@@ -58,6 +76,12 @@ pub struct CubeVolume {
 }
 
 impl CubeVolume {
+    /// The point its faces are drawn from, and the shading reads them from: its centre, off the
+    /// grid ([`EYE_OFF_THE_GRID`]).
+    fn eye(&self) -> Vec3 {
+        self.center + EYE_OFF_THE_GRID
+    }
+
     /// How far `point` lies outside it, 0 inside.
     fn distance(&self, point: Vec3) -> f32 {
         ((self.min - point).max(point - self.max))
@@ -70,13 +94,14 @@ impl CubeVolume {
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Pod, Zeroable)]
 pub struct GpuCube {
-    /// The point its faces were drawn from.
+    /// The point its faces were drawn from; w, its weight in the shading as it fades in (0 to 1).
     pub center: [f32; 4],
     /// Its lowest corner.
     pub min: [f32; 4],
     /// Its highest corner.
     pub max: [f32; 4],
-    /// Its tile in the atlas's level 0, in tiles: x, y, then unused.
+    /// Its tile in the atlas's level 0, in tiles: x, y; 1 if it has been drawn whole; and 1 for a
+    /// room's (what stands for a place), 0 for a street cube's, which a room comes before.
     pub tile: [u32; 4],
 }
 
@@ -90,7 +115,7 @@ pub struct GpuCubeSet {
     pub count: u32,
     /// Keeps what follows on 16 bytes.
     pub pad: [u32; 2],
-    /// The nearest cubes that are whole.
+    /// The nearest cubes.
     pub cubes: [GpuCube; CUBE_LIST],
 }
 
@@ -143,12 +168,19 @@ struct Slot {
     again: bool,
     /// Frames since its last round began.
     since_round: u32,
+    /// Rounds still to be drawn at once, for the light to build up.
+    bounces: u8,
+    /// Frames it has been whole: its weight in the shading rises with them to 1 over
+    /// [`FADE_IN_FRAMES`].
+    shown: u32,
 }
 
 /// The cubes' state.
 #[derive(Clone, Debug, Default)]
 pub struct CubeSet {
     volumes: Vec<CubeVolume>,
+    /// Per volume, whether it is a street cube made where the camera stood.
+    street: Vec<bool>,
     slots: Vec<Option<Slot>>,
     free: Vec<[u32; 2]>,
     /// Nearest first, the frame's order.
@@ -164,6 +196,7 @@ impl CubeSet {
     /// The cubes the scene has, which forgets what was drawn.
     pub fn set_volumes(&mut self, volumes: Vec<CubeVolume>) {
         self.slots = vec![None; volumes.len()];
+        self.street = vec![false; volumes.len()];
         self.volumes = volumes;
         self.free = (0..CUBE_TILES)
             .rev()
@@ -182,6 +215,46 @@ impl CubeSet {
         self.volumes.is_empty()
     }
 
+    /// Where the camera has gone far enough from every street cube, one more where it stands: a
+    /// place the camera stands in is one with a view, which a point on a grid need not be.
+    fn place_street_cube(&mut self, camera: Vec3) {
+        let far_from_all = self
+            .volumes
+            .iter()
+            .zip(&self.street)
+            .all(|(v, street)| !*street || v.center.distance(camera) >= STREET_SPACING);
+        if !far_from_all {
+            return;
+        }
+        if self.street.iter().filter(|s| **s).count() >= MOST_STREET_CUBES {
+            // The one furthest off goes.
+            let furthest = (0..self.volumes.len())
+                .filter(|i| self.street[*i])
+                .max_by(|a, b| {
+                    let (da, db) = (
+                        self.volumes[*a].center.distance(camera),
+                        self.volumes[*b].center.distance(camera),
+                    );
+                    da.total_cmp(&db).then(a.cmp(b))
+                });
+            if let Some(i) = furthest {
+                if let Some(slot) = self.slots[i].take() {
+                    self.free.push(slot.tile);
+                }
+                self.volumes.swap_remove(i);
+                self.street.swap_remove(i);
+                self.slots.swap_remove(i);
+            }
+        }
+        self.volumes.push(CubeVolume {
+            center: camera,
+            min: camera - STREET_HALF,
+            max: camera + STREET_HALF,
+        });
+        self.street.push(true);
+        self.slots.push(None);
+    }
+
     /// Every cube is to be drawn again.
     pub fn invalidate(&mut self) {
         for slot in self.slots.iter_mut().flatten() {
@@ -190,14 +263,19 @@ impl CubeSet {
     }
 
     /// This frame's work. `camera` and `changed` (spheres where what stays has changed) in the
-    /// scene frame, `sun` the direction to it; `budget` the faces it may draw.
+    /// scene frame, `sun` the direction to it; `budget` the faces it may draw; `bounced`, that a
+    /// new cube is drawn over again, each round lit by the last (nothing else lights its rooms).
     pub fn plan(
         &mut self,
         camera: Vec3,
         sun: Vec3,
         changed: &[(Vec3, f32)],
         budget: usize,
+        bounced: bool,
     ) -> CubePlan {
+        if bounced {
+            self.place_street_cube(camera);
+        }
         // The nearest have tiles: those further give theirs up.
         let mut order: Vec<usize> = (0..self.volumes.len()).collect();
         let volumes = &self.volumes;
@@ -223,6 +301,8 @@ impl CubeSet {
                     sun,
                     again: false,
                     since_round: 0,
+                    bounces: if bounced { BOUNCE_ROUNDS } else { 0 },
+                    shown: 0,
                 });
             }
         }
@@ -232,9 +312,16 @@ impl CubeSet {
             };
             let touched = changed.iter().any(|(c, r)| volume.distance(*c) <= *r);
             slot.since_round = slot.since_round.saturating_add(1);
+            if slot.whole {
+                slot.shown = slot.shown.saturating_add(1);
+            }
             if touched || slot.sun.dot(sun) < SUN_MOVED_COSINE {
                 slot.again = true;
                 slot.sun = sun;
+            }
+            if slot.waiting == 0 && slot.fresh == 0 && slot.whole && slot.bounces > 0 {
+                slot.bounces -= 1;
+                slot.waiting = 0x3F;
             }
             // Whatever keeps changing, a round that has begun is finished.
             if slot.again && slot.waiting == 0 && slot.since_round >= ROUND_APART {
@@ -277,7 +364,7 @@ impl CubeSet {
                     cube: i,
                     face,
                     tile: slot.tile,
-                    center: volume.center,
+                    center: volume.eye(),
                     view_proj: projection * view,
                     view,
                     forward,
@@ -298,7 +385,7 @@ impl CubeSet {
         plan
     }
 
-    /// The table the shading reads: the nearest cubes that are whole.
+    /// The table the shading reads: the nearest cubes, each saying if it has been drawn whole.
     pub fn table(&self, image: u32) -> GpuCubeSet {
         let mut set = GpuCubeSet {
             image,
@@ -306,18 +393,22 @@ impl CubeSet {
             pad: [0; 2],
             cubes: [GpuCube::zeroed(); CUBE_LIST],
         };
-        let whole = self
-            .near
-            .iter()
-            .filter_map(|&i| Some((i, self.slots[i]?)))
-            .filter(|(_, slot)| slot.whole);
-        for (i, slot) in whole.take(CUBE_LIST) {
+        let held = self.near.iter().filter_map(|&i| Some((i, self.slots[i]?)));
+        for (i, slot) in held.take(CUBE_LIST) {
             let v = &self.volumes[i];
             set.cubes[set.count as usize] = GpuCube {
-                center: v.center.extend(0.0).to_array(),
+                center: v
+                    .eye()
+                    .extend((slot.shown as f32 / FADE_IN_FRAMES as f32).min(1.0))
+                    .to_array(),
                 min: v.min.extend(0.0).to_array(),
                 max: v.max.extend(0.0).to_array(),
-                tile: [slot.tile[0], slot.tile[1], 0, 0],
+                tile: [
+                    slot.tile[0],
+                    slot.tile[1],
+                    u32::from(slot.whole),
+                    u32::from(!self.street[i]),
+                ],
             };
             set.count += 1;
         }
@@ -340,7 +431,7 @@ mod tests {
     /// Frames pass, with nothing drawn: up to the last before a waiting round may begin.
     fn settle(c: &mut CubeSet, sun: Vec3) {
         for _ in 0..ROUND_APART {
-            assert!(c.plan(Vec3::ZERO, sun, &[], 0).draws.is_empty());
+            assert!(c.plan(Vec3::ZERO, sun, &[], 0, false).draws.is_empty());
         }
     }
 
@@ -348,30 +439,30 @@ mod tests {
     fn six_faces_make_a_cube_whole() {
         let mut c = CubeSet::new();
         c.set_volumes(vec![room(0.0)]);
-        let plan = c.plan(Vec3::ZERO, Vec3::Y, &[], 4);
+        let plan = c.plan(Vec3::ZERO, Vec3::Y, &[], 4, false);
         assert_eq!(plan.draws.len(), 4);
         assert!(plan.finished.is_empty());
-        assert_eq!(c.table(7).count, 0, "not read until whole");
-        let plan = c.plan(Vec3::ZERO, Vec3::Y, &[], 4);
+        assert_eq!(c.table(7).cubes[0].tile[2], 0, "not read until whole");
+        let plan = c.plan(Vec3::ZERO, Vec3::Y, &[], 4, false);
         assert_eq!(plan.draws.len(), 2);
         assert_eq!(plan.finished.len(), 1);
         let set = c.table(7);
-        assert_eq!((set.image, set.count), (7, 1));
+        assert_eq!((set.image, set.count, set.cubes[0].tile[2]), (7, 1, 1));
     }
 
     #[test]
     fn a_whole_cube_is_kept() {
         let mut c = CubeSet::new();
         c.set_volumes(vec![room(0.0)]);
-        c.plan(Vec3::ZERO, Vec3::Y, &[], 6);
-        assert!(c.plan(Vec3::ZERO, Vec3::Y, &[], 6).draws.is_empty());
+        c.plan(Vec3::ZERO, Vec3::Y, &[], 6, false);
+        assert!(c.plan(Vec3::ZERO, Vec3::Y, &[], 6, false).draws.is_empty());
     }
 
     #[test]
     fn the_nearest_go_first() {
         let mut c = CubeSet::new();
         c.set_volumes(vec![room(100.0), room(0.0)]);
-        let plan = c.plan(Vec3::ZERO, Vec3::Y, &[], 6);
+        let plan = c.plan(Vec3::ZERO, Vec3::Y, &[], 6, false);
         assert!(plan.draws.iter().all(|d| d.cube == 1));
     }
 
@@ -379,16 +470,18 @@ mod tests {
     fn what_changes_inside_draws_it_again() {
         let mut c = CubeSet::new();
         c.set_volumes(vec![room(0.0)]);
-        c.plan(Vec3::ZERO, Vec3::Y, &[], 6);
+        c.plan(Vec3::ZERO, Vec3::Y, &[], 6, false);
         let far = [(Vec3::new(50.0, 0.0, 0.0), 1.0)];
-        assert!(c.plan(Vec3::ZERO, Vec3::Y, &far, 6).draws.is_empty());
+        assert!(c.plan(Vec3::ZERO, Vec3::Y, &far, 6, false).draws.is_empty());
         let near = [(Vec3::new(1.0, 1.0, 0.0), 0.5)];
         assert!(
-            c.plan(Vec3::ZERO, Vec3::Y, &near, 6).draws.is_empty(),
+            c.plan(Vec3::ZERO, Vec3::Y, &near, 6, false)
+                .draws
+                .is_empty(),
             "not at once"
         );
         settle(&mut c, Vec3::Y);
-        assert_eq!(c.plan(Vec3::ZERO, Vec3::Y, &[], 6).draws.len(), 6);
+        assert_eq!(c.plan(Vec3::ZERO, Vec3::Y, &[], 6, false).draws.len(), 6);
     }
 
     #[test]
@@ -397,10 +490,10 @@ mod tests {
         c.set_volumes(vec![room(0.0)]);
         let near = [(Vec3::new(1.0, 1.0, 0.0), 0.5)];
         for _ in 0..6 {
-            c.plan(Vec3::ZERO, Vec3::Y, &near, 1);
+            c.plan(Vec3::ZERO, Vec3::Y, &near, 1, false);
         }
         assert_eq!(
-            c.table(0).count,
+            c.table(0).cubes[0].tile[2],
             1,
             "six faces, one a frame, whatever changed"
         );
@@ -410,24 +503,24 @@ mod tests {
     fn a_small_turn_of_the_sun_is_let_be_and_a_large_one_is_not() {
         let mut c = CubeSet::new();
         c.set_volumes(vec![room(0.0)]);
-        c.plan(Vec3::ZERO, Vec3::Y, &[], 6);
+        c.plan(Vec3::ZERO, Vec3::Y, &[], 6, false);
         let little = Vec3::new(0.05, 1.0, 0.0).normalize();
-        assert!(c.plan(Vec3::ZERO, little, &[], 6).draws.is_empty());
+        assert!(c.plan(Vec3::ZERO, little, &[], 6, false).draws.is_empty());
         let turned = Vec3::new(0.3, 1.0, 0.0).normalize();
-        c.plan(Vec3::ZERO, turned, &[], 6);
+        c.plan(Vec3::ZERO, turned, &[], 6, false);
         settle(&mut c, turned);
-        assert_eq!(c.plan(Vec3::ZERO, turned, &[], 6).draws.len(), 6);
+        assert_eq!(c.plan(Vec3::ZERO, turned, &[], 6, false).draws.len(), 6);
     }
 
     #[test]
     fn a_redrawn_cube_stays_readable() {
         let mut c = CubeSet::new();
         c.set_volumes(vec![room(0.0)]);
-        c.plan(Vec3::ZERO, Vec3::Y, &[], 6);
+        c.plan(Vec3::ZERO, Vec3::Y, &[], 6, false);
         c.invalidate();
-        c.plan(Vec3::ZERO, Vec3::Y, &[], 2);
+        c.plan(Vec3::ZERO, Vec3::Y, &[], 2, false);
         assert_eq!(
-            c.table(0).count,
+            c.table(0).cubes[0].tile[2],
             1,
             "what it held stays until the new one is whole"
         );
@@ -441,7 +534,7 @@ mod tests {
                 .map(|i| room(i as f32 * 10.0))
                 .collect(),
         );
-        c.plan(Vec3::ZERO, Vec3::Y, &[], 6 * (CUBE_CAPACITY + 10));
+        c.plan(Vec3::ZERO, Vec3::Y, &[], 6 * (CUBE_CAPACITY + 10), false);
         assert_eq!(
             c.slots.iter().flatten().count(),
             CUBE_CAPACITY,
@@ -450,18 +543,89 @@ mod tests {
         assert!(c.slots[CUBE_CAPACITY + 9].is_none());
         // Further along, the far ones take the tiles of those left behind.
         let far = Vec3::new((CUBE_CAPACITY + 9) as f32 * 10.0, 0.0, 0.0);
-        c.plan(far, Vec3::Y, &[], 6 * (CUBE_CAPACITY + 10));
+        c.plan(far, Vec3::Y, &[], 6 * (CUBE_CAPACITY + 10), false);
         assert!(c.slots[CUBE_CAPACITY + 9].is_some());
         assert!(c.slots[0].is_none());
+    }
+
+    #[test]
+    fn with_nothing_else_to_light_it_a_cube_is_drawn_over_again() {
+        let mut c = CubeSet::new();
+        c.set_volumes(vec![room(0.0)]);
+        let mut finished = 0;
+        for _ in 0..12 {
+            finished += c.plan(Vec3::ZERO, Vec3::Y, &[], 6, true).finished.len();
+        }
+        assert_eq!(
+            finished,
+            2 * (1 + BOUNCE_ROUNDS as usize),
+            "the room, and the street where it stands"
+        );
+    }
+
+    #[test]
+    fn a_street_cube_is_made_where_the_camera_goes() {
+        let mut c = CubeSet::new();
+        c.set_volumes(Vec::new());
+        c.plan(Vec3::ZERO, Vec3::Y, &[], 6, true);
+        assert_eq!(c.len(), 1, "where it stands");
+        c.plan(Vec3::new(10.0, 0.0, 0.0), Vec3::Y, &[], 6, true);
+        assert_eq!(c.len(), 1, "still near");
+        c.plan(Vec3::new(40.0, 0.0, 0.0), Vec3::Y, &[], 6, true);
+        assert_eq!(c.len(), 2, "far enough");
+        c.plan(Vec3::new(80.0, 0.0, 0.0), Vec3::Y, &[], 6, false);
+        assert_eq!(c.len(), 2, "none without the need");
+    }
+
+    #[test]
+    fn street_cubes_are_kept_to_a_number_and_a_room_stays() {
+        let mut c = CubeSet::new();
+        c.set_volumes(vec![room(0.0)]);
+        for i in 0..200 {
+            c.plan(Vec3::new(i as f32 * 40.0, 0.0, 0.0), Vec3::Y, &[], 0, true);
+        }
+        assert_eq!(c.len(), 1 + MOST_STREET_CUBES);
+        assert!(!c.street[0], "the room is not one of them");
+    }
+
+    #[test]
+    fn a_street_cube_says_so_to_the_shading() {
+        let mut c = CubeSet::new();
+        c.set_volumes(vec![room(0.0)]);
+        c.plan(Vec3::new(8.0, 1.0, 0.0), Vec3::Y, &[], 12, true);
+        let set = c.table(0);
+        let kinds: Vec<u32> = (0..set.count as usize)
+            .map(|i| set.cubes[i].tile[3])
+            .collect();
+        assert!(kinds.contains(&1) && kinds.contains(&0), "{kinds:?}");
+    }
+
+    #[test]
+    fn a_cube_fades_in_once_whole() {
+        let mut c = CubeSet::new();
+        c.set_volumes(vec![room(0.0)]);
+        c.plan(Vec3::ZERO, Vec3::Y, &[], 6, false);
+        assert_eq!(
+            c.table(0).cubes[0].center[3],
+            0.0,
+            "whole this frame, not yet shown"
+        );
+        c.plan(Vec3::ZERO, Vec3::Y, &[], 6, false);
+        let first = c.table(0).cubes[0].center[3];
+        assert!(first > 0.0 && first < 0.1, "{first}");
+        for _ in 1..FADE_IN_FRAMES {
+            c.plan(Vec3::ZERO, Vec3::Y, &[], 6, false);
+        }
+        assert_eq!(c.table(0).cubes[0].center[3], 1.0);
     }
 
     #[test]
     fn a_cube_past_the_reach_waits() {
         let mut c = CubeSet::new();
         c.set_volumes(vec![room(500.0)]);
-        assert!(c.plan(Vec3::ZERO, Vec3::Y, &[], 6).draws.is_empty());
+        assert!(c.plan(Vec3::ZERO, Vec3::Y, &[], 6, false).draws.is_empty());
         let near = Vec3::new(480.0, 0.0, 0.0);
-        assert_eq!(c.plan(near, Vec3::Y, &[], 6).draws.len(), 6);
+        assert_eq!(c.plan(near, Vec3::Y, &[], 6, false).draws.len(), 6);
     }
 
     #[test]
@@ -472,7 +636,7 @@ mod tests {
             min: Vec3::splat(-100.0),
             max: Vec3::splat(100.0),
         }]);
-        let plan = c.plan(Vec3::ZERO, Vec3::Y, &[], 6);
+        let plan = c.plan(Vec3::ZERO, Vec3::Y, &[], 6, false);
         assert!(plan.draws[0].reach > 300.0);
     }
 
@@ -480,7 +644,7 @@ mod tests {
     fn a_face_looks_where_its_table_says() {
         let mut c = CubeSet::new();
         c.set_volumes(vec![room(0.0)]);
-        let plan = c.plan(Vec3::ZERO, Vec3::Y, &[], 6);
+        let plan = c.plan(Vec3::ZERO, Vec3::Y, &[], 6, false);
         let plus_x = plan.draws.iter().find(|d| d.face == 0).unwrap();
         let clip = plus_x.view_proj * glam::Vec4::new(5.0, 0.0, 0.0, 1.0);
         assert!((clip.w - 5.0).abs() < 1e-3, "{clip:?}");
@@ -492,7 +656,7 @@ mod tests {
     fn the_shading_list_is_nearest_first() {
         let mut c = CubeSet::new();
         c.set_volumes(vec![room(100.0), room(0.0)]);
-        c.plan(Vec3::ZERO, Vec3::Y, &[], 12);
-        assert_eq!(c.table(0).cubes[0].center[0], 0.0);
+        c.plan(Vec3::ZERO, Vec3::Y, &[], 12, false);
+        assert!(c.table(0).cubes[0].center[0].abs() < 0.1);
     }
 }

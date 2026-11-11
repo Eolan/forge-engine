@@ -969,6 +969,18 @@ struct Gallery {
     view_reach: forge_render::ViewReach,
     /// The mirror rays' history (#176, D-050): the glass's reflections settled before TAA.
     reflection_history: forge_render::ReflectionHistory,
+    /// The near light from the screen (D-108, step 4), made when first wanted.
+    screen_gi: Option<forge_render::screen_gi::ScreenGi>,
+    /// Whether it is wanted (`r.gi.screen`): where there are no rays.
+    screen_gi_on: bool,
+    /// Its settings.
+    screen_gi_settings: forge_render::screen_gi::ScreenGiSettings,
+    /// The frame's size it is to be made for.
+    screen_gi_extent: forge_gpu::vk::Extent2D,
+    /// Whether the near light was drawn last frame.
+    screen_gi_drawn: bool,
+    /// Its images could not be made: not tried again.
+    screen_gi_failed: bool,
     /// The cubes misses read (D-108), which the screen's reflections are given when first on.
     cube_volumes: Vec<forge_render::reflection_cubes::CubeVolume>,
     /// Whether the renderer has them.
@@ -2504,6 +2516,12 @@ impl Gallery {
             view_reach: forge_render::ViewReach::new(&ctx.device, &ctx.shaders)?,
             cube_volumes,
             cubes_given: false,
+            screen_gi: None,
+            screen_gi_on: false,
+            screen_gi_settings: Default::default(),
+            screen_gi_extent: ctx.extent(),
+            screen_gi_drawn: false,
+            screen_gi_failed: false,
             reflection_history,
             reflection_motion: true,
             sun_scale,
@@ -2720,6 +2738,8 @@ impl Gallery {
                 denoiser.resize(render)?;
             }
             self.reflection_history.resize(render)?;
+            self.screen_gi = None;
+            self.screen_gi_extent = render;
             // The tank's water's FSR anti-aliases the scene behind it at the scene's size.
             if let Some(behind) = &mut self.behind_aa {
                 behind.configure(forge_render::FsrMode::NativeAa, render)?;
@@ -4347,6 +4367,38 @@ impl Demo for Gallery {
             reflection_history,
             lamp_shadows,
         };
+        // The near light (D-108): its history turns once a frame, then its passes. Off for a frame
+        // or more, what its images hold is of another view.
+        if self.renderer.screen_gi_on
+            && let Some(gi) = self.screen_gi.as_mut()
+        {
+            if !self.screen_gi_drawn {
+                gi.invalidate();
+            }
+            gi.advance();
+        }
+        self.screen_gi_drawn = self.renderer.screen_gi_on && self.screen_gi.is_some();
+        let near_light = self
+            .screen_gi
+            .as_ref()
+            .filter(|_| self.renderer.screen_gi_on)
+            .map(|gi| {
+                gi.draw(
+                    &mut frame.graph,
+                    targets.depth,
+                    forge_render::screen_gi::ScreenGiView {
+                        projection: taa_frame.jittered_projection,
+                        previous_from_current: taa_frame.previous_from_current,
+                        frame: (self.taa.frame_index() % 64) as u32,
+                        reset: taa_frame.reset,
+                    },
+                    self.screen_gi_settings,
+                )
+            });
+        let ambient = AmbientLight {
+            diffuse_bounce: ambient.diffuse_bounce.or(near_light.map(|n| n.near)),
+            ..ambient
+        };
         self.renderer.capture_reflection_cubes(
             &mut frame.graph,
             frame.slot,
@@ -4363,6 +4415,15 @@ impl Demo for Gallery {
             None,
             ambient,
         );
+        if let (Some(gi), Some(near)) = (self.screen_gi.as_ref(), near_light) {
+            gi.keep_light(
+                &mut frame.graph,
+                near.light,
+                taa_frame.color,
+                targets.depth,
+                self.renderer.sun_illuminance * exposure / std::f32::consts::PI,
+            );
+        }
         // The scene colour as the resolve left it, before the sky's compose (#277).
         if let Some(h) = hasher {
             use forge_render::debug_hash::HashKind;

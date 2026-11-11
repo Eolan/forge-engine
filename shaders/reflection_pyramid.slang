@@ -67,8 +67,12 @@ void reflection_colour_main(uint3 id : SV_DispatchThreadID)
     {
         // The sky is drawn later: until then those pixels hold nothing. Alpha says how much of a
         // texel is there, and the levels carry the colour by it.
-        float there = g_sampled_images_r[NonUniformResourceIndex(push.depth_image)].Load(int3(id.xy, 0)) > 0.0 ? 1.0 : 0.0;
-        out_level[id.xy] = float4(source.Load(int3(id.xy, 0)).rgb * there, there);
+        // A pixel that is no number counts as nothing there: averaged up the levels, one would
+        // spread to every texel over it.
+        float3 colour = source.Load(int3(id.xy, 0)).rgb;
+        bool number = !any(isnan(colour)) && !any(isinf(colour));
+        float there = number && g_sampled_images_r[NonUniformResourceIndex(push.depth_image)].Load(int3(id.xy, 0)) > 0.0 ? 1.0 : 0.0;
+        out_level[id.xy] = float4(number ? colour * there : float3(0.0), there);
         return;
     }
     uint2 first;
@@ -107,6 +111,7 @@ static const uint CUBE_TILES = 8u;
 static const uint CUBE_TILE_TEXELS = 256u;
 static const float CUBE_ROUGHEST = 0.42;
 static const float CUBE_LAST_LEVEL = 4.0;
+static const uint CUBE_DIFFUSE_LEVEL = 5u;
 
 float not_zero(float v)
 {
@@ -147,7 +152,7 @@ void cube_prefilter_main(uint3 id : SV_DispatchThreadID)
     CubePush p = cube_push;
     if (id.x >= p.side || id.y >= p.side)
         return;
-    float inset = 1.5 / float(p.side);
+    float inset = 1.0 / float(p.side);
     float2 in_tile = (float2(id.xy) + float2(0.5)) / float(p.side);
     float2 o = saturate((in_tile - float2(inset)) / (1.0 - 2.0 * inset));
     float3 n = tile_direction(o * 2.0 - float2(1.0));
@@ -158,7 +163,7 @@ void cube_prefilter_main(uint3 id : SV_DispatchThreadID)
     float a = rough * rough;
     float a2 = a * a;
     Texture2D<float4> source = g_sampled_images[NonUniformResourceIndex(p.src_image)];
-    float source_inset = 1.5 / float(CUBE_TILE_TEXELS);
+    float source_inset = 1.0 / float(CUBE_TILE_TEXELS);
     float3 sum = float3(0.0);
     float weight = 0.0;
     const uint samples = 96u;
@@ -167,14 +172,26 @@ void cube_prefilter_main(uint3 id : SV_DispatchThreadID)
         float u = float(k) / float(samples);
         float v = radical_inverse(k);
         float phi = 6.2831853 * u;
-        float cos2 = (1.0 - v) / (1.0 + (a2 - 1.0) * v);
-        float cos_t = sqrt(cos2);
-        float sin_t = sqrt(max(1.0 - cos2, 0.0));
-        float3 h = t * (cos(phi) * sin_t) + b * (sin(phi) * sin_t) + n * cos_t;
-        float3 l = 2.0 * dot(n, h) * h - n;
-        float nl = dot(n, l);
-        if (nl <= 0.0)
-            continue;
+        float3 l;
+        float nl;
+        if (p.level == CUBE_DIFFUSE_LEVEL)
+        {
+            // The diffuse light: the hemisphere over the normal, its cosine in the sampling.
+            float r = sqrt(v);
+            l = t * (cos(phi) * r) + b * (sin(phi) * r) + n * sqrt(max(1.0 - v, 0.0));
+            nl = 1.0;
+        }
+        else
+        {
+            float cos2 = (1.0 - v) / (1.0 + (a2 - 1.0) * v);
+            float cos_t = sqrt(cos2);
+            float sin_t = sqrt(max(1.0 - cos2, 0.0));
+            float3 h = t * (cos(phi) * sin_t) + b * (sin(phi) * sin_t) + n * cos_t;
+            l = 2.0 * dot(n, h) * h - n;
+            nl = dot(n, l);
+            if (nl <= 0.0)
+                continue;
+        }
         float2 place = float2(source_inset) + tile_place(l) * (1.0 - 2.0 * source_inset);
         float2 uv = (float2(p.tile) + place) / float(CUBE_TILES);
         sum += source.SampleLevel(g_samplers[SAMPLER_LINEAR_CLAMP], uv, 0.0).rgb * nl;

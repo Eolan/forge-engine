@@ -247,6 +247,10 @@ public struct CellBounds
 static const uint OPTION_RING = 1u << 16;
 // A reflection cube's face (D-108): it takes only what stays, like a ring's static layer.
 static const uint OPTION_CUBE_FACE = 1u << 20;
+// With no probes, a room's ambient light from its cube (D-108, step 4).
+static const uint OPTION_CUBE_AMBIENT = 1u << 21;
+// The near light from the screen (D-108, step 4): `diffuse_bounce` in the resolve's push names it.
+static const uint OPTION_SCREEN_GI = 1u << 22;
 static const uint OPTION_RING_MOVERS = 1u << 17;
 // With OPTION_RING: a ring past the scene's far shadows, whose casters are the far shadow rays' world.
 static const uint OPTION_RING_FAR = 1u << 18;
@@ -4271,6 +4275,8 @@ static float3 g_reflection_tint = float3(1.0);
 // smoothed into the mirror rays' reach (#395) the share they laid, so that a puddle's edge fades
 // from the probes' sky to its ray's.
 static float g_traced_scale = 1.0;
+// The near light from the screen at this pixel (D-108, step 4), over the ambient light.
+static float3 g_screen_near = float3(0.0);
 // The share of its reflection a decal-smoothed pixel's ray must carry to be traced, and from which
 // it carries all of it (#395): a puddle's middle, 1; the edge fades in between.
 static const float DECAL_MIRROR_LEAST = 0.5;
@@ -4964,6 +4970,10 @@ float3 sun_light(Frame* f, float3 albedo, float3 n, float3 geometric, float spec
     float disc = 0.5 * f[0].sun_angular_radius;
     float3 specular = ggx_light(n, view, light, ggx_alpha2(specular_power, disc * disc), reflectance)
         * highlight_share(specular_weight) * (ndl > 0.0 ? shadow : float3(0.0));
+    // A reflection cube's face holds what surfaces send everywhere: a glint is a mirror's, enormous
+    // and aimed, and averaged into a room's light it would colour the room.
+    if ((f[0].options & OPTION_CUBE_FACE) != 0u)
+        specular = float3(0.0);
     float3 sun = f[0].sun_color.rgb;
     // Under a sky: the light the sky and the ground send the normal (issue #47), scaled by
     // how much of it the surface sees (issue #48). With probes, what they measured there
@@ -4990,6 +5000,18 @@ float3 sun_light(Frame* f, float3 albedo, float3 n, float3 geometric, float spec
             if (reflects)
                 sky_share = min(saturate(toward_r / max(open_r, 1e-4)), float3(sky_limit));
         }
+        else if ((f[0].options & OPTION_CUBE_AMBIENT) != 0u)
+        {
+            // No probes: a room's light from its cube (D-108, step 4), the sky's dimmed by it.
+            float4 room = cube_ambient(f, world, n);
+            if (room.a > 0.0)
+            {
+                float3 open_here = irradiance;
+                irradiance = lerp(open_here, room.rgb, room.a);
+                if (reflects)
+                    sky_share = lerp(float3(1.0), saturate(room.rgb / max(open_here, 1e-4)), room.a);
+            }
+        }
         // D-088's reference (`shade_pixel` traced it once): its rays see the occlusion GTAO
         // stood for. The bounce's rays do too, but REBLUR blurs its contacts, a stair's steps into
         // one slope (the owner, 2026-10-30): GTAO stays under it, at their reach
@@ -5001,7 +5023,7 @@ float3 sun_light(Frame* f, float3 albedo, float3 n, float3 geometric, float spec
             if (!g_near_contacts)
                 ao = -1.0;
         }
-        float3 ambient = ao >= 0.0 ? irradiance * occlusion_bounce(ao, albedo) : irradiance;
+        float3 ambient = (ao >= 0.0 ? irradiance * occlusion_bounce(ao, albedo) : irradiance) + g_screen_near;
         if (!reflects)
             return albedo * (diffuse * sun + ambient + g_lamp_diffuse) + specular * sun + g_lamp_specular;
         float3 fresnel;
@@ -6172,7 +6194,9 @@ float3 standard_light(Frame* f, Material mat, Surface s, StandardInputs si)
     float3 lit = sun_light(f, li.albedo, li.n, s.n, li.power, li.specular, averted ? s.shadow * 0.0 : s.shadow, s.sky, li.ao, s.view, li.reflectance, s.world, s.probes, s.traced, ndl) + li.emissive;
     if (si.uv && takes_sun_through(mat))
         lit += leaf_transmission(f, li.albedo, mat.scatter, s);
-    if (si.interior)
+    // A reflection cube's face takes the pane alone: the room behind is lit by the daylight times
+    // more than one, and a cube's ambient would feed back on itself round after round.
+    if (si.interior && (f[0].options & OPTION_CUBE_FACE) == 0u)
     {
         float3 pane = lit;
         // The room behind, seen along the view into the mesh's space.
@@ -8680,6 +8704,31 @@ PixelShading pixel_shading(Frame* f, uint class_index, uint2 pixel, uint vis, fl
     return p;
 }
 
+// The near light at a pixel of view depth `z`: of the four half-resolution texels round it, the
+// one nearest in depth.
+float3 screen_near_at(uint image, uint2 pixel, float z)
+{
+    Texture2D<float4> near_light = g_sampled_images[NonUniformResourceIndex(image)];
+    int2 last = int2(resolve_push.width / 2u, resolve_push.height / 2u) - int2(1);
+    int2 first = int2((int(pixel.x) - 1) >> 1, (int(pixel.y) - 1) >> 1);
+    float3 best = float3(0.0);
+    float nearest = 1e30;
+    for (int y = 0; y <= 1; y++)
+    {
+        for (int x = 0; x <= 1; x++)
+        {
+            float4 t = near_light.Load(int3(clamp(first + int2(x, y), int2(0), last), 0));
+            float apart = abs(t.a - z);
+            if (apart < nearest)
+            {
+                nearest = apart;
+                best = t.rgb;
+            }
+        }
+    }
+    return best;
+}
+
 // Shades the pixel at `pixel` whose (non-empty) visibility id is `vis`, when its material is
 // of class `class_index` (a compile-time constant at every call); `SHADOWS` compiles the
 // shadow ray in (devices with ray queries). Returns the class it has. A grass blade's pixel
@@ -8773,6 +8822,9 @@ uint shade_pixel<let SHADOWS : int>(uint class_index, uint2 pixel, uint vis)
     // D-088's references for the diffuse light (`r.gi.reference`), or its bounce traced before
     // the resolve (`diffuse_trace_main`).
     uint bounce_image = resolve_push.diffuse_bounce;
+    g_screen_near = float3(0.0);
+    if ((f[0].options & OPTION_SCREEN_GI) != 0u && bounce_image != 0xFFFFFFFFu && !grass)
+        g_screen_near = screen_near_at(bounce_image, pixel, mul(f[0].view_proj, float4(surface_relative, 1.0)).w);
     g_near_on = SHADOWS != 0 && f[0].gi_reference != 0u && (s.probes != nullptr || f[0].gi_reference >= GI_REFERENCE_PATH) && s.sky != nullptr && f[0].tlas != 0;
     if (g_near_on)
         g_near_irradiance = near_field_reference(f, s.sky, s.probes, surface_scene, s.n, si.li.n, f[0].gi_reference);
@@ -8787,6 +8839,10 @@ uint shade_pixel<let SHADOWS : int>(uint class_index, uint2 pixel, uint vis)
     // the filtered share of their light that reaches it (`lamp_spread_main`), or with a shadow ray
     // each; the classes take them where they take the sun (`sun_light`).
     lamps_at<SHADOWS>(f, s.probes, surface_scene, is_grass(vis) ? 0u : f[0].instances[instance_index].channels, s.n, si.li.n, s.view, si.li.power, si.li.specular, si.li.reflectance, lamp_start, pixel, resolve_push.lamp_share);
+    // A reflection cube's face keeps no lamp's highlight, the far ones' with the rest (`sun_light`'s
+    // glints): aimed, and averaged into a room's light, it would colour the room.
+    if ((f[0].options & OPTION_CUBE_FACE) != 0u)
+        g_lamp_specular = float3(0.0);
     s.transmitted = float3(0.0);
     s.cloud = 1.0;
     if (SHADOWS != 0 && class_index == MATERIAL_CLASS_ICE && f[0].tlas != 0 && (f[0].flags & FLAG_TRANSLUCENCY) != 0)
@@ -9101,7 +9157,7 @@ float4 screen_reflection(Frame* f, float3 start, float3 n, float3 dir, float rou
 // Mirrors `GpuCube`, `GpuCubeSet`.
 public struct Cube
 {
-    public float4 center; // the point its faces were drawn from, in the scene frame
+    public float4 center; // the point its faces were drawn from, in the scene frame; w: how far it has faded in
     public float4 lo;     // its lowest corner
     public float4 hi;     // its highest corner
     public uint4 tile;    // its tile, in tiles
@@ -9117,17 +9173,89 @@ public struct CubeSet
 
 static const uint CUBE_TILES = 8u;        // `reflection_cubes::CUBE_TILES`
 static const uint CUBE_TILE_TEXELS = 256u;
-static const float CUBE_LAST_LEVEL = 4.0; // `CUBE_LEVELS` - 1
+static const float CUBE_LAST_LEVEL = 4.0; // the roughest that reads a reflection
+static const uint CUBE_DIFFUSE_LEVEL = 5u; // `CUBE_LEVELS` - 1: the diffuse light, by the normal
 static const float CUBE_ROUGHEST = 0.42;  // where a row stops asking for this reflection
 static const float CUBE_PAST_ITS_WALLS = 1.0; // metres a cube is read beyond its volume
+static const uint CUBE_PICKED = 3u;        // cubes blended at a point
+static const float CUBE_STREET_BLEND = 8.0; // metres over which a street cube's weight rises from its walls
 
 // Where direction `d` falls in a tile, as fractions of the tile, the level's texel and a half kept
 // clear of its edge. `cube_prefilter_main` has the same.
 float2 cube_in_tile(float3 d, uint level)
 {
     float2 p = oct_encode(d) * 0.5 + float2(0.5);
-    float inset = 1.5 / float(CUBE_TILE_TEXELS >> level);
+    float inset = 1.0 / float(CUBE_TILE_TEXELS >> level);
     return float2(inset) + p * (1.0 - 2.0 * inset);
+}
+
+// The cubes point `p` is deepest in, up to CUBE_PICKED, and their weights: a room's before a
+// street's whatever their order, so that the room it is in counts most across a wall shared by two.
+// It reaches past its walls a little, for what hangs on them or stands in a doorway. A cube's
+// weight rises over its first half metre inside; a street cube's over CUBE_STREET_BLEND, so that
+// the lightest dropped for a fourth is light and the open sky takes over smoothly where the street
+// cubes end; each by how far it has faded in (`Cube::center.w`); and a street cube's by what the
+// rooms there leave it.
+// `face`: a face being drawn, which counts cubes not yet whole too (they are dark), all at once.
+// `cover`: how much of the point the cubes cover, from their walls and fades, not the street
+// cubes' wider blend: near a street cube's walls the cube still stands for the place, not the sky.
+void cube_pick(CubeSet* set, float3 p, bool face, out uint found[CUBE_PICKED], out float weight[CUBE_PICKED], out float cover)
+{
+    cover = 0.0;
+    float rank[CUBE_PICKED];
+    for (uint k = 0u; k < CUBE_PICKED; k++)
+    {
+        found[k] = set[0].count;
+        weight[k] = 0.0;
+        rank[k] = 0.0;
+    }
+    for (uint i = 0u; i < set[0].count; i++)
+    {
+        Cube c = set[0].cubes[i];
+        if (c.tile.z == 0u && !face)
+            continue;
+        float3 inside = min(p - c.lo.xyz, c.hi.xyz - p) + float3(CUBE_PAST_ITS_WALLS);
+        float edge = min(inside.x, min(inside.y, inside.z));
+        bool room = c.tile.w != 0u;
+        // A street cube fades to the open sky over its outer metres: no line where it ends.
+        float covers = saturate(edge / 0.5) * (room ? 1.0 : saturate(edge / CUBE_STREET_BLEND)) * (face ? 1.0 : c.center.w);
+        cover = max(cover, covers);
+        float w = covers;
+        if (w <= 0.0)
+            continue;
+        float here = w + (room ? 1e4 : 0.0);
+        // In among those kept, the heaviest first.
+        uint at = CUBE_PICKED;
+        for (uint k = 0u; k < CUBE_PICKED; k++)
+        {
+            if (at == CUBE_PICKED && here > rank[k])
+                at = k;
+        }
+        if (at == CUBE_PICKED)
+            continue;
+        for (uint k = CUBE_PICKED - 1u; k > at; k--)
+        {
+            found[k] = found[k - 1u];
+            weight[k] = weight[k - 1u];
+            rank[k] = rank[k - 1u];
+        }
+        found[at] = i;
+        weight[at] = w;
+        rank[at] = here;
+    }
+    // Inside a room its cube is the light: the street cubes' views from outside count only as far
+    // as the rooms leave room for them (they rank after the rooms, so the rooms are all in front).
+    float room_cover = 0.0;
+    for (uint k = 0u; k < CUBE_PICKED; k++)
+    {
+        if (found[k] < set[0].count && set[0].cubes[found[k]].tile.w != 0u)
+            room_cover = max(room_cover, weight[k]);
+    }
+    for (uint k = 0u; k < CUBE_PICKED; k++)
+    {
+        if (found[k] < set[0].count && set[0].cubes[found[k]].tile.w == 0u)
+            weight[k] *= 1.0 - room_cover;
+    }
 }
 
 // What the cubes show a ray from `p` (the scene frame) along `r`: rgb, and how much of the point
@@ -9141,31 +9269,14 @@ float4 cube_light(Frame* f, float3 p, float3 r, float rough)
     float level = saturate(rough / CUBE_ROUGHEST) * CUBE_LAST_LEVEL;
     uint below = uint(floor(level));
     float3 toward = float3(abs(r.x) > 1e-6 ? r.x : 1e-6, abs(r.y) > 1e-6 ? r.y : 1e-6, abs(r.z) > 1e-6 ? r.z : 1e-6);
-    // The two volumes it is deepest in, whatever their order: across a wall shared by two rooms,
-    // the room it is in counts most.
-    uint found[2] = { set[0].count, set[0].count };
-    float depth[2] = { 0.0, 0.0 };
-    for (uint i = 0u; i < set[0].count; i++)
-    {
-        // It reaches past its walls a little: what hangs on them, or stands in a doorway.
-        float3 inside = min(p - set[0].cubes[i].lo.xyz, set[0].cubes[i].hi.xyz - p) + float3(CUBE_PAST_ITS_WALLS);
-        float edge = min(inside.x, min(inside.y, inside.z));
-        if (edge > depth[0])
-        {
-            found[1] = found[0];
-            depth[1] = depth[0];
-            found[0] = i;
-            depth[0] = edge;
-        }
-        else if (edge > depth[1])
-        {
-            found[1] = i;
-            depth[1] = edge;
-        }
-    }
+    // The volumes it is deepest in (`cube_pick`).
+    uint found[CUBE_PICKED];
+    float weight[CUBE_PICKED];
+    float cover;
+    cube_pick(set, p, false, found, weight, cover);
     float3 sum = float3(0.0);
     float total = 0.0;
-    for (uint k = 0u; k < 2u; k++)
+    for (uint k = 0u; k < CUBE_PICKED; k++)
     {
         if (found[k] >= set[0].count)
             continue;
@@ -9177,11 +9288,43 @@ float4 cube_light(Frame* f, float3 p, float3 r, float rough)
         float t = min(far_side.x, min(far_side.y, far_side.z));
         float3 d = normalize(from_inside + r * t - c.center.xyz);
         float2 uv = (float2(c.tile.xy) + cube_in_tile(d, below)) / float(CUBE_TILES);
-        float w = saturate(depth[k] / 0.5);
+        float w = weight[k];
         sum += w * g_sampled_images[NonUniformResourceIndex(set[0].image)].SampleLevel(g_samplers[SAMPLER_LINEAR_CLAMP], uv, level).rgb;
         total += w;
     }
-    return float4(total > 0.0 ? sum / total : float3(0.0), saturate(total));
+    return float4(total > 0.0 ? sum / total : float3(0.0), total > 0.0 ? cover : 0.0);
+}
+
+// A room's light from its cube (D-108, step 4): what the cubes hold for a surface at `p` with
+// normal `n`, rgb in the units of the sky's irradiance; a: how much of the point they cover. A
+// cube's own faces, drawn before it has any light, count a cube not yet whole as dark: its first
+// round is the direct light alone, and the others build on it.
+float4 cube_ambient(Frame* f, float3 p, float3 n)
+{
+    CubeSet* set = f[0].reflection_cubes;
+    if (set == nullptr)
+        return float4(0.0);
+    bool face = (f[0].options & OPTION_CUBE_FACE) != 0u;
+    uint found[CUBE_PICKED];
+    float weight[CUBE_PICKED];
+    float cover;
+    cube_pick(set, p, face, found, weight, cover);
+    float3 sum = float3(0.0);
+    float total = 0.0;
+    for (uint k = 0u; k < CUBE_PICKED; k++)
+    {
+        if (found[k] >= set[0].count)
+            continue;
+        float w = weight[k];
+        Cube c = set[0].cubes[found[k]];
+        if (c.tile.z != 0u)
+        {
+            float2 uv = (float2(c.tile.xy) + cube_in_tile(n, CUBE_DIFFUSE_LEVEL)) / float(CUBE_TILES);
+            sum += w * g_sampled_images[NonUniformResourceIndex(set[0].image)].SampleLevel(g_samplers[SAMPLER_LINEAR_CLAMP], uv, float(CUBE_DIFFUSE_LEVEL)).rgb;
+        }
+        total += w;
+    }
+    return float4(total > 0.0 ? sum / total : float3(0.0), total > 0.0 ? cover : 0.0);
 }
 
 struct CubeFacePush
@@ -9208,7 +9351,7 @@ void cube_face_main(uint3 id : SV_DispatchThreadID)
     CubeFacePush p = cube_face_push;
     if (id.x >= CUBE_TILE_TEXELS || id.y >= CUBE_TILE_TEXELS)
         return;
-    float inset = 1.5 / float(CUBE_TILE_TEXELS);
+    float inset = 1.0 / float(CUBE_TILE_TEXELS);
     float2 in_tile = (float2(id.xy) + float2(0.5)) / float(CUBE_TILE_TEXELS);
     float2 o = saturate((in_tile - float2(inset)) / (1.0 - 2.0 * inset));
     float3 d = oct_decode(o * 2.0 - float2(1.0));
@@ -9235,6 +9378,11 @@ void cube_face_main(uint3 id : SV_DispatchThreadID)
         float3 lit = g_sampled_images[NonUniformResourceIndex(p.colour_image)].SampleLevel(g_samplers[SAMPLER_LINEAR_CLAMP], uv, 0.0).rgb;
         light = lit / max(f[0].sun_illuminance * f[0].exposure / 3.14159265, 1e-9);
     }
+    // What a surface gave back can be under zero in a channel (a tinted glass's reflectance): none
+    // of that goes into a light that is averaged, which would leave only the other channels.
+    if (any(isnan(light)) || any(isinf(light)))
+        light = float3(0.0);
+    light = max(light, float3(0.0));
     uint2 texel = p.tile * CUBE_TILE_TEXELS + id.xy;
     g_storage_images_rgba16f[NonUniformResourceIndex(p.atlas_image)][texel] = float4(light, 1.0);
 }
@@ -9416,6 +9564,12 @@ float mirror_image_distance(float distance, float curvature)
     return distance >= 0.0 ? distance / (1.0 + 2.0 * curvature * distance) : 0.5 / curvature;
 }
 
+// Whether every channel is a finite number.
+bool finite3(float3 v)
+{
+    return !any(isnan(v)) && !any(isinf(v));
+}
+
 // A pixel of a glass tile that asks no ray this frame (a mullion, the sky beside the pane; with
 // TAA's jitter, the pane's edge pixels every other frame) keeps the history it held, moved as the
 // reflection moves, for the frames in which it shows glass again.
@@ -9437,7 +9591,7 @@ void carry_reflection(uint2 pixel)
     if (w <= 1e-9 || any(tap < int2(0, 0)) || any(tap >= int2(size)))
         return;
     float4 stored = previous.Load(int3(tap, 0));
-    if (stored.a <= 0.0)
+    if (!(stored.a > 0.0) || !finite3(stored.rgb))
         return;
     g_storage_images_rgba16f[NonUniformResourceIndex(h[0].next)][pixel] = float4(stored.rgb, min(stored.a / w, 60000.0));
 }
@@ -9490,8 +9644,8 @@ float3 steadied_reflection(ReflectionHistory* h, Frame* f, uint2 pixel, float2 s
             if (any(tap < int2(0, 0)) || any(tap >= int2(size)))
                 continue;
             float4 stored = previous.Load(int3(tap, 0));
-            if (stored.a <= 0.0)
-                continue; // no reflection there, or a mover's
+            if (!(stored.a > 0.0) || !finite3(stored.rgb))
+                continue; // no reflection there, or a mover's (or a value that is no number)
             // Where this pixel's history would be had its point stood at the texel's depth.
             float unused;
             float2 other = previous_uv_of(h, float3(at, depth * expected / stored.a), unused);
@@ -9504,6 +9658,10 @@ float3 steadied_reflection(ReflectionHistory* h, Frame* f, uint2 pixel, float2 s
         if (weight > 1e-3)
             result = lerp(sum / weight, added, lerp(1.0, h[0].blend, saturate(weight)));
     }
+    // What is no number is not kept: blended into, it stays one for good. A NaN a frame's ray
+    // brought back once stood as a bright streak on a tower's glass long after (D-108, step 4).
+    if (!finite3(result))
+        result = finite3(added) ? added : float3(0.0);
     float stored_depth = min(virtual_point.w, 60000.0);
     g_storage_images_rgba16f[NonUniformResourceIndex(h[0].next)][pixel] = float4(result, own ? -stored_depth : stored_depth);
     return result;
