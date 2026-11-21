@@ -887,6 +887,9 @@ struct State<D: Demo> {
     /// patch was last applied: a patched setting changed by hand since puts it back to custom.
     preset: Var<usize>,
     preset_applied: u64,
+    /// How many settings were registered when the preset was last applied: a demo registers its
+    /// own after the first frames, and the preset's patch then lands on them.
+    preset_vars: usize,
     /// `app.window`: windowed or borderless fullscreen, followed each frame.
     window_mode: Var<usize>,
     /// The settings' change count when the window last matched `app.window`: a later change of
@@ -1320,28 +1323,54 @@ impl<D: Demo> State<D> {
 
     /// `r.preset` followed ([`presets`]): a preset chosen sets its patch, as from where the
     /// preset came (the user's file, the menu, the console); a patched setting changed by hand
-    /// since puts the preset back to custom.
+    /// since puts the preset back to custom. A preset in force is applied again when settings
+    /// register (a demo's own, after the first frames): its values that waited for them land
+    /// then, which is no hand's change, and its choice of DLAA or DLSS needs `r.aa` to stand.
     fn apply_preset(&mut self) {
         let s = &mut self.ctx.settings;
         let preset = s.get(self.preset);
-        if s.changed_since(self.preset, self.preset_applied) {
+        let registered = s.vars().count();
+        let grown = std::mem::replace(&mut self.preset_vars, registered) != registered;
+        let chosen = s.changed_since(self.preset, self.preset_applied);
+        if chosen || (grown && preset != presets::CUSTOM) {
             if preset != presets::CUSTOM {
                 let source = s.source(self.preset);
-                for (name, value) in presets::patch(presets::PRESETS[preset]) {
+                // Where the demo renders smaller under DLSS, the preset picks DLAA or DLSS too.
+                let aa = s
+                    .info("r.dlss.mode")
+                    .and_then(|_| s.info("r.aa"))
+                    .map(|v| v.value_text());
+                for (name, value) in presets::patch_at(presets::PRESETS[preset], aa.as_deref()) {
                     if let Err(e) = s.set_text(name, value, source) {
                         tracing::warn!("r.preset {}: {name}: {e}", presets::PRESETS[preset]);
                     }
                 }
-                tracing::info!(preset = presets::PRESETS[preset], "quality preset applied");
+                if chosen {
+                    tracing::info!(preset = presets::PRESETS[preset], "quality preset applied");
+                }
             }
             self.preset_applied = s.changes();
-        } else if preset != presets::CUSTOM
-            && s.vars()
-                .any(|v| presets::is_patched(&v.name) && v.changed > self.preset_applied)
-        {
-            let source = s.source(self.preset);
-            s.set_by(self.preset, presets::CUSTOM, source);
-            self.preset_applied = s.changes();
+        } else if preset != presets::CUSTOM {
+            // A setting the preset sets, changed since: the hand's, not the preset's.
+            let by = s
+                .vars()
+                .find(|v| {
+                    v.changed > self.preset_applied
+                        && (presets::is_patched(&v.name)
+                            || (v.name == "r.aa"
+                                && !presets::aa_kept(presets::PRESETS[preset], &v.value_text())))
+                })
+                .map(|v| v.name.clone());
+            if let Some(by) = by {
+                let source = s.source(self.preset);
+                s.set_by(self.preset, presets::CUSTOM, source);
+                self.preset_applied = s.changes();
+                tracing::info!(
+                    was = presets::PRESETS[preset],
+                    by = %by,
+                    "quality preset back to custom"
+                );
+            }
         }
     }
 
@@ -1976,6 +2005,7 @@ impl<D: Demo> State<D> {
             ambience_sent: 1.0,
             preset,
             preset_applied: 0,
+            preset_vars: 0,
             window_mode,
             window_followed: 0,
             window_width,

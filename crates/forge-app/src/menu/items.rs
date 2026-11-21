@@ -395,13 +395,15 @@ pub fn rows(
 
 fn graphics(settings: &Settings, caps: &Caps, value: &dyn Fn(&str) -> Option<String>) -> Vec<Row> {
     let mut rows = vec![Row::Header("IMAGE")];
-    // The preset: chosen by `r.preset`, setting its patch's names this demo registers.
+    // The preset: chosen by `r.preset`, setting its patch's names this demo registers, and
+    // DLAA or DLSS where the row below stands in NVIDIA's family and the demo renders smaller.
+    let aa = settings.info("r.dlss.mode").and_then(|_| value("r.aa"));
     let preset = presets::PRESETS
         .iter()
         .map(|&p| {
             let mut sets = vec![("r.preset", p.to_owned())];
             sets.extend(
-                presets::patch(p)
+                presets::patch_at(p, aa.as_deref())
                     .iter()
                     .filter(|(n, _)| settings.info(n).is_some())
                     .filter_map(|&(n, v)| settings.canonical(n, v).map(|v| (n, v))),

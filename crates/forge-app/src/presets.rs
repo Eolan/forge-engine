@@ -20,8 +20,9 @@ pub const CUSTOM: usize = 0;
 
 /// What each preset sets, by the renderer's names: the resolution each upscaler renders at,
 /// the ambient occlusion, the mirror rays, the local exposure and the clusters' error on screen.
-/// `r.aa` is left as the device decided it (DLAA where DLSS runs, else FSR); the modes below it
-/// make DLSS and FSR draw smaller alike, so either path takes the same step.
+/// `r.aa` keeps the family the device or the player chose (NVIDIA's where DLSS runs, else FSR),
+/// and within NVIDIA's a preset picks DLAA or DLSS ([`patch_at`]): `r.dlss.mode` counts under
+/// `dlss` alone, so that DLSS and FSR draw smaller alike and either path takes the same step.
 pub const PATCHES: &[(&str, &[(&str, &str)])] = &[
     (
         "low",
@@ -82,6 +83,40 @@ pub fn is_patched(name: &str) -> bool {
     PATCHES
         .iter()
         .any(|(_, patch)| patch.iter().any(|(n, _)| *n == name))
+}
+
+/// `r.aa`'s choice for `preset` within NVIDIA's family: `dlaa` for ultra, the image at the
+/// window's size, and `dlss` for the others, which render smaller by their `r.dlss.mode`. `None`
+/// for custom or an unknown name. Until 2026-11-21 a preset left DLAA as it was, where
+/// `r.dlss.mode` counts for nothing: on an RTX GPU low, medium and high drew at the window's
+/// size (the village's street on an RTX 5060 Laptop GPU at 1600 x 900: 19.5 ms a frame with
+/// low, 20.4 with none, 14.0 once it upscaled).
+pub fn dlss_family(preset: &str) -> Option<&'static str> {
+    match preset {
+        "ultra" => Some("dlaa"),
+        "low" | "medium" | "high" => Some("dlss"),
+        _ => None,
+    }
+}
+
+/// What `preset` sets with the anti-aliasing at `aa` (`r.aa` as it stands, `None` for a demo
+/// that renders no smaller under DLSS: it registers no `r.dlss.mode`): its patch and, where `aa`
+/// is NVIDIA's (`dlaa` or `dlss`), which of the two ([`dlss_family`]). Under FSR, whose own mode
+/// is in the patch, or with no anti-aliasing, `r.aa` stays: a preset changes no family.
+pub fn patch_at(preset: &str, aa: Option<&str>) -> Vec<(&'static str, &'static str)> {
+    let mut patch = patch(preset).to_vec();
+    if matches!(aa, Some("dlaa" | "dlss"))
+        && let Some(family) = dlss_family(preset)
+    {
+        patch.push(("r.aa", family));
+    }
+    patch
+}
+
+/// Whether `r.aa` at `aa` is as `preset` leaves it ([`patch_at`]): any value outside NVIDIA's
+/// family, and the preset's own choice within it.
+pub fn aa_kept(preset: &str, aa: &str) -> bool {
+    !matches!(aa, "dlaa" | "dlss") || dlss_family(preset).is_none_or(|family| family == aa)
 }
 
 /// What the first launch found about the machine, before a device is made of its GPU: what its
@@ -256,5 +291,39 @@ mod tests {
         assert!(patch("nothing").is_empty());
         assert!(!is_patched("r.aa"));
         assert_eq!(PRESETS[CUSTOM], "custom");
+    }
+
+    /// Within NVIDIA's family a preset picks DLAA or DLSS, so that its `r.dlss.mode` counts;
+    /// under FSR, with no anti-aliasing, or in a demo that renders no smaller, `r.aa` stays.
+    #[test]
+    fn a_preset_picks_dlaa_or_dlss_within_nvidias_family() {
+        let aa = |preset: &str, at: Option<&str>| {
+            patch_at(preset, at)
+                .into_iter()
+                .find(|(name, _)| *name == "r.aa")
+                .map(|(_, value)| value)
+        };
+        for at in ["dlaa", "dlss"] {
+            assert_eq!(aa("ultra", Some(at)), Some("dlaa"));
+            for preset in ["low", "medium", "high"] {
+                assert_eq!(aa(preset, Some(at)), Some("dlss"), "{preset} from {at}");
+            }
+            assert_eq!(aa("custom", Some(at)), None);
+        }
+        for preset in &PRESETS[1..] {
+            for at in [Some("fsr"), Some("off"), None] {
+                assert_eq!(aa(preset, at), None, "{preset} at {at:?}");
+                assert_eq!(patch_at(preset, at), patch(preset));
+            }
+            // The rest of the patch is the preset's, whatever the family.
+            assert_eq!(
+                patch_at(preset, Some("dlaa"))[..patch(preset).len()],
+                *patch(preset)
+            );
+        }
+        // A hand's change of `r.aa` keeps the preset outside the family or at its own choice.
+        assert!(aa_kept("low", "fsr") && aa_kept("low", "off") && aa_kept("low", "dlss"));
+        assert!(!aa_kept("low", "dlaa") && !aa_kept("ultra", "dlss") && aa_kept("ultra", "dlaa"));
+        assert!(aa_kept("custom", "dlaa") && aa_kept("custom", "dlss"));
     }
 }

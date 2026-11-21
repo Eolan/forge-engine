@@ -556,10 +556,15 @@ impl Menu {
         let Some(preset) = self.draft.value(settings, "r.preset") else {
             return;
         };
-        let kept = crate::presets::patch(&preset).iter().all(|(name, value)| {
-            settings.info(name).is_none()
-                || self.draft.value(settings, name) == settings.canonical(name, value)
-        });
+        let aa = settings
+            .info("r.dlss.mode")
+            .and_then(|_| self.draft.value(settings, "r.aa"));
+        let kept = crate::presets::patch_at(&preset, aa.as_deref())
+            .iter()
+            .all(|(name, value)| {
+                settings.info(name).is_none()
+                    || self.draft.value(settings, name) == settings.canonical(name, value)
+            });
         if !kept {
             self.draft.set(settings, "r.preset", "custom");
         }
@@ -1159,6 +1164,56 @@ mod tests {
         assert_eq!(value_of(&menu, &s, "Quality preset"), "Custom");
         assert_eq!(value_of(&menu, &s, "Level of detail"), "High (1 px)");
         assert!(!menu.draft.is_dirty(&s));
+    }
+
+    /// Where the scene renders smaller under DLSS, a preset picks DLAA or DLSS with its mode
+    /// (`presets::patch_at`): low upscales, ultra is DLAA, DLAA chosen by hand under low makes the
+    /// preset custom, and under FSR a preset leaves the family alone.
+    #[test]
+    fn a_preset_picks_dlaa_or_dlss_and_leaves_fsr_alone() {
+        const AA: &str = "Anti-aliasing and upscaling";
+        let mut s = settings();
+        s.add(Spec::choice(
+            "r.dlss.mode",
+            &["quality", "balanced", "performance", "ultra-performance"],
+            0,
+            "dlss",
+        ));
+        s.add(Spec::choice(
+            "r.fsr.mode",
+            &[
+                "native",
+                "quality",
+                "balanced",
+                "performance",
+                "ultra-performance",
+            ],
+            0,
+            "fsr",
+        ));
+        let mut menu = menu_on(Tab::Graphics);
+        assert_eq!(value_of(&menu, &s, AA), "DLAA");
+        focus_on(&mut menu, &mut s, "Quality preset");
+        menu.key(KeyCode::ArrowRight, &mut s);
+        assert_eq!(value_of(&menu, &s, "Quality preset"), "Low");
+        assert_eq!(value_of(&menu, &s, AA), "DLSS Performance");
+        // Ultra, three presets on, is the image at the window's size.
+        for _ in 0..3 {
+            menu.key(KeyCode::ArrowRight, &mut s);
+        }
+        assert_eq!(value_of(&menu, &s, "Quality preset"), "Ultra");
+        assert_eq!(value_of(&menu, &s, AA), "DLAA");
+        // DLSS Quality by hand is not ultra's.
+        focus_on(&mut menu, &mut s, AA);
+        menu.key(KeyCode::ArrowRight, &mut s);
+        assert_eq!(value_of(&menu, &s, AA), "DLSS Quality");
+        assert_eq!(value_of(&menu, &s, "Quality preset"), "Custom");
+        // Under FSR a preset sets FSR's mode and changes no family.
+        menu.draft.set(&s, "r.aa", "fsr");
+        focus_on(&mut menu, &mut s, "Quality preset");
+        menu.key(KeyCode::ArrowRight, &mut s);
+        assert_eq!(value_of(&menu, &s, "Quality preset"), "Low");
+        assert_eq!(value_of(&menu, &s, AA), "FSR Performance");
     }
 
     #[test]

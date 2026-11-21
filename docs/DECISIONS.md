@@ -8778,6 +8778,47 @@ an override used to drop the line at the next write), and a scripted run (a fram
 capture) never reads or writes it, whatever `FORGE_CFG` says. The graphics page became a
 settings screen of three pages.
 
+**Amended (2026-11-21): two faults of the presets, found the first time they ran on an RTX GPU**
+(the laptop's RTX 5060; the presets were written where no demo ran).
+
+- **A preset drew no smaller under DLSS.** `r.dlss.mode` counts with `r.aa dlss` alone, and a
+  preset left `r.aa` at the device's DLAA: low, medium and high drew at the window's size. A
+  preset now picks within NVIDIA's family (`presets::patch_at`): ultra DLAA, the others DLSS at
+  their mode. Under FSR, whose mode the patch already set, with no anti-aliasing, or in a demo
+  that renders no smaller, `r.aa` stays: a preset changes no family. DLAA or DLSS chosen by hand
+  against the preset's makes it custom, as any of its settings does.
+- **A preset chosen before the demo registered its settings went back to custom.** The shell
+  applies a preset on the first frame; a demo registers its settings after loading; the
+  preset's values that waited for them landed then and were read as a hand's changes. So a
+  preset from `--set`, from the user's file or from the first launch showed as Custom, its
+  values kept. A preset in force is now applied again when settings register, which is also
+  when its choice of DLAA or DLSS can be made. The log says which setting puts a preset back
+  to custom.
+- **Measured** (the village's street at 18:00, 1600 x 900, the frame's GPU time on the RTX 5060
+  Laptop GPU):
+
+  | | Before | After | `shading/standard` after |
+  |---|---|---|---|
+  | No preset (DLAA) | 20.4 ms | 20.4 ms | 4.9 ms |
+  | Ultra | 20.5 ms | 20.6 ms (DLAA) | 5.0 ms |
+  | High | 20.5 ms | 15.9 ms (DLSS Quality) | 2.3 ms |
+  | Medium | 20.4 ms | 14.8 ms (DLSS Balanced) | 1.8 ms |
+  | Low | 19.5 ms | 13.9 ms (DLSS Performance) | 1.4 ms |
+  | Low under FSR | 11.6 ms | 11.5, 11.8 ms (as before: FSR Performance) | 1.3, 1.4 ms |
+  | Low, no anti-aliasing | 16.4 ms | 16.6, 16.6 ms (left off) | 4.6, 4.7 ms |
+  | Medium without rays (this laptop's first launch, D-111) | 14.3 ms | 9.1 ms | 1.3 ms |
+
+  What is left of a frame under DLSS is the probes' rays (6.8 ms), which do not follow the
+  render size. One batch of runs to another, the laptop's frames move by up to 0.8 ms as it
+  warms: the two rows that do not change were run twice more, back to back.
+- **Who it changes:** a user's file holding high, medium or low on an RTX GPU draws smaller from
+  its next start, as its preset says. Ultra (the first launch's choice from 12 GB) and custom
+  (every scripted run and capture) are as before.
+- **Checks:** unit tests of the choice per preset and family, and of the menu (low upscales,
+  ultra is DLAA, DLSS Quality by hand under ultra makes it custom, a preset under FSR keeps
+  FSR); the runs above; with the second fix taken out, the log shows low going back to custom
+  by `r.ao` and the frame at 19.5 ms.
+
 ## D-082 — AMD's FSR DLLs wherever the system has them (FSR 4 on AMD's cards), Forge's FSR 3.1 elsewhere ✅ (the owner's go, 2026-10-29, #361)
 
 **The owner, the same morning:** "We should probably adopt the FSR dlls if available on the
