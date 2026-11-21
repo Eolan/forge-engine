@@ -11228,6 +11228,25 @@ the effort to cell streaming).
 cut-outs' raster from the instances it had at its start. A streamed district has none then, so its grilles, fences and leaves
 drew solid. It now takes that raster whenever its table has a cut-out row.
 
+**Amended (2026-11-21, #404): a cell that fails part way gives back what it had added.** A `CellSource::load` that fails after
+adding meshes or instances left them in the edit: published, and in no cell's record, so nothing ever took them out. Their room
+and their pinned roots were lost until the scene was built anew.
+
+- **The editor marks an edit** (`SceneEditor::mark`) and takes out what it added since (`give_back`): the instances, then the
+  meshes, by the removals it already has. They are published and leave by the same edit, on no frame shown, and their room comes
+  back as any removed mesh's does, `FRAMES_IN_FLIGHT + 1` frames later. A mark gives back once, and nothing after its edit.
+- **The streamer marks before each cell's load.** On a failure it tells the source the cell is out (`unload`, for the meshes
+  it shares: a source now hears of a cell it may hold nothing for), then gives back the rest of that load.
+- **Not a rollback before publishing,** which would be cheaper: a small mesh's shared page (#387) emptied by one would need the
+  frames to release it, and the removals already do that.
+- **The tree did hit it,** unlike the issue's reading: the lab's cells add their props one instance at a time, so a cell out of
+  instance room stranded those before it.
+- **Checked:** a GPU test of the editor (the tables' entries, the root pages' room and the shared page are back after the
+  frames in flight; what the edit added before the mark stays), and one of the streamer's worker with a source that fails after
+  two meshes and two instances, alone and beside a cell sharing one of them; that test fails without the fix. In the lab
+  (`FORGE_DYNAMIC_SCENE=cells`, 8,000 props a cell, past its 200,000 instances): 32 cells fail over 400 frames, each giving back
+  up to 7,503 instances, with no validation error; at 4 props a cell none fails.
+
 ## D-097 — A rasterised mode lit by precomputed transfer: relit probes in sparse bricks ✅ (proposed 2026-11-01; the owner's go the same day; D-094, D-095, D-096)
 
 **Why:** D-094's amendment holds Forge to the shipped city game's benchmark mode for mode, its

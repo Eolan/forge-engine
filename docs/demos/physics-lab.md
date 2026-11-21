@@ -2750,6 +2750,12 @@ pages streamed:
     The frames' side of an edit (`apply` and the cells' sets) takes 0.01 to 0.03 ms at either
     scale. `FORGE_CELL_REALTIME` takes the edits as a game would, one a frame at most and
     unwaited: 50 edits over 400 frames, 37 cells in at the end.
+  - **Past the scene's room** (#404, 2026-11-21): at 8,000 props a cell the cells in ask for
+    more than the 200,000 instances. A cell that runs out part way gives back what it had added
+    (`SceneEditor::give_back`) and stays empty until it leaves: 32 cells fail over the 400 frames
+    (`FORGE_CELL_PROXIES=0`), the first after 7,503 of its instances, all of them taken out by
+    the edit that would have brought them. Before, they stayed in the scene with no cell to take
+    them out. A validated run is clean.
 
 ## Impacts by material (Phase 7)
 

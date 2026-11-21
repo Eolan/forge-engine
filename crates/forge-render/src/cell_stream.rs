@@ -52,7 +52,9 @@ pub struct LoadedCell {
 /// A game's cells, made on the streamer's worker.
 pub trait CellSource: Send + 'static {
     /// Adds cell `cell`'s meshes and instances through `editor` and says what it added. A cell
-    /// that fails is left empty (the error logged) until it unloads.
+    /// that fails is left empty (the error logged) until it unloads: what it had added before
+    /// failing is taken out by the same edit ([`SceneEditor::give_back`], #404), after the source
+    /// was told the cell is out ([`Self::unload`]).
     fn load(&mut self, cell: CellId, editor: &mut SceneEditor) -> Result<LoadedCell>;
 
     /// Adds cell `cell`'s proxy (D-077), what stands in for it past its content's reach: one mesh
@@ -66,7 +68,9 @@ pub trait CellSource: Send + 'static {
 
     /// Cell `cell` has left, at either detail: its instances and its own meshes are out. A source
     /// sharing meshes between cells releases the cell's ([`SharedMeshes::release`]) and takes out
-    /// through `editor` those no cell uses any more. Nothing by default.
+    /// through `editor` those no cell uses any more. Nothing by default. Also told of a cell whose
+    /// load just failed (#404), so of a cell it may hold nothing for: once after a cell swapping
+    /// details left, and again if what it swapped to failed.
     fn unload(&mut self, cell: CellId, editor: &mut SceneEditor) {
         let _ = (cell, editor);
     }
@@ -580,6 +584,7 @@ impl<P: Partition, S: CellSource> Worker<P, S> {
                 unloaded.push(cell);
                 swapped += 1;
             }
+            let mark = self.editor.mark();
             let made = match detail {
                 Detail::Full => self.source.load(cell, &mut self.editor),
                 Detail::Proxy => self.source.load_proxy(cell, &mut self.editor),
@@ -596,7 +601,20 @@ impl<P: Partition, S: CellSource> Worker<P, S> {
                     );
                     loaded.push((cell, detail, cell_in.sets));
                 }
-                Err(e) => tracing::warn!(?cell, ?detail, "a streamed cell not made: {e}"),
+                Err(e) => {
+                    // What it added before failing has no one to take it out (#404): the source
+                    // lets go of what it holds for the cell (the meshes it shares), then the rest
+                    // of this load leaves by the edit that would have brought it.
+                    self.source.unload(cell, &mut self.editor);
+                    let (instances, meshes) = self.editor.give_back(mark);
+                    tracing::warn!(
+                        ?cell,
+                        ?detail,
+                        instances,
+                        meshes,
+                        "a streamed cell not made, what it had added taken out: {e}"
+                    );
+                }
             }
         }
         let pieces = match refresh {
@@ -669,5 +687,141 @@ mod tests {
         );
         assert!(shared.is_empty());
         assert_eq!(shared.release(a), Vec::<u32>::new());
+    }
+
+    /// A source whose cells each add a mesh they share, a mesh of their own and an instance of
+    /// each, and whose cell `fail` then fails.
+    struct FailsPartWay {
+        mesh: forge_geom::MeshletMesh,
+        shared: SharedMeshes,
+        fail: CellId,
+    }
+
+    impl CellSource for FailsPartWay {
+        fn load(&mut self, cell: CellId, editor: &mut SceneEditor) -> Result<LoadedCell> {
+            let rays = crate::meshlet::MeshRays {
+                budget: 0,
+                error: 0.0,
+                terrain: false,
+            };
+            let mesh = &self.mesh;
+            let shared = self
+                .shared
+                .acquire(cell, 1, || editor.add_mesh(mesh, rays))?;
+            let own = editor.add_mesh(mesh, rays)?;
+            let mut place = |mesh| {
+                editor.add_instance_at(
+                    mesh,
+                    crate::CellPos::from_f64(DVec3::new(cell.xy().0 as f64 * 4.0, 0.0, 0.0)),
+                    glam::Quat::IDENTITY,
+                    1.0,
+                    forge_core::material::MaterialId(0),
+                )
+            };
+            let instances = vec![place(shared)?, place(own)?];
+            if cell == self.fail {
+                return Err(GpuError::Unsupported("its third piece".into()));
+            }
+            Ok(LoadedCell {
+                instances,
+                meshes: vec![own],
+                sets: CellSets::default(),
+            })
+        }
+
+        fn unload(&mut self, cell: CellId, editor: &mut SceneEditor) {
+            for mesh in self.shared.release(cell) {
+                editor.remove_mesh(mesh);
+            }
+        }
+    }
+
+    /// A GPU test (`FORGE_GPU_TESTS=1`, #404): a cell that fails after adding two meshes and two
+    /// instances strands none of them. The edit that would have brought them takes them out, the
+    /// cell is not in, and its source holds nothing for it: a mesh it alone shared goes, one
+    /// another cell shares stays, with that cell's own.
+    #[test]
+    fn a_cell_that_fails_part_way_strands_nothing() {
+        let Some(gpu) = forge_gpu::Headless::for_test(forge_gpu::headless::shaders_of(env!(
+            "CARGO_MANIFEST_DIR"
+        ))) else {
+            return;
+        };
+        let mesh = forge_geom::MeshletMesh::build(&forge_geom::procedural::asteroid(
+            forge_core::Seed::new(7),
+            8,
+            1.0,
+            0.3,
+        ));
+        let mut builder = crate::MeshletSceneBuilder::new();
+        let base = builder.add_mesh(&mesh);
+        builder.add_instance(base, glam::Mat4::IDENTITY);
+        builder.set_material_rows(vec![crate::material::GpuMaterial::uv_test_row([0.0; 3])]);
+        builder.set_ray_traced(false);
+        builder.reserve_dynamic(crate::meshlet::DynamicCapacity {
+            meshes: 16,
+            instances: 32,
+            meshlets: 16 * mesh.meshlets.len() as u32,
+            pages: 16 * mesh.page_count + 4,
+            ray_vertices: 0,
+            ray_triangles: 0,
+        });
+        let mut scene = builder
+            .build_with(
+                &gpu.device,
+                crate::Residency::Streamed(crate::StreamingConfig::from_mib(64, 8)),
+            )
+            .unwrap();
+        let editor = scene
+            .editor(&gpu.device, &gpu.shaders)
+            .unwrap()
+            .expect("a dynamic scene's editor");
+        let (good, bad) = (CellId::flat(4, 0, 0), CellId::flat(4, 1, 0));
+        let mut worker = Worker {
+            editor,
+            source: FailsPartWay {
+                mesh,
+                shared: SharedMeshes::default(),
+                fail: bad,
+            },
+            partition: forge_world::FlatGrid { root_size: 1024.0 },
+            config: CellStreamConfig {
+                policy: StreamPolicy::default(),
+                cells_per_edit: 4,
+            },
+            residency: Residency::new(),
+            live: HashMap::new(),
+            loads: VecDeque::new(),
+            unloads: VecDeque::new(),
+        };
+        // Alone: both its meshes and both its instances come and go by its edit, the mesh it
+        // would have shared taken out by its source.
+        worker.loads.push_back((bad, Detail::Full));
+        let batch = worker.batch(None).unwrap().expect("an edit");
+        assert!(batch.loaded.is_empty() && worker.live.is_empty());
+        assert_eq!(batch.edit.meshes_added(), 2);
+        assert_eq!(batch.edit.removed(), (2, 2));
+        assert!(worker.source.shared.is_empty());
+        scene.apply(batch.edit).unwrap();
+        // With a cell that holds the shared mesh: the failed cell's own mesh and its instances
+        // go, the shared mesh stays, and the good cell is in with what it added.
+        worker.loads.push_back((good, Detail::Full));
+        worker.loads.push_back((bad, Detail::Full));
+        let batch = worker.batch(None).unwrap().expect("an edit");
+        assert_eq!(batch.loaded.len(), 1);
+        assert_eq!(batch.edit.meshes_added(), 3);
+        assert_eq!(batch.edit.removed(), (2, 1));
+        assert_eq!(worker.source.shared.len(), 1);
+        let live = &worker.live[&good];
+        assert_eq!((live.instances.len(), live.meshes.len()), (2, 1));
+        assert!(!worker.live.contains_key(&bad));
+        scene.apply(batch.edit).unwrap();
+        // The good cell leaving takes the rest out: nothing of either cell is left to take.
+        worker.unloads.push_back(good);
+        let batch = worker.batch(None).unwrap().expect("an edit");
+        assert_eq!(batch.edit.removed(), (2, 2));
+        assert!(worker.live.is_empty() && worker.source.shared.is_empty());
+        scene.apply(batch.edit).unwrap();
+        gpu.finish().expect("no validation error");
     }
 }

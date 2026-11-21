@@ -786,6 +786,8 @@ pub struct SceneEditor {
     movers: std::ops::Range<u32>,
     /// Per mesh slot of the build, whether a mover shows it or it is skinned: no edit removes it.
     held: Vec<bool>,
+    /// The edits finished so far: an [`EditMark`] is of one edit.
+    edits: u64,
     /// The edit in progress.
     new_meshes: Vec<NewMesh>,
     added: Vec<u32>,
@@ -809,6 +811,14 @@ pub struct SceneEditor {
     /// The fades the edit in progress sets, which [`Self::finish`] writes: into slots no frame
     /// reads, as a slot comes back only once the frames that showed it are done.
     pending_fades: Vec<(u32, GpuInstanceFade)>,
+}
+
+/// Where an edit in progress stood ([`SceneEditor::mark`]): what it had added by then.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct EditMark {
+    edit: u64,
+    meshes: usize,
+    instances: usize,
 }
 
 /// An edit [`SceneEditor::finish`] made, for [`MeshletScene::apply`].
@@ -837,6 +847,12 @@ impl SceneEdit {
     /// Meshes it brings.
     pub fn meshes_added(&self) -> usize {
         self.meshes.len()
+    }
+
+    /// The instances and the meshes it takes out, those it brings itself among them
+    /// ([`SceneEditor::give_back`]).
+    pub fn removed(&self) -> (usize, usize) {
+        (self.removed_instances.len(), self.removed_meshes.len())
     }
 }
 
@@ -1347,6 +1363,68 @@ impl SceneEditor {
         self.removed_meshes.push(mesh.0);
     }
 
+    /// Marks the edit in progress: what it adds from here on can be given back
+    /// ([`Self::give_back`]).
+    pub fn mark(&self) -> EditMark {
+        EditMark {
+            edit: self.edits,
+            meshes: self.new_meshes.len(),
+            instances: self.added.len(),
+        }
+    }
+
+    /// Takes out what the edit in progress added since `mark` and still holds: the instances,
+    /// then the meshes, as [`Self::remove_instance`] and [`Self::remove_mesh`] do, an instance
+    /// promoted since demoted where it stands first. For a load that failed part way (#404): what
+    /// it had added would be published with no one left to take it out, its room and its pinned
+    /// roots lost until the scene is built anew. They are published and leave by the same edit, on
+    /// no frame shown, and their room comes back as any removed mesh's does, `FRAMES_IN_FLIGHT + 1`
+    /// frames later. Returns how many instances and meshes it took out: none for a mark of an
+    /// edit since finished.
+    pub fn give_back(&mut self, mark: EditMark) -> (usize, usize) {
+        if mark.edit != self.edits {
+            return (0, 0);
+        }
+        let instances: Vec<u32> = self
+            .added
+            .iter()
+            .skip(mark.instances)
+            .copied()
+            .filter(|&i| self.instances[i as usize].flags & INSTANCE_VACANT == 0)
+            .collect();
+        for &instance in &instances {
+            let mover = self
+                .promoted
+                .iter()
+                .find(|&(_, &(i, _))| i == instance)
+                .map(|(&mover, _)| mover);
+            if let Some(mover) = mover {
+                let record = self.instances[instance as usize];
+                self.demote(
+                    mover,
+                    CellPos {
+                        cell: IVec3::from_array(record.cell),
+                        local: Vec3::from_array(record.local),
+                    },
+                    Quat::from_array(record.rotation),
+                    record.scale,
+                );
+            }
+            self.remove_instance(instance);
+        }
+        let meshes: Vec<u32> = self
+            .new_meshes
+            .iter()
+            .skip(mark.meshes)
+            .map(|m| m.slot)
+            .filter(|&slot| self.mesh_records[slot as usize].is_some())
+            .collect();
+        for &mesh in &meshes {
+            self.remove_mesh(MeshId(mesh));
+        }
+        (instances.len(), meshes.len())
+    }
+
     /// Panics when `instance` is a mover's slot.
     fn assert_not_mover(&self, instance: u32) {
         assert!(
@@ -1360,6 +1438,8 @@ impl SceneEditor {
     /// frames take it in with [`MeshletScene::apply`].
     pub fn finish(&mut self, view: Option<&StartView>) -> Result<SceneEdit> {
         let device = Arc::clone(&self.device);
+        // The marks of this edit are of an edit gone ([`Self::give_back`]).
+        self.edits += 1;
         let new_meshes = std::mem::take(&mut self.new_meshes);
         // Their structures, in one submission.
         let mut blases: Vec<Option<AccelerationStructure>> = Vec::new();
@@ -1770,6 +1850,7 @@ impl MeshletScene {
             pack: !std::env::var("FORGE_NO_PAGE_PACKING").is_ok_and(|v| v != "0"),
             movers,
             held,
+            edits: 0,
             new_meshes: Vec::new(),
             modified: Vec::new(),
             moved_from: Vec::new(),
@@ -2112,5 +2193,136 @@ mod tests {
             vec![(1, 3.0), (2, 3.0), (3, 3.0)]
         );
         assert!(preload_order(&[0.0; 4], &parents, 1).is_empty());
+    }
+
+    /// A GPU test (`FORGE_GPU_TESTS=1`, #404): what an edit added since a mark is given back,
+    /// what it added before stays, a mark gives back once and never after its edit; and the room
+    /// is back once the frames that could have read it are done: the tables' entries, the root
+    /// pages' room and the page a small mesh shared.
+    #[test]
+    fn what_an_edit_added_since_a_mark_is_given_back() {
+        let Some(gpu) = forge_gpu::Headless::for_test(forge_gpu::headless::shaders_of(env!(
+            "CARGO_MANIFEST_DIR"
+        ))) else {
+            return;
+        };
+        let rock = |seed, detail| {
+            MeshletMesh::build(&forge_geom::procedural::asteroid(
+                forge_core::Seed::new(seed),
+                detail,
+                1.0,
+                0.3,
+            ))
+        };
+        let (small, large) = (rock(7, 8), rock(9, 96));
+        let mut builder = MeshletSceneBuilder::new();
+        let base = builder.add_mesh(&small);
+        builder.add_instance(base, Mat4::IDENTITY);
+        builder.set_material_rows(vec![GpuMaterial::uv_test_row([0.0; 3])]);
+        builder.set_ray_traced(false);
+        builder.reserve_dynamic(DynamicCapacity {
+            meshes: 8,
+            instances: 16,
+            meshlets: 4 * (small.meshlets.len() + large.meshlets.len()) as u32,
+            pages: 4 * (small.page_count + large.page_count) + 4,
+            ray_vertices: 0,
+            ray_triangles: 0,
+        });
+        let mut scene = builder
+            .build_with(
+                &gpu.device,
+                Residency::Streamed(crate::StreamingConfig::from_mib(64, 8)),
+            )
+            .unwrap();
+        let mut editor = scene
+            .editor(&gpu.device, &gpu.shaders)
+            .unwrap()
+            .expect("a dynamic scene's editor");
+        let rays = MeshRays {
+            budget: 0,
+            error: 0.0,
+            terrain: false,
+        };
+        // The entries taken of each table, the root pages' room and the shared pages.
+        let room = |editor: &SceneEditor| {
+            let room = editor.room.lock().unwrap();
+            (
+                [
+                    room.meshes.taken(),
+                    room.instances.taken(),
+                    room.meshlets.taken(),
+                    room.pages.taken(),
+                ],
+                room.root_room,
+                room.shared.len(),
+            )
+        };
+        let place = |editor: &mut SceneEditor, mesh, x: f64| {
+            editor
+                .add_instance_at(
+                    mesh,
+                    CellPos::from_f64(glam::DVec3::new(x, 0.0, 0.0)),
+                    Quat::IDENTITY,
+                    1.0,
+                    MaterialId(0),
+                )
+                .unwrap()
+        };
+        // The instances the build left in the scene.
+        let built = scene
+            .dynamic
+            .as_ref()
+            .unwrap()
+            .instances
+            .iter()
+            .flatten()
+            .count();
+        // Added before the mark: it stays.
+        let kept = place(&mut editor, base, 2.0);
+        let before = room(&editor);
+        let mark = editor.mark();
+        let a = editor.add_mesh(&small, rays).unwrap();
+        let b = editor.add_mesh(&large, rays).unwrap();
+        place(&mut editor, a, 4.0);
+        place(&mut editor, b, 6.0);
+        place(&mut editor, base, 8.0);
+        // One its source took out itself: it is not taken out twice.
+        let gone = place(&mut editor, a, 5.0);
+        editor.remove_instance(gone);
+        assert_ne!(room(&editor), before, "the load took room");
+        assert_eq!(editor.give_back(mark), (3, 2));
+        assert_eq!(
+            editor.give_back(mark),
+            (0, 0),
+            "nothing is given back twice"
+        );
+        let edit = editor.finish(None).unwrap();
+        assert_eq!(
+            edit.meshes_added(),
+            2,
+            "they are published and leave by the same edit"
+        );
+        assert_eq!(edit.removed(), (4, 2));
+        // A mark of an edit since finished gives nothing back, whatever the next one added.
+        let later = place(&mut editor, base, 10.0);
+        assert_eq!(editor.give_back(mark), (0, 0));
+        let next = editor.finish(None).unwrap();
+        scene.apply(edit).unwrap();
+        scene.apply(next).unwrap();
+        for frame in 1..=FRAMES_IN_FLIGHT as u64 + 3 {
+            scene.begin_dynamic_frame(frame);
+        }
+        // The room as before the load, but for the instance the next edit added.
+        let (mut tables, roots, shared) = before;
+        tables[1] += 1;
+        assert_eq!(room(&editor), (tables, roots, shared));
+        let live = &scene.dynamic.as_ref().unwrap().instances;
+        assert!(live[kept as usize].is_some() && live[later as usize].is_some());
+        assert_eq!(
+            live.iter().flatten().count(),
+            built + 2,
+            "the load's instances are out"
+        );
+        gpu.finish().expect("no validation error");
     }
 }

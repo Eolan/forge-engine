@@ -44,7 +44,7 @@ mod pick;
 pub(crate) use feedback::{NEED_BIAS, NO_WANT};
 pub use pick::{MAX_PICKS, Picked, PickedInstance, PickedWhat};
 mod static_edits;
-pub use dynamic::{DynamicCapacity, InstanceFadeEdge, MeshRays, SceneEdit, SceneEditor};
+pub use dynamic::{DynamicCapacity, EditMark, InstanceFadeEdge, MeshRays, SceneEdit, SceneEditor};
 
 /// Culling flags, mirrored in `meshlet.slang`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
