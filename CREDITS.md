@@ -549,6 +549,13 @@ soft edges, their pixel-wide minimum, their reactive mask and their hash:
 - **The near light from the screen (D-108):** Olivier Therrien, Yannick Levesque, Guillaume Gilet, "Screen Space Indirect
   Lighting with Visibility Bitmask", *The Visual Computer* 39(11), 2023 (arXiv:2301.11376), written here from the paper. A
   cube's diffuse level is the cosine-weighted hemisphere, sampled by Malley's method over Hammersley points.
+- **The light the city leaves a surface (D-108 step 6):** rays marched against a height field, as F. Kenton Musgrave's "Grid
+  Tracing: Fast Ray Tracing for Height Fields" (Yale University, 1988) first did, here in steps that lengthen with the distance
+  and a crossing found by halving, written here from the idea; cosine-weighted directions by Malley's method; the open sky's
+  irradiance kept as the known part, only the blocked directions' difference from it estimated (a control variate, a textbook
+  Monte Carlo method); interleaved gradient noise for the directions' turn (Jorge Jimenez, "Next Generation Post Processing in
+  Call of Duty: Advanced Warfare", SIGGRAPH 2014), as the near light's. No patent search was made for this step: the methods
+  are textbook ones, and the search is owed before a release relies on it.
 - **A bulb's colour from its temperature:** Tanner Helland's fit of the blackbody locus in sRGB,
   "How to Convert Temperature (K) to RGB", 2012
   (<https://tannerhelland.com/2012/09/18/convert-temperature-rgb-algorithm-code.html>),

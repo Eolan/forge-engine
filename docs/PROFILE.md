@@ -3171,6 +3171,17 @@ Both tiers on an RTX 5060 Laptop GPU (8 GB, driver 621.24, 2026-11-21; 1600 x 90
 
 Video memory in use: 1.3 to 1.7 GiB of a 7.1 GiB budget in these views, the same in both tiers within 40 MiB. To look at next: the room without rays, where `shading/standard` costs 1.5 ms more than traced.
 
+The light the city leaves a surface (D-108, step 6, `r.gi.heights`). RTX 5060 Laptop GPU, 1600 x 900, the anti-aliasing off, milliseconds of GPU time per frame over 298 frames, `--set r.rays=0`; the passes from one run, the frame from two, which differ by up to 0.8 ms:
+
+| Pass | The city's street, evening | Its avenue, noon | The city from above, noon | The village's street | A room of the village |
+|---|---|---|---|---|---|
+| `gi/height trace`: one half-resolution pixel in four, four directions each, twelve steps against the heights | 0.254 | 0.314 | 0.429 | 0.388 | 0.282 |
+| `gi/height filter`: the nine marched pixels round each half-resolution pixel | 0.098 | 0.098 | 0.117 | 0.119 | 0.285 |
+| `gi/height history`, `gi/height depth` | 0.021, 0.012 | 0.023, 0.012 | 0.026, 0.015 | 0.028, 0.015 | 0.026, 0.018 |
+| The frame with it (two runs), without it, and traced | 6.16 and 6.40, 5.79, 12.95 | 6.52 and 6.81, 6.09, 13.11 | 8.92 and 9.43, 8.49, 12.93 | 10.75 and 11.50, 9.98, 16.86 | 15.54 and 16.20, 14.48, 18.52 |
+
+The passes cost 0.4 to 0.6 ms; the resolve's five reads a pixel are within the runs' spread. Every half-resolution pixel marched each frame with eight directions, as first designed, cost 3.0 ms in `gi/height trace` from above (the frame 12.25 against 8.59); four directions on every pixel 1.67, two with eight steps 0.85; one pixel in four with eight directions 0.79. The heights' two levels are drawn once, with the rings' chains (`shadow/ring cull`, `shadow/ring draw`), then a tile at a time as the camera moves on. Memory: the two levels, 2048 x 2048 `D32_SFLOAT`, 32 MB; at half resolution two `RGBA16F`, two `R32F` and two `RG16F` images of history, 11.5 MB at 1600 x 900; made when the light is first on.
+
 ## Not measured yet
 
 - **Streaming**: residency pools, request queue depth, drive and decompression throughput.
