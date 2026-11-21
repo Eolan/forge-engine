@@ -242,7 +242,13 @@ async fn fragmented_messages_arrive_whole_or_not_at_all() {
             }
         }
         let got = drain(&mut server, Duration::from_secs(2)).await;
-        assert_eq!(got.len(), 50, "{:?}", client.stats());
+        assert_eq!(
+            got.len(),
+            50,
+            "the client's {:?}, the server's {:?}",
+            client.stats(),
+            server.stats()
+        );
         for p in &got {
             assert_eq!(p, &numbered(number(p), len));
         }

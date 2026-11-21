@@ -121,6 +121,13 @@ pub struct TransportSettings {
     pub max_streams: u32,
     /// The UDP socket's send and receive buffers, in bytes.
     pub socket_buffer: usize,
+    /// Whether QUIC hands the system several datagrams in one send for it to cut (UDP
+    /// segmentation offload). Off by default: a game sends a few small datagrams a tick, where
+    /// it saves little, and on a Windows laptop with a VPN client the system delivered about
+    /// six in ten of the packets sent that way over loopback (#412: 156 to 165 received of 264
+    /// to 268 sent). Every burst was then recovered by QUIC's loss detection, which took the
+    /// workers' test from 4 s to 84 s and more, and unreliable fragments were simply lost.
+    pub segmentation_offload: bool,
 }
 
 impl Default for TransportSettings {
@@ -135,6 +142,7 @@ impl Default for TransportSettings {
             fragment_timeout: Duration::from_secs(1),
             max_streams: 256,
             socket_buffer: 4 << 20,
+            segmentation_offload: false,
         }
     }
 }
@@ -148,6 +156,7 @@ impl TransportSettings {
         ))
         .keep_alive_interval(Some(self.keep_alive))
         .datagram_send_buffer_size(self.datagram_send_buffer)
+        .enable_segmentation_offload(self.segmentation_offload)
         .max_concurrent_uni_streams(self.max_streams.into());
         Ok(Arc::new(t))
     }
