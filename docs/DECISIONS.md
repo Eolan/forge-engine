@@ -8841,6 +8841,11 @@ settings screen of three pages.
   ultra is DLAA, DLSS Quality by hand under ultra makes it custom, a preset under FSR keeps
   FSR); the runs above; with the second fix taken out, the log shows low going back to custom
   by `r.ao` and the frame at 19.5 ms.
+- **The following itself under test** (the same day): it was in the shell's `apply_preset`,
+  which no test reaches without a window and a device. It is `presets::Follower` now, over the
+  settings alone, with unit tests in a run's order: the preset first, the demo's settings
+  after, then a hand's changes; and a user's file with its own `r.aa`. Each fails with its fix
+  taken out.
 
 ## D-082 — AMD's FSR DLLs wherever the system has them (FSR 4 on AMD's cards), Forge's FSR 3.1 elsewhere ✅ (the owner's go, 2026-10-29, #361)
 

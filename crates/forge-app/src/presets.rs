@@ -13,6 +13,8 @@
 //!   (`settings/user.cfg`), which later runs read before `forge.cfg`. The menu's graphics page
 //!   writes the same file.
 
+use forge_core::settings::{Settings, Source, Var};
+
 /// `r.preset`'s choices.
 pub const PRESETS: &[&str] = &["custom", "low", "medium", "high", "ultra"];
 /// [`PRESETS`]' index of `custom`: no patch applied.
@@ -125,6 +127,101 @@ pub fn picks_family(from_users_file: bool, file_holds_aa: bool) -> bool {
 /// family, and the preset's own choice within it.
 pub fn aa_kept(preset: &str, aa: &str) -> bool {
     !matches!(aa, "dlaa" | "dlss") || dlss_family(preset).is_none_or(|family| family == aa)
+}
+
+/// What following `r.preset` did on a frame ([`Follower::follow`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Followed {
+    /// Nothing to do.
+    Nothing,
+    /// `preset`'s patch was set: `chosen` when the preset itself changed, not when settings
+    /// registered under a preset already in force.
+    Applied {
+        /// The preset in force.
+        preset: &'static str,
+        /// Whether `r.preset` changed, or settings registered under it.
+        chosen: bool,
+    },
+    /// A setting the preset sets was changed by hand: `r.preset` is custom again.
+    Custom {
+        /// The preset it was.
+        was: &'static str,
+        /// The setting changed.
+        by: String,
+    },
+}
+
+/// `r.preset` followed from frame to frame. A preset chosen sets its patch ([`patch_at`]), as
+/// from where the preset came (the user's file, the menu, the console, `--set`); a setting it
+/// sets changed by hand since puts the preset back to custom. A preset in force is applied again
+/// when settings register (a demo's own, after the first frames): its values that waited for
+/// them land then, which is no hand's change, and its choice of DLAA or DLSS needs `r.aa` to
+/// stand. Until 2026-11-21 neither held: a preset chosen at start read as custom once the demo
+/// had registered, and drew no smaller under DLSS.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Follower {
+    /// The settings' change count when the preset was last applied.
+    applied: u64,
+    /// How many settings were registered then.
+    vars: usize,
+}
+
+impl Follower {
+    /// Follows `preset` (`r.preset`) in `s` for a frame.
+    pub fn follow(&mut self, s: &mut Settings, preset: Var<usize>) -> Followed {
+        let index = s.get(preset);
+        let name = PRESETS.get(index).copied().unwrap_or(PRESETS[CUSTOM]);
+        let registered = s.vars().count();
+        let grown = std::mem::replace(&mut self.vars, registered) != registered;
+        let chosen = s.changed_since(preset, self.applied);
+        if chosen || (grown && index != CUSTOM) {
+            if index != CUSTOM {
+                let source = s.source(preset);
+                // Where the demo renders smaller under DLSS, the preset picks DLAA or DLSS too,
+                // unless it comes from the user's file beside an `r.aa` of the file's own.
+                let picks = picks_family(source == Source::User, s.user_value("r.aa").is_some());
+                let aa = s
+                    .info("r.dlss.mode")
+                    .filter(|_| picks)
+                    .and_then(|_| s.info("r.aa"))
+                    .map(|v| v.value_text());
+                for (setting, value) in patch_at(name, aa.as_deref()) {
+                    if let Err(e) = s.set_text(setting, value, source) {
+                        tracing::warn!("r.preset {name}: {setting}: {e}");
+                    }
+                }
+            }
+            self.applied = s.changes();
+            return match index {
+                CUSTOM => Followed::Nothing,
+                _ => Followed::Applied {
+                    preset: name,
+                    chosen,
+                },
+            };
+        }
+        if index == CUSTOM {
+            return Followed::Nothing;
+        }
+        // A setting the preset sets, changed since: the hand's, not the preset's.
+        let by = s
+            .vars()
+            .find(|v| {
+                v.changed > self.applied
+                    && (is_patched(&v.name)
+                        || (v.name == "r.aa" && !aa_kept(name, &v.value_text())))
+            })
+            .map(|v| v.name.clone());
+        match by {
+            Some(by) => {
+                let source = s.source(preset);
+                s.set_by(preset, CUSTOM, source);
+                self.applied = s.changes();
+                Followed::Custom { was: name, by }
+            }
+            None => Followed::Nothing,
+        }
+    }
 }
 
 /// What the first launch found about the machine, before a device is made of its GPU: what its
@@ -339,5 +436,132 @@ mod tests {
         assert!(
             picks_family(true, false) && picks_family(false, true) && picks_family(false, false)
         );
+    }
+
+    /// The settings a demo that renders smaller registers after the shell's first frames.
+    fn register_a_demo(s: &mut Settings, upscales: bool) {
+        use forge_core::settings::Spec;
+        s.add(Spec::choice(
+            "r.aa",
+            &["off", "dlaa", "dlss", "fsr"],
+            1,
+            "aa",
+        ));
+        if upscales {
+            s.add(Spec::choice(
+                "r.dlss.mode",
+                &["quality", "balanced", "performance", "ultra-performance"],
+                0,
+                "dlss",
+            ));
+            s.add(Spec::choice(
+                "r.fsr.mode",
+                &[
+                    "native",
+                    "quality",
+                    "balanced",
+                    "performance",
+                    "ultra-performance",
+                ],
+                0,
+                "fsr",
+            ));
+        }
+        s.add(Spec::bool("r.ao", true, "ao"));
+        s.add(Spec::bool("r.reflections.rays", true, "rays"));
+        s.add(Spec::bool("r.exposure.local", true, "local"));
+        s.add(Spec::float("r.lod.error", 1.0, 0.125..=16.0, "lod"));
+    }
+
+    fn text(s: &Settings, name: &str) -> String {
+        s.info(name).map(|v| v.value_text()).unwrap_or_default()
+    }
+
+    /// The order a run has: the preset is chosen and followed on the first frame, the demo
+    /// registers its settings later. The preset keeps its name, its values land, and under
+    /// NVIDIA's anti-aliasing it draws smaller; then a hand's change makes it custom.
+    #[test]
+    fn a_preset_chosen_before_the_demo_registers_holds_and_lands() {
+        use forge_core::settings::Spec;
+        let mut s = Settings::new();
+        let preset = s.add(Spec::choice("r.preset", PRESETS, 0, "preset"));
+        let mut follower = Follower::default();
+        assert_eq!(follower.follow(&mut s, preset), Followed::Nothing);
+        s.set_text("r.preset", "low", Source::CommandLine).unwrap();
+        assert_eq!(
+            follower.follow(&mut s, preset),
+            Followed::Applied {
+                preset: "low",
+                chosen: true
+            }
+        );
+        // The demo's settings register: the values that waited land, and DLSS is picked.
+        register_a_demo(&mut s, true);
+        assert_eq!(
+            follower.follow(&mut s, preset),
+            Followed::Applied {
+                preset: "low",
+                chosen: false
+            }
+        );
+        assert_eq!(text(&s, "r.preset"), "low");
+        assert_eq!(text(&s, "r.ao"), "0");
+        assert_eq!(text(&s, "r.aa"), "dlss");
+        assert_eq!(text(&s, "r.dlss.mode"), "performance");
+        assert_eq!(follower.follow(&mut s, preset), Followed::Nothing);
+        // FSR by hand keeps the preset: it changes no family, and FSR's mode is the preset's.
+        s.set_text("r.aa", "fsr", Source::Console).unwrap();
+        assert_eq!(follower.follow(&mut s, preset), Followed::Nothing);
+        // DLAA by hand is not low's, and a setting of the patch by hand is not either.
+        s.set_text("r.aa", "dlaa", Source::Console).unwrap();
+        assert_eq!(
+            follower.follow(&mut s, preset),
+            Followed::Custom {
+                was: "low",
+                by: "r.aa".to_owned()
+            }
+        );
+        assert_eq!(text(&s, "r.preset"), "custom");
+        s.set_text("r.preset", "ultra", Source::Console).unwrap();
+        follower.follow(&mut s, preset);
+        assert_eq!(text(&s, "r.aa"), "dlaa");
+        s.set_text("r.ao", "0", Source::Console).unwrap();
+        assert_eq!(
+            follower.follow(&mut s, preset),
+            Followed::Custom {
+                was: "ultra",
+                by: "r.ao".to_owned()
+            }
+        );
+        assert_eq!(follower.follow(&mut s, preset), Followed::Nothing);
+    }
+
+    /// A preset read from the user's file leaves the file's own `r.aa`; the first launch's
+    /// file has none, and its preset picks; a demo that renders no smaller keeps DLAA.
+    #[test]
+    fn a_preset_from_the_users_file_leaves_the_files_own_anti_aliasing() {
+        use forge_core::settings::Spec;
+        let run = |file_aa: Option<&str>, upscales: bool| {
+            let mut s = Settings::new();
+            let preset = s.add(Spec::choice("r.preset", PRESETS, 0, "preset"));
+            s.set_text("r.preset", "high", Source::User).unwrap();
+            if let Some(aa) = file_aa {
+                s.set_text("r.aa", aa, Source::User).unwrap();
+            }
+            let mut follower = Follower::default();
+            follower.follow(&mut s, preset);
+            register_a_demo(&mut s, upscales);
+            follower.follow(&mut s, preset);
+            assert_eq!(follower.follow(&mut s, preset), Followed::Nothing);
+            assert_eq!(text(&s, "r.preset"), "high");
+            text(&s, "r.aa")
+        };
+        assert_eq!(
+            run(Some("dlaa"), true),
+            "dlaa",
+            "the player's DLAA under high"
+        );
+        assert_eq!(run(None, true), "dlss", "the first launch's file");
+        assert_eq!(run(None, false), "dlaa", "a demo that renders no smaller");
     }
 }
