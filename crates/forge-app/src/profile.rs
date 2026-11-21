@@ -106,10 +106,20 @@ pub struct Profile {
     /// zones overlap and no longer add up to it.
     gpu_span: f64,
     run_span: f64,
+    /// The run's frames by their GPU time ([`SPAN_BIN_MS`] a bin, the last holding the rest),
+    /// and the worst frame with its number among the frames counted: the run's distribution
+    /// for the exit log ([`Profile::gpu_frames_summary`]), which a mean hides (a hitch every
+    /// few seconds moves a mean by little).
+    run_spans: [u32; SPAN_BINS],
+    run_worst: (f64, u64),
     /// CPU milliseconds per zone summed over the run, with the number of samples, in the
     /// order the frame loop first reported them.
     run_cpu: Vec<(String, f64, u64)>,
 }
+
+/// Bins of the run's frame-time histogram, and the milliseconds a bin spans: to 64 ms.
+const SPAN_BINS: usize = 512;
+const SPAN_BIN_MS: f64 = 0.125;
 
 impl Profile {
     pub(crate) fn new(mode: OverlayMode) -> Self {
@@ -125,6 +135,8 @@ impl Profile {
             run_frames: 0,
             gpu_span: 0.0,
             run_span: 0.0,
+            run_spans: [0; SPAN_BINS],
+            run_worst: (0.0, 0),
             run_cpu: Vec::new(),
         }
     }
@@ -154,6 +166,38 @@ impl Profile {
         }
         line.pop();
         Some(line)
+    }
+
+    /// The run's frames by their GPU time, for the exit log beside the mean: the median, the
+    /// 99th percentile (each to an eighth of a millisecond, a bin's upper edge), the worst frame
+    /// and its number among the frames counted, and how many frames took over twice the median
+    /// (hitches: a ring redrawn whole, a pipeline made late). `None` before any frame's span.
+    pub fn gpu_frames_summary(&self) -> Option<String> {
+        let frames: u64 = self.run_spans.iter().map(|&c| u64::from(c)).sum();
+        if frames == 0 {
+            return None;
+        }
+        let at = |share: f64| {
+            let rank = ((frames as f64 * share).ceil() as u64).clamp(1, frames);
+            let mut seen = 0;
+            for (bin, &count) in self.run_spans.iter().enumerate() {
+                seen += u64::from(count);
+                if seen >= rank {
+                    return (bin + 1) as f64 * SPAN_BIN_MS;
+                }
+            }
+            SPAN_BINS as f64 * SPAN_BIN_MS
+        };
+        let (p50, p99) = (at(0.5), at(0.99));
+        let first_over = ((2.0 * p50 / SPAN_BIN_MS) as usize).min(SPAN_BINS);
+        let over: u64 = self.run_spans[first_over..]
+            .iter()
+            .map(|&c| u64::from(c))
+            .sum();
+        Some(format!(
+            "p50 {p50:.3} ms, p99 {p99:.3} ms, worst {:.3} ms at frame {}, {over} of {frames} over twice the median",
+            self.run_worst.0, self.run_worst.1
+        ))
     }
 
     /// The CPU zones of the frame loop averaged over the run, in frame order: the exit log's
@@ -291,6 +335,11 @@ impl Profile {
                 self.gpu_span + (span - self.gpu_span) * SMOOTHING
             };
             self.run_span += span;
+            let bin = ((span.max(0.0) / SPAN_BIN_MS) as usize).min(SPAN_BINS - 1);
+            self.run_spans[bin] += 1;
+            if span > self.run_worst.0 {
+                self.run_worst = (span, self.run_frames);
+            }
         }
         self.run_frames += 1;
         self.gpu.retain(|z| z.seen);
@@ -710,6 +759,37 @@ mod tests {
         assert_eq!(
             profile.gpu_run_summary().as_deref(),
             Some("0.350 ms per frame over 2 frames: geometry/cull 0.300, shading/resolve 0.050")
+        );
+        // No frame gave its span: no distribution.
+        assert_eq!(profile.gpu_frames_summary(), None);
+    }
+
+    #[test]
+    fn the_frames_summary_gives_the_median_the_tail_and_the_worst_frame() {
+        let mut profile = Profile::new(OverlayMode::Off);
+        // 99 frames of 2 ms and one hitch of 30 ms at frame 40.
+        for frame in 0..100 {
+            let span = if frame == 40 { 30.0 } else { 2.0 };
+            let zone = GpuZone {
+                label: "frame",
+                ms: span,
+                start_ticks: 0,
+                end_ticks: 0,
+                queue: QueueKind::Graphics,
+            };
+            profile.gpu_zones(&[zone], Some(span));
+        }
+        assert_eq!(
+            profile.gpu_frames_summary().as_deref(),
+            Some(
+                "p50 2.125 ms, p99 2.125 ms, worst 30.000 ms at frame 40, 1 of 100 over twice the median"
+            )
+        );
+        // The mean alone moves by a seventh: 2.28 ms.
+        assert!(
+            profile
+                .gpu_run_summary()
+                .is_some_and(|line| line.starts_with("2.280 ms per frame over 100 frames"))
         );
     }
 
