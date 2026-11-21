@@ -41,7 +41,7 @@ steam-audio = ["dep:audionimbus"]
 
 [target.'cfg(windows)'.dependencies]
 cpal = { version = "0.18", optional = true }
-audionimbus = { version = "0.16", optional = true, default-features = false }
+audionimbus = { version = "0.18", optional = true, default-features = false }
 
 [[example]]
 name = "audio-demo"

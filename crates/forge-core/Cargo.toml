@@ -16,7 +16,6 @@ workspace = true
 shipping = []
 
 [dependencies]
-glam = { workspace = true }
 libm = { workspace = true }
 lz4_flex = { workspace = true }
 serde = { workspace = true }
