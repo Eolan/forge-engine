@@ -43,6 +43,11 @@ pub const SUN_TURN_LIMIT: [f64; RING_COUNT] = [
 ];
 /// Every how many frames a ring's movers are drawn: the far ones less often.
 pub const MOVER_PERIOD: [u64; RING_COUNT] = [1, 2, 2, 4, 8];
+/// The levels of the heights seen from above (D-108 step 6): the rings' tiles, their axis straight
+/// up, the static casters' highest point in each texel.
+pub const HEIGHT_LEVELS: usize = 2;
+/// Their sides, metres: 25 cm a texel round the camera, and 1 m.
+pub const HEIGHT_WIDTHS: [f64; HEIGHT_LEVELS] = [512.0, 2048.0];
 
 /// The light's axes: `sun` towards the sun, `right` and `up` across it.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -155,8 +160,12 @@ pub struct Ring {
 
 impl Ring {
     fn new(index: usize) -> Self {
+        Self::of_width(FINEST_RING_METRES * 4.0_f64.powi(index as i32))
+    }
+
+    fn of_width(width: f64) -> Self {
         Self {
-            width: FINEST_RING_METRES * 4.0_f64.powi(index as i32),
+            width,
             axes: None,
             depth_centre: 0.0,
             window: [0; 2],
@@ -457,6 +466,30 @@ impl Ring {
         ]
     }
 
+    /// What a march reads of this level of the heights (D-108 step 6) in a frame whose camera is
+    /// at `camera`: its wrapped static layer `image`, which holds no movers and needs no copy.
+    /// The level's axes are the world's (`SunAxes::new(DVec3::Y)`: z across the image, x down it).
+    pub fn heights(&self, camera: DVec3, image: u32) -> GpuHeightLevel {
+        let Some(axes) = self.axes else {
+            return GpuHeightLevel::none();
+        };
+        let t = self.tile_metres();
+        let wrap = |axis: usize| {
+            ((self.window[axis] - self.base[axis]).rem_euclid(RING_TILES) as f64 * t) as f32
+        };
+        GpuHeightLevel {
+            window: [
+                (camera.dot(axes.right) - self.window[0] as f64 * t) as f32,
+                (camera.dot(axes.up) - self.window[1] as f64 * t) as f32,
+            ],
+            wrap: [wrap(0), wrap(1)],
+            bottom: (camera.dot(axes.sun) - (self.depth_centre - DEPTH_HALF_RANGE)) as f32,
+            texel: self.texel() as f32,
+            width: self.width as f32,
+            image,
+        }
+    }
+
     /// What the shading reads of this ring in a frame whose camera is at `camera`.
     pub fn sampling(&self, camera: DVec3, image: u32) -> GpuShadowRing {
         let Some(axes) = self.axes.filter(|_| self.composed) else {
@@ -516,6 +549,50 @@ impl GpuShadowRing {
             image: u32::MAX,
         }
     }
+}
+
+/// Mirrors `HeightLevel` in `heights.slang`: one level of the heights seen from above.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct GpuHeightLevel {
+    /// Metres to add to a relative point's (z, x) for its place across the level's window.
+    pub window: [f32; 2],
+    /// Metres to add to that place for its place in the wrapped image.
+    pub wrap: [f32; 2],
+    /// Metres to add to a relative point's y for its height over the bottom of the level's range.
+    pub bottom: f32,
+    /// Metres a texel.
+    pub texel: f32,
+    /// The level's side, metres.
+    pub width: f32,
+    /// Sampled index of its image, or `u32::MAX`: not drawn.
+    pub image: u32,
+}
+
+impl GpuHeightLevel {
+    /// A level not to read.
+    pub fn none() -> Self {
+        Self {
+            window: [0.0; 2],
+            wrap: [0.0; 2],
+            bottom: 0.0,
+            texel: 1.0,
+            width: 1.0,
+            image: u32::MAX,
+        }
+    }
+}
+
+/// Mirrors `HeightSet` in `heights.slang`.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct GpuHeightSet {
+    /// The levels, finest first.
+    pub levels: [GpuHeightLevel; HEIGHT_LEVELS],
+    /// The metres of height an image's 0 to 1 hold.
+    pub range: f32,
+    /// Keeps the record on 16 bytes.
+    pub pad: [f32; 3],
 }
 
 /// The filter's settings (`r.shadows.*`).
@@ -613,6 +690,20 @@ impl RingCache {
         }
     }
 
+    /// The levels of the heights seen from above (D-108 step 6), not drawn yet: planned as rings
+    /// under a sun straight up ([`Self::plan`] with `DVec3::Y` and no movers), which never turns.
+    pub fn heights() -> Self {
+        Self {
+            rings: HEIGHT_WIDTHS.into_iter().map(Ring::of_width).collect(),
+            refresh_next: 0,
+        }
+    }
+
+    /// How many rings it holds.
+    pub fn count(&self) -> usize {
+        self.rings.len()
+    }
+
     /// Ring `index`.
     pub fn ring(&self, index: usize) -> &Ring {
         &self.rings[index]
@@ -620,7 +711,10 @@ impl RingCache {
 
     /// Forgets everything: the next frame draws every ring.
     pub fn clear(&mut self) {
-        *self = Self::new();
+        for ring in &mut self.rings {
+            *ring = Ring::of_width(ring.width);
+        }
+        self.refresh_next = 0;
     }
 
     /// Marks what the world changed: the tiles the sphere covers along the sun, of every ring.
@@ -730,11 +824,9 @@ impl RingCache {
         }
         if refresh {
             let count = (RING_TILES * RING_TILES) as usize;
-            let (ring, slot) = (
-                self.refresh_next / count % RING_COUNT,
-                self.refresh_next % count,
-            );
-            self.refresh_next = (self.refresh_next + 1) % (count * RING_COUNT);
+            let rings = self.rings.len();
+            let (ring, slot) = (self.refresh_next / count % rings, self.refresh_next % count);
+            self.refresh_next = (self.refresh_next + 1) % (count * rings);
             if self.rings[ring].ready() {
                 self.rings[ring].stale |= 1 << slot;
             }
@@ -1199,6 +1291,65 @@ mod tests {
             p.iter()
                 .any(|plane| glam::Vec3::from_slice(plane).dot(outside) + plane[3] < 0.0)
         );
+    }
+
+    #[test]
+    fn the_heights_are_two_levels_whose_axes_are_the_worlds() {
+        let mut c = RingCache::heights();
+        assert_eq!(c.count(), HEIGHT_LEVELS);
+        let camera = DVec3::new(130.0, 40.0, -75.0);
+        let plan = c.plan(camera, DVec3::Y, 2, RingMovers::None, &[], 0, false);
+        assert_eq!(plan.draws.len(), HEIGHT_LEVELS);
+        let axes = c.ring(0).axes().unwrap();
+        assert_eq!(
+            (axes.right, axes.up, axes.sun),
+            (DVec3::Z, DVec3::X, DVec3::Y)
+        );
+        assert_eq!(c.ring(0).texel(), 0.25);
+        assert_eq!(c.ring(1).texel(), 1.0);
+        // A sun that never turns: nothing more to draw while the camera stands.
+        let plan = c.plan(camera, DVec3::Y, 2, RingMovers::None, &[], 1, false);
+        assert!(plan.draws.is_empty());
+        // Asked to refresh, it goes round its own tiles and no ring it does not have.
+        for f in 2..200 {
+            c.plan(camera, DVec3::Y, 2, RingMovers::None, &[], f, true);
+        }
+        c.clear();
+        assert_eq!(c.count(), HEIGHT_LEVELS);
+        assert!(!c.ring(0).ready());
+        assert_eq!(c.ring(1).width(), HEIGHT_WIDTHS[1]);
+    }
+
+    #[test]
+    fn a_height_is_read_where_its_tile_was_drawn() {
+        // After a walk the window no longer starts at the image's corner: a point's place in the
+        // wrapped image is its world tile's slot, which the draws' rectangles used.
+        let mut c = RingCache::heights();
+        c.plan(DVec3::ZERO, DVec3::Y, 64, RingMovers::None, &[], 0, false);
+        let camera = DVec3::new(-70.0, 3.0, 200.0);
+        c.plan(camera, DVec3::Y, 64, RingMovers::None, &[], 1, false);
+        let ring = c.ring(0);
+        assert_eq!(ring.missing(), 0);
+        let t = ring.tile_metres();
+        let level = ring.heights(camera, 5);
+        for point in [DVec3::new(-60.0, 0.0, 190.0), DVec3::new(100.0, 9.0, 60.0)] {
+            let rel = (point - camera).as_vec3();
+            let across = [rel.z + level.window[0], rel.x + level.window[1]];
+            for (axis, world) in [point.z, point.x].into_iter().enumerate() {
+                assert!(across[axis] >= 0.0 && across[axis] < level.width);
+                let slot = ((world / t).floor() as i64 - ring.base[axis]).rem_euclid(RING_TILES);
+                let wrapped = (across[axis] + level.wrap[axis]).rem_euclid(level.width);
+                assert_eq!((f64::from(wrapped) / t).floor() as i64, slot);
+                // And within the tile, where the draw's matrix puts it.
+                let within = f64::from(wrapped) - slot as f64 * t;
+                assert!((within - world.rem_euclid(t)).abs() < 1e-3);
+            }
+            // Its height over the bottom of the range, as the draw's depth holds it.
+            let m = ring.clip_from_relative(camera, ring.window, [8, 8]);
+            let depth = m.project_point3(rel).z;
+            let over = rel.y + level.bottom;
+            assert!((depth * (2.0 * DEPTH_HALF_RANGE) as f32 - over).abs() < 1e-2);
+        }
     }
 
     #[test]
