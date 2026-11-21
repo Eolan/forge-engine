@@ -49,7 +49,7 @@ pub use bindless::{
 };
 pub use commands::Commands;
 pub use device::{
-    Device, DeviceFeatures, DeviceOptions, MeshShaderLimits, QueueKind, VENDOR_NVIDIA,
+    Device, DeviceFeatures, DeviceOptions, MeshShaderLimits, PreferredGpu, QueueKind, VENDOR_NVIDIA,
 };
 pub use display::DisplayCaps;
 pub use dlss::{Dlss, DlssFrame, DlssImage, DlssImages, DlssMode, DlssToken};

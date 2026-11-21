@@ -287,4 +287,29 @@ mod tests {
         assert_eq!(without.device.gpu_has_ray_query(), gpu_has);
         without.finish().expect("no validation error making it");
     }
+
+    /// A GPU test (`FORGE_GPU_TESTS=1`): what the app asks of the GPU before it makes the
+    /// device ([`Device::preferred_gpu`], D-111) is what the device made of it then says.
+    #[test]
+    fn the_gpu_asked_before_the_device_is_the_devices() {
+        let Some(headless) = Headless::for_test(shaders_of(env!("CARGO_MANIFEST_DIR"))) else {
+            return;
+        };
+        let gpu = Device::preferred_gpu(&headless._instance, None)
+            .expect("the query")
+            .expect("a GPU, as the device was made of one");
+        assert_eq!(gpu.vendor, headless.device.vendor_id());
+        assert_eq!(gpu.ray_query, headless.device.gpu_has_ray_query());
+        let budget = headless
+            .device
+            .memory_report()
+            .device_local()
+            .map(|(_, budget)| budget);
+        assert_eq!(gpu.video_memory.is_some(), budget.is_some());
+        if let (Some(asked), Some(now)) = (gpu.video_memory, budget) {
+            // The OS moves the budget with what else runs: the same card, not the same byte.
+            assert!(asked.abs_diff(now) < now / 4, "{asked} against {now}");
+        }
+        headless.finish().expect("no validation error asking");
+    }
 }

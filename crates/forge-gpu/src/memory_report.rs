@@ -8,6 +8,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use ash::vk::{self, TaggedStructure as _};
 
 use crate::device::Device;
+use crate::instance::Instance;
 
 /// What an allocation is for; the counters sum by it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -160,13 +161,7 @@ impl MemoryReport {
     /// Usage and budget summed over the device-local heaps (`None` without
     /// `VK_EXT_memory_budget`).
     pub fn device_local(&self) -> Option<(u64, u64)> {
-        let mut usage = 0;
-        let mut budget = 0;
-        for heap in self.heaps.iter().filter(|h| h.device_local) {
-            usage += heap.usage?;
-            budget += heap.budget;
-        }
-        Some((usage, budget))
+        device_local_of(&self.heaps)
     }
 
     /// Bytes the process uses outside the engine's allocator: the driver, the swapchain,
@@ -177,52 +172,92 @@ impl MemoryReport {
     }
 }
 
+/// Usage and budget summed over the device-local heaps of `heaps` (`None` without
+/// `VK_EXT_memory_budget`).
+fn device_local_of(heaps: &[HeapReport]) -> Option<(u64, u64)> {
+    let mut usage = 0;
+    let mut budget = 0;
+    for heap in heaps.iter().filter(|h| h.device_local) {
+        usage += heap.usage?;
+        budget += heap.budget;
+    }
+    Some((usage, budget))
+}
+
+/// Every heap of `physical`, a GPU of `instance`: with `has_budget` (the GPU offers
+/// `VK_EXT_memory_budget`) the usage and the budget the OS gives the process, else the heap's
+/// size; a device-local heap's budget capped by `cap` (`FORGE_VRAM_BUDGET_MB`).
+fn heap_reports(
+    instance: &Instance,
+    physical: vk::PhysicalDevice,
+    has_budget: bool,
+    cap: Option<u64>,
+) -> Vec<HeapReport> {
+    let mut budget = vk::PhysicalDeviceMemoryBudgetPropertiesEXT::default();
+    let mut properties = vk::PhysicalDeviceMemoryProperties2::default();
+    if has_budget {
+        properties = properties.push(&mut budget);
+    }
+    // SAFETY: property query on a physical device of the instance with a properly chained
+    // structure. The budget structure is chained only where the GPU offers the extension: a
+    // device extension's physical-device query needs it offered, not a device made with it.
+    unsafe {
+        instance
+            .raw()
+            .get_physical_device_memory_properties2(physical, &mut properties)
+    };
+    let memory = properties.memory_properties;
+    let types = &memory.memory_types[..memory.memory_type_count as usize];
+    memory.memory_heaps[..memory.memory_heap_count as usize]
+        .iter()
+        .enumerate()
+        .map(|(i, heap)| {
+            let device_local = heap.flags.contains(vk::MemoryHeapFlags::DEVICE_LOCAL);
+            let reported = if has_budget {
+                budget.heap_budget[i]
+            } else {
+                heap.size
+            };
+            HeapReport {
+                index: i as u32,
+                size: heap.size,
+                device_local,
+                host_visible: types.iter().any(|t| {
+                    t.heap_index == i as u32
+                        && t.property_flags
+                            .contains(vk::MemoryPropertyFlags::HOST_VISIBLE)
+                }),
+                usage: has_budget.then(|| budget.heap_usage[i]),
+                budget: match cap {
+                    Some(cap) if device_local => reported.min(cap),
+                    _ => reported,
+                },
+            }
+        })
+        .collect()
+}
+
+/// The device-local budget of `physical` before a device is made of it, bytes: what
+/// [`MemoryReport::device_local`] gives once it is (`None` without `VK_EXT_memory_budget`).
+pub(crate) fn device_local_budget(
+    instance: &Instance,
+    physical: vk::PhysicalDevice,
+    has_budget: bool,
+    cap: Option<u64>,
+) -> Option<u64> {
+    device_local_of(&heap_reports(instance, physical, has_budget, cap)).map(|(_, budget)| budget)
+}
+
 impl Device {
     /// Queries the heaps' usage and budget and reads the counters. It asks the driver, which
     /// asks the OS: call it a few times per second, not per allocation.
     pub fn memory_report(&self) -> MemoryReport {
-        let mut budget = vk::PhysicalDeviceMemoryBudgetPropertiesEXT::default();
-        let mut properties = vk::PhysicalDeviceMemoryProperties2::default();
-        let has_budget = self.features().memory_budget;
-        if has_budget {
-            properties = properties.push(&mut budget);
-        }
-        // SAFETY: property query on the device's physical device with a properly chained
-        // structure (the budget structure only when the extension is enabled).
-        unsafe {
-            self.instance()
-                .raw()
-                .get_physical_device_memory_properties2(self.physical(), &mut properties)
-        };
-        let memory = properties.memory_properties;
-        let types = &memory.memory_types[..memory.memory_type_count as usize];
-        let heaps = memory.memory_heaps[..memory.memory_heap_count as usize]
-            .iter()
-            .enumerate()
-            .map(|(i, heap)| {
-                let device_local = heap.flags.contains(vk::MemoryHeapFlags::DEVICE_LOCAL);
-                let reported = if has_budget {
-                    budget.heap_budget[i]
-                } else {
-                    heap.size
-                };
-                HeapReport {
-                    index: i as u32,
-                    size: heap.size,
-                    device_local,
-                    host_visible: types.iter().any(|t| {
-                        t.heap_index == i as u32
-                            && t.property_flags
-                                .contains(vk::MemoryPropertyFlags::HOST_VISIBLE)
-                    }),
-                    usage: has_budget.then(|| budget.heap_usage[i]),
-                    budget: match self.budget_cap() {
-                        Some(cap) if device_local => reported.min(cap),
-                        _ => reported,
-                    },
-                }
-            })
-            .collect();
+        let heaps = heap_reports(
+            self.instance(),
+            self.physical(),
+            self.features().memory_budget,
+            self.budget_cap(),
+        );
         let counters = self.memory_counters();
         MemoryReport {
             heaps,

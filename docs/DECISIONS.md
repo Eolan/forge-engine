@@ -8755,7 +8755,9 @@ engines do."
 - **The first launch:** with no user file and an interactive run, the shell reads the GPU's
   device-local memory, whether it runs DLSS and the monitor, picks the preset by the memory (the
   target's 16 GB and 12 GB ultra, 8 GB high, 5 GB medium, less low; unknown medium) and
-  fullscreen, and writes the file with what it saw as its first lines.
+  fullscreen, and writes the file with what it saw as its first lines. (Since 2026-11-21, D-111:
+  read before the device is made, and with the low and the medium preset the tier without rays
+  on a GPU that has ray queries.)
 - **The menu's graphics page** (Esc, Settings, Graphics): the preset, the display, the
   anti-aliasing, the upscalers' modes, the ambient occlusion, the mirror reflections, the local
   exposure, the bloom and the detail error, those the demo registered; every change in the menu
@@ -13021,7 +13023,7 @@ screen, kept until that is well off. A cone takes a slot; anything else six, a c
 
 - **What the numbers say.** Outdoors the tier takes two fifths off the frame: the probes' rays and blend alone were 5.4 to 7.3 ms of the traced frames. In a room it takes a sixth: `shading/standard` costs more without rays than traced there (6.6 ms against 5.1) and the lamps' atlas as much as their rays (`shadow/lamp rays` 2.2 ms against 1.7). A room is where this tier's cost is to look at next. The RTX 5070 Ti's tables above (2.1 to 2.9 ms against 5.4 to 6.0 in the city) are other views: read each machine's two columns, not across machines.
 - **Checks:** a GPU test makes a device with the option and finds no ray query and no opacity micromap on it, the GPU's own still reported; a test of the menu's row, with and without ray queries on the GPU and without the setting. The measured runs are the setting's own path (`--set r.rays=0`): their zones are the tier's (`shadow/ring samples`, `gi/screen trace`).
-- **For the owner:** whether the first launch picks this tier on such a GPU is D-111's question; nothing here changes a default.
+- **For the owner:** whether the first launch picks this tier on such a GPU was D-111's question, decided the same day: by the preset (low and medium take it). `r.rays`' own default stays 1.
 
 **Amended 2026-11-11: step 5 built** (the owner's go for step 5). The rings' records and a point's share of the sun in `shaders/shadow_rings.slang`, the cubes' records and lookups in `shaders/reflection_cubes.slang`, both imported by `meshlet.slang` and the passes below; `SunRings` and `CubeLight` hand them to the passes of other modules. Where the device has ray queries nothing changes: 0 pixels against `main` in the city, the gallery and the island.
 
@@ -13221,7 +13223,7 @@ Measured on the city flight (2026-11-11, after the hull rule and the played run'
 
 **Not in this decision:** the probes and the surface cache already cross over a second or more by their own blend; the rings of the tier without rays (D-108) keep their cut.
 
-## D-111 — The first launch on a GPU with ray queries but little headroom: which tier it picks 🟡 (proposed 2026-11-21, waiting for the owner)
+## D-111 — The first launch on a GPU with ray queries but little headroom: which tier it picks ✅ (the owner, 2026-11-21: by the preset)
 
 **The question:** D-108 decided that rays stay the default wherever the device has them, and D-081's first launch picks a quality preset by the GPU's memory. Since 2026-11-21 the tier without rays is a setting (`r.rays 0`, the menu's "Ray tracing" row). Should the first launch pick it on a GPU that has ray queries but little headroom?
 
@@ -13236,6 +13238,18 @@ Measured on the city flight (2026-11-11, after the hull rule and the played run'
 **Recommendation:** B now, with its rule in one function beside the preset's (`presets::first_launch`), and C when D-094's budget gives a target worth timing against.
 
 **For the owner to decide:** A, B or C; under B, whether the line is the medium preset (under 8 GiB) or the low one alone (under 5 GiB).
+
+**Decided (the owner, 2026-11-21):** B, by the preset. The line is the recommendation's, the medium preset: the owner's answer was to the recommendation as written, and low alone is one word of `presets::first_launch_keeps_rays`.
+
+**Built (2026-11-21):**
+- **The rule** (`forge_app::presets`): `first_launch` writes `r.rays 0` beside the preset and the display where the GPU has ray queries and the preset it picked is low or medium (`first_launch_keeps_rays`: high and ultra keep them). A GPU that cannot say its memory takes medium, so the tier without rays. On a GPU without ray queries nothing about rays is written: the file would hold a choice that GPU never had, and a later GPU with them starts traced.
+- **Before the device.** `r.rays` is read where the device is made, so the first launch's choices are now taken before it: the shell asks a plain instance for the GPU the device will be made of (`Device::preferred_gpu`: its vendor, its ray queries, its device-local budget, the number `MemoryReport::device_local` gives once the device exists), as it already did for the vendor before loading Streamline. The first launch's own run is the tier its file holds; it is not traced once and without rays from the second run on.
+- **Under `forge.cfg` and `--set`,** as every choice of the first launch (D-081): `--set r.rays=1` keeps the run traced, and the file still holds the line.
+- **The player's way back** is D-108's row: Settings, Graphics, "Ray tracing", applied after a restart. No preset sets `r.rays`: choosing one in the menu later changes no tier.
+- **The file's first line** says what was seen: the GPU, its memory, whether it has ray queries, whether the device runs DLSS, the monitor.
+- **On the RTX 5060 Laptop GPU** (8 GB, a budget of 7.0 GiB): medium, so the tier without rays, D-108's 8.1 to 14.7 ms against 13.1 to 17.6 traced.
+
+**Checks:** unit tests of the rule (each preset with and without ray queries on the GPU, no preset patching `r.rays`, the file's first line) and of the lines as the shell applies them (`r.rays` reads 0 before the device, 1 under `--set r.rays=1`, the file's three lines); a GPU test that what is asked before the device is what the device then says (the vendor, the ray queries, a budget alike); the village under the validation layer, traced and with `r.rays 0`: 0 errors, the query of the budget on a GPU with no device made of it among them. **Not run:** an interactive first launch itself, which takes the keyboard's focus on the owner's machine: the laptop has no `settings/user.cfg` yet, so its next plain launch is one, and logs `first launch: settings chosen` with `rays=false`.
 
 **Not in this decision:** what the presets set (D-081), and the tier's own quality (D-108's limits).
 

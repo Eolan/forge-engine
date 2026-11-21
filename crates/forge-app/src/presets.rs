@@ -8,9 +8,10 @@
 //!   (`forge_render::settings`); a demo that registers none of a name leaves it pending, as a
 //!   `--set` of an unknown name would.
 //! - **The first launch** ([`first_launch`]): with no user file yet, the shell reads the GPU (its
-//!   memory and whether it runs DLSS) and the monitor, picks a preset and the display, and writes
-//!   them to the user's file (`settings/user.cfg`), which later runs read before `forge.cfg`.
-//!   The menu's graphics page writes the same file.
+//!   memory and whether it has ray queries) and the monitor, picks a preset, the display and, by
+//!   the preset, whether the frame is traced (D-111), and writes them to the user's file
+//!   (`settings/user.cfg`), which later runs read before `forge.cfg`. The menu's graphics page
+//!   writes the same file.
 
 /// `r.preset`'s choices.
 pub const PRESETS: &[&str] = &["custom", "low", "medium", "high", "ultra"];
@@ -83,13 +84,14 @@ pub fn is_patched(name: &str) -> bool {
         .any(|(_, patch)| patch.iter().any(|(n, _)| *n == name))
 }
 
-/// What the first launch found about the machine.
+/// What the first launch found about the machine, before a device is made of its GPU: what its
+/// choices follow.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Machine {
-    /// The GPU's device-local memory, bytes (`None` when the device cannot say).
+    /// The GPU's device-local memory, bytes (`None` when the GPU cannot say).
     pub video_memory: Option<u64>,
-    /// Whether the device runs DLSS.
-    pub dlss: bool,
+    /// Whether the GPU has ray queries: only there is the tier a choice (D-108).
+    pub ray_query: bool,
     /// The window's monitor, pixels.
     pub monitor: Option<(u32, u32)>,
 }
@@ -108,28 +110,47 @@ pub fn preset_for(machine: &Machine) -> &'static str {
     }
 }
 
-/// The first launch's settings for `machine`, as `name value` lines of the user's file: the
-/// preset, and borderless fullscreen on the monitor (its own resolution, which the upscaler then
-/// renders under by the preset's mode).
-pub fn first_launch(machine: &Machine) -> Vec<(String, String)> {
-    vec![
-        ("r.preset".to_owned(), preset_for(machine).to_owned()),
-        ("app.window".to_owned(), "fullscreen".to_owned()),
-    ]
+/// Whether the first launch keeps the rays where it picked `preset`, on a GPU that has ray
+/// queries (D-111, the owner, 2026-11-21: by the preset): high and ultra keep them; low and
+/// medium (under 8 GiB of video memory, or a GPU that cannot say) take the tier without rays
+/// (D-108), which the menu's "Ray tracing" row switches back. The presets themselves never set
+/// `r.rays` ([`PATCHES`]): choosing one in the menu later changes no tier.
+pub fn first_launch_keeps_rays(preset: &str) -> bool {
+    matches!(preset, "high" | "ultra")
 }
 
-/// The header of a user file the first launch wrote: what it saw.
-pub fn first_launch_header(machine: &Machine, gpu: &str) -> String {
+/// The first launch's settings for `machine`, as `name value` lines of the user's file: the
+/// preset, borderless fullscreen on the monitor (its own resolution, which the upscaler then
+/// renders under by the preset's mode), and `r.rays 0` where the GPU has ray queries and the
+/// preset does not keep them ([`first_launch_keeps_rays`]). Nothing about rays on a GPU without
+/// ray queries: the file would hold a choice that GPU never had.
+pub fn first_launch(machine: &Machine) -> Vec<(String, String)> {
+    let preset = preset_for(machine);
+    let mut lines = vec![
+        ("r.preset".to_owned(), preset.to_owned()),
+        ("app.window".to_owned(), "fullscreen".to_owned()),
+    ];
+    if machine.ray_query && !first_launch_keeps_rays(preset) {
+        lines.push(("r.rays".to_owned(), "0".to_owned()));
+    }
+    lines
+}
+
+/// The header of a user file the first launch wrote: what it saw, `dlss` whether the device made
+/// of the GPU runs DLSS.
+pub fn first_launch_header(machine: &Machine, gpu: &str, dlss: bool) -> String {
     let memory = machine.video_memory.map_or("unknown".to_owned(), |b| {
         format!("{:.1} GiB", b as f64 / f64::from(1u32 << 30))
     });
     let monitor = machine
         .monitor
         .map_or("unknown".to_owned(), |(w, h)| format!("{w} x {h}"));
+    let yes = |b: bool| if b { "yes" } else { "no" };
     format!(
-        "# Written at the first launch: {gpu}, {memory} of video memory, DLSS {}, monitor {monitor}.\n\
+        "# Written at the first launch: {gpu}, {memory} of video memory, ray queries {}, DLSS {}, monitor {monitor}.\n\
          # The game's menu (Esc, Settings, Graphics) rewrites this file; `forge.cfg` and --set override it.",
-        if machine.dlss { "yes" } else { "no" }
+        yes(machine.ray_query),
+        yes(dlss)
     )
 }
 
@@ -141,7 +162,7 @@ mod tests {
     fn the_preset_follows_the_video_memory() {
         let machine = |gib: Option<u64>| Machine {
             video_memory: gib.map(|g| g << 30),
-            dlss: true,
+            ray_query: true,
             monitor: Some((2560, 1440)),
         };
         assert_eq!(preset_for(&machine(Some(16))), "ultra");
@@ -152,7 +173,72 @@ mod tests {
         assert_eq!(preset_for(&machine(None)), "medium");
         let lines = first_launch(&machine(Some(8)));
         assert_eq!(lines[0], ("r.preset".to_owned(), "high".to_owned()));
-        assert!(first_launch_header(&machine(Some(8)), "RTX").contains("8.0 GiB"));
+        let header = first_launch_header(&machine(Some(8)), "RTX", true);
+        assert!(header.contains("8.0 GiB"));
+        assert!(header.contains("ray queries yes, DLSS yes"));
+    }
+
+    /// D-111: on a GPU with ray queries the first launch takes the tier without rays where it
+    /// picks the low or the medium preset, and keeps the rays with high and ultra; on a GPU
+    /// without ray queries it writes nothing about them; and no preset sets `r.rays`.
+    #[test]
+    fn the_first_launch_picks_the_tier_by_the_preset() {
+        let machine = |gib: Option<u64>, ray_query: bool| Machine {
+            video_memory: gib.map(|g| g << 30),
+            ray_query,
+            monitor: None,
+        };
+        let rays = |m: Machine| {
+            first_launch(&m)
+                .into_iter()
+                .find(|(name, _)| name == "r.rays")
+                .map(|(_, value)| value)
+        };
+        for (gib, preset, line) in [
+            (Some(16), "ultra", None),
+            (Some(8), "high", None),
+            (Some(7), "medium", Some("0")),
+            (Some(4), "low", Some("0")),
+            (None, "medium", Some("0")),
+        ] {
+            assert_eq!(preset_for(&machine(gib, true)), preset);
+            assert_eq!(rays(machine(gib, true)).as_deref(), line, "{preset}");
+            assert_eq!(rays(machine(gib, false)), None, "{preset}, no ray queries");
+            assert_eq!(first_launch_keeps_rays(preset), line.is_none());
+        }
+        assert!(!is_patched("r.rays"));
+        assert!(
+            first_launch_header(&machine(Some(7), false), "GPU", false)
+                .contains("ray queries no, DLSS no")
+        );
+    }
+
+    /// The first launch's lines as the shell applies them, before it makes the device: `r.rays`
+    /// reads 0 for the device where nothing above the user's file set it, the file holds the
+    /// line either way, and `--set r.rays=1` keeps this run traced.
+    #[test]
+    fn the_first_launchs_tier_is_in_force_before_the_device_and_under_the_command_line() {
+        use forge_core::settings::{Settings, Source, Spec};
+        let laptop = Machine {
+            video_memory: Some(7131 << 20),
+            ray_query: true,
+            monitor: None,
+        };
+        for by_command_line in [false, true] {
+            let mut s = Settings::new();
+            let rays = s.add(Spec::bool("r.rays", true, "rays"));
+            if by_command_line {
+                s.set_text("r.rays", "1", Source::CommandLine).unwrap();
+            }
+            for (name, value) in first_launch(&laptop) {
+                s.set_user_beneath(&name, &value).unwrap();
+            }
+            assert_eq!(s.get(rays), by_command_line);
+            assert_eq!(
+                s.user_lines(),
+                ["app.window fullscreen", "r.preset medium", "r.rays 0"]
+            );
+        }
     }
 
     #[test]

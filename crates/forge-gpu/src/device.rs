@@ -228,6 +228,29 @@ struct Candidate {
     executable_info: bool,
 }
 
+/// What the app may ask of the GPU a device would be made of, before it makes the device
+/// ([`Device::preferred_gpu`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PreferredGpu {
+    /// Its PCI vendor id ([`VENDOR_NVIDIA`], AMD 0x1002, …).
+    pub vendor: u32,
+    /// Whether it has ray queries, whatever a device is then made with
+    /// ([`DeviceOptions::no_ray_query`]).
+    pub ray_query: bool,
+    /// Its own memory the process may use, bytes: the device-local heaps' budget, as
+    /// [`crate::MemoryReport::device_local`] gives it once the device is made (`None` without
+    /// `VK_EXT_memory_budget`).
+    pub video_memory: Option<u64>,
+}
+
+/// `FORGE_VRAM_BUDGET_MB`, bytes: a smaller device-local budget than the OS gives.
+fn vram_budget_cap() -> Option<u64> {
+    std::env::var("FORGE_VRAM_BUDGET_MB")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .map(|mb| mb << 20)
+}
+
 /// NVIDIA's PCI vendor id: the only vendor NVIDIA Streamline (DLSS) is loaded for (issue #67).
 pub const VENDOR_NVIDIA: u32 = 0x10DE;
 /// AMD's PCI vendor id (`FORGE_GPU=amd`, issue #67).
@@ -641,22 +664,31 @@ impl Device {
             shader_stats,
             memory_counters: Default::default(),
             resizable_bar,
-            budget_cap: std::env::var("FORGE_VRAM_BUDGET_MB")
-                .ok()
-                .and_then(|v| v.parse::<u64>().ok())
-                .map(|mb| mb << 20),
+            budget_cap: vram_budget_cap(),
         }))
     }
 
-    /// The PCI vendor id of the GPU [`Device::with_options`] would select on `instance` (for
-    /// `surface`), without creating a device, or `None` when no GPU qualifies. The app asks a
-    /// plain instance first, so NVIDIA Streamline's interposer is loaded only for an NVIDIA GPU
-    /// (issue #67).
-    pub fn preferred_vendor(
+    /// The GPU [`Device::with_options`] would select on `instance` (for `surface`), without
+    /// creating a device, or `None` when no GPU qualifies. The app asks a plain instance first:
+    /// NVIDIA Streamline's interposer is loaded only for an NVIDIA GPU (issue #67), and the first
+    /// launch's settings, which decide how the device is made, follow the GPU's memory and its
+    /// ray queries (D-111).
+    pub fn preferred_gpu(
         instance: &Instance,
         surface: Option<vk::SurfaceKHR>,
-    ) -> Result<Option<u32>> {
-        Ok(Self::best_candidate(instance, surface)?.map(|c| c.vendor_id))
+    ) -> Result<Option<PreferredGpu>> {
+        Ok(
+            Self::best_candidate(instance, surface)?.map(|c| PreferredGpu {
+                vendor: c.vendor_id,
+                ray_query: c.features.ray_query,
+                video_memory: crate::memory_report::device_local_budget(
+                    instance,
+                    c.physical,
+                    c.features.memory_budget,
+                    vram_budget_cap(),
+                ),
+            }),
+        )
     }
 
     /// The highest-scoring GPU of `instance` that meets the baseline (the last of equals), or

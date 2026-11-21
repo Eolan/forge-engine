@@ -1531,6 +1531,39 @@ impl<D: Demo> State<D> {
         let window_handle = window.window_handle()?.as_raw();
         let validation = config.validate || cfg!(debug_assertions);
         let root = workspace_root_from(env!("CARGO_MANIFEST_DIR"));
+        // The GPU the device will be made of, asked of a plain instance before it: its vendor,
+        // so NVIDIA Streamline's interposer, which becomes the Vulkan loader, is loaded only
+        // for an NVIDIA GPU (issue #67), and on the first launch its memory and its ray queries.
+        let preferred = if config.streamline || first_launch {
+            let probe = Arc::new(Instance::new(c"forge", validation, Some(display))?);
+            let surface = probe.create_surface(display, window_handle)?;
+            Device::preferred_gpu(&probe, Some(surface.raw()))?
+        } else {
+            None
+        };
+        // The first launch on this machine: what the GPU and the monitor are, and the settings
+        // that fit them, written for the runs to come. Chosen before the device is made, which
+        // `r.rays` makes with or without the GPU's ray queries (D-111): this run is already the
+        // tier the file will hold.
+        let first_machine = if first_launch {
+            let machine = presets::Machine {
+                video_memory: preferred.and_then(|gpu| gpu.video_memory),
+                ray_query: preferred.is_some_and(|gpu| gpu.ray_query),
+                monitor: window.current_monitor().map(|m| {
+                    let size = m.size();
+                    (size.width, size.height)
+                }),
+            };
+            // Under `forge.cfg` and `--set`, read already, as the user's file always is.
+            for (name, value) in presets::first_launch(&machine) {
+                if let Err(e) = settings.set_user_beneath(&name, &value) {
+                    tracing::warn!("first launch: {name}: {e}");
+                }
+            }
+            Some(machine)
+        } else {
+            None
+        };
         let options = DeviceOptions {
             no_mesh_shader: config.force_fallback,
             // NRC's extensions only where its shim is there to load (D-088's trial).
@@ -1539,16 +1572,10 @@ impl<D: Demo> State<D> {
             // choice, read at start as the window's settings are.
             no_ray_query: !settings.get(rays),
         };
-        // NVIDIA Streamline's interposer becomes the Vulkan loader, so it is loaded only when the
-        // GPU the device selection prefers is NVIDIA's (issue #67): a plain instance asks first.
         // Any failure through Streamline (instance, surface or device) falls back to the plain
         // loader: DLSS is an option, TAA the floor.
         let streamlined = if config.streamline {
-            let vendor = {
-                let probe = Arc::new(Instance::new(c"forge", validation, Some(display))?);
-                let surface = probe.create_surface(display, window_handle)?;
-                Device::preferred_vendor(&probe, Some(surface.raw()))?
-            };
+            let vendor = preferred.map(|gpu| gpu.vendor);
             if vendor == Some(VENDOR_NVIDIA) {
                 let sdk = std::env::var_os("FORGE_STREAMLINE_DIR")
                     .map(PathBuf::from)
@@ -1648,37 +1675,20 @@ impl<D: Demo> State<D> {
             _ => OverlayMode::Off,
         };
         let graph = RenderGraph::new(&device);
-        {
-            if first_launch {
-                // The first launch on this machine: what the GPU and the monitor are, and the
-                // settings that fit them, written for the runs to come.
-                let machine = presets::Machine {
-                    video_memory: device
-                        .memory_report()
-                        .device_local()
-                        .map(|(_, budget)| budget),
-                    dlss: device.dlss().is_some(),
-                    monitor: window.current_monitor().map(|m| {
-                        let size = m.size();
-                        (size.width, size.height)
-                    }),
-                };
-                user_header = format!(
-                    "{}\n",
-                    presets::first_launch_header(&machine, device.name())
-                );
-                // Under `forge.cfg` and `--set`, read already, as the user's file always is.
-                for (name, value) in presets::first_launch(&machine) {
-                    if let Err(e) = settings.set_user_beneath(&name, &value) {
-                        tracing::warn!("first launch: {name}: {e}");
-                    }
-                }
-                tracing::info!(
-                    ?machine,
-                    gpu = device.name(),
-                    "first launch: settings chosen"
-                );
-            }
+        if let Some(machine) = &first_machine {
+            // The first launch's file says what it saw, the device's DLSS with it.
+            let dlss = device.dlss().is_some();
+            user_header = format!(
+                "{}\n",
+                presets::first_launch_header(machine, device.name(), dlss)
+            );
+            tracing::info!(
+                ?machine,
+                dlss,
+                rays = settings.get(rays),
+                gpu = device.name(),
+                "first launch: settings chosen"
+            );
         }
         let fps_max = settings.add(
             Spec::int(
