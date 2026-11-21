@@ -276,7 +276,9 @@ impl Residency {
             if want == Some(Detail::Full) || want == Some(detail) {
                 continue;
             }
-            let distance = (partition.cell_center(cell) - viewer).length();
+            // As the plan measures its reach (#400): along the surface, not the straight line,
+            // which a viewer's height lengthens past the hysteresis.
+            let distance = partition.reach_distance(viewer, cell);
             let near_proxy = want == Some(Detail::Proxy)
                 || distance <= policy.keep_proxy_within(partition, level);
             match detail {
@@ -436,6 +438,76 @@ mod tests {
         }
         assert!(residency.is_loaded(grid.cell_of(far, 6)));
         assert!(!residency.is_loaded(grid.cell_of(start, 6)));
+    }
+
+    /// #400: a viewer high over a flat grid keeps its hysteresis. The plan reaches
+    /// horizontally; measured as a straight line, a cell just out of the plan was already past
+    /// its unload distance from 150 m up and more, and a viewer on a cell's border loaded and
+    /// unloaded it at every step.
+    #[test]
+    fn a_viewer_high_over_a_flat_grid_keeps_its_hysteresis() {
+        // 64 m cells at the finest level, as an authored district's.
+        let grid = FlatGrid { root_size: 4096.0 };
+        let policy = StreamPolicy {
+            coarsest: 6,
+            ..policy()
+        };
+        assert_eq!(grid.cell_size(6), 64.0);
+        for height in [0.0, 100.0, 160.0, 200.0, 230.0, 400.0] {
+            let mut residency = Residency::new();
+            let at = |x: f64| DVec3::new(x, height, 10.0);
+            // Back and forth across a cell's border, a metre either side.
+            let mut churn = 0;
+            for k in 0..40 {
+                let viewer = at(if k % 2 == 0 { 63.5 } else { 64.5 });
+                let changes = residency.update(
+                    &grid,
+                    viewer,
+                    &StreamPlan::around(&grid, viewer, &policy),
+                    &policy,
+                );
+                if k >= 2 {
+                    churn += changes.load.len() + changes.unload.len();
+                }
+            }
+            assert_eq!(
+                churn, 0,
+                "{height} m up: cells loaded and unloaded at the border"
+            );
+        }
+    }
+
+    /// #400's measure on the sphere: a cell's distance is the plan's own, in the plane tangent
+    /// to the viewer's sphere, so a viewer's height does not lengthen it either.
+    #[test]
+    fn the_reach_distance_is_the_plans_on_the_sphere_too() {
+        let planet = CubeSphere {
+            radius: 1_500_000.0,
+        };
+        let ground = planet.surface_point(DVec3::new(1.0, 0.2, 0.1), 0.0);
+        let high = planet.surface_point(DVec3::new(1.0, 0.2, 0.1), 50_000.0);
+        let policy = policy();
+        for viewer in [ground, high] {
+            let plan = StreamPlan::around(&planet, viewer, &policy);
+            for level in policy.coarsest..=policy.finest {
+                let keep = policy.keep_within(&planet, level);
+                for want in plan.at_level(level) {
+                    let d = planet.reach_distance(viewer, want.cell);
+                    assert!(
+                        d <= keep,
+                        "level {level}: a wanted cell at {d} m past {keep} m"
+                    );
+                }
+            }
+        }
+        // The viewer's own cell is near, the antipode beyond every reach.
+        let own = planet.cell_of(ground, 6);
+        assert!(planet.reach_distance(ground, own) < planet.cell_size(6));
+        assert!(
+            planet
+                .reach_distance(ground, planet.cell_of(-ground, 6))
+                .is_infinite()
+        );
     }
 
     /// #345: facing a way, the cells ahead come before those behind, and the same cells are

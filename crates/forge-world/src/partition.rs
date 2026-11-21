@@ -22,6 +22,11 @@ pub trait Partition {
     fn cell_size(&self, level: u8) -> f64;
     /// `point` moved `east` and `north` metres along the surface.
     fn step(&self, point: DVec3, east: f64, north: f64) -> DVec3;
+    /// How far `cell`'s centre lies from `viewer` as a plan measures its reach: in the steps
+    /// [`Partition::step`] takes from the viewer, so along the surface, whatever the viewer's
+    /// height over it (#400: the straight line to the centre grows with the height, and a
+    /// viewer high over a flat grid lost its hysteresis).
+    fn reach_distance(&self, viewer: DVec3, cell: CellId) -> f64;
 }
 
 /// A flat grid in the x–z plane (+Y up), the level-0 cell `root_size` metres across and each
@@ -54,6 +59,12 @@ impl Partition for FlatGrid {
 
     fn step(&self, point: DVec3, east: f64, north: f64) -> DVec3 {
         point + DVec3::new(east, 0.0, -north)
+    }
+
+    fn reach_distance(&self, viewer: DVec3, cell: CellId) -> f64 {
+        // The steps are horizontal: so is the distance.
+        let to = self.cell_center(cell) - viewer;
+        to.x.hypot(to.z)
     }
 }
 
@@ -207,6 +218,22 @@ impl Partition for CubeSphere {
         let (e, n) = Self::tangents(point);
         let radius = point.length();
         (point + e * east + n * north).normalize() * radius
+    }
+
+    fn reach_distance(&self, viewer: DVec3, cell: CellId) -> f64 {
+        // The steps lie in the plane tangent to the viewer's own sphere and are brought back
+        // onto it: a cell is that far when its direction meets that plane that far from the
+        // viewer. Past the horizon, no step reaches it.
+        let radius = viewer.length();
+        let Some(up) = viewer.try_normalize() else {
+            return (self.cell_center(cell) - viewer).length();
+        };
+        let direction = self.cell_center(cell).normalize();
+        let cos = up.dot(direction);
+        if cos <= 1e-9 {
+            return f64::INFINITY;
+        }
+        ((direction / cos - up) * radius).length()
     }
 }
 
