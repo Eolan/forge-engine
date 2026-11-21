@@ -32,6 +32,7 @@ pub mod fsr;
 pub mod glass;
 pub mod grass;
 pub mod gtao;
+pub mod height_light;
 pub mod holograms;
 pub mod impostor;
 pub mod lamps;

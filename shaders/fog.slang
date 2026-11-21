@@ -572,8 +572,8 @@ void fog_light<let RAYS : int>(uint3 id)
                 // surface's; a bar's haze took the street's light from the open sky.
                 if ((f[0].options & OPTION_CUBE_AMBIENT) != 0u)
                 {
-                    float4 room_up = cube_ambient(f, world, up);
-                    float4 room_down = cube_ambient(f, world, -up);
+                    float4 room_up = cube_ambient(f, world, up, false);
+                    float4 room_down = cube_ambient(f, world, -up, false);
                     ambient = lerp(open_up, room_up.rgb, room_up.a) + lerp(open_down, room_down.rgb, room_down.a);
                 }
             }

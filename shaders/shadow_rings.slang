@@ -69,6 +69,13 @@ static const float RING_SUN_RADIUS = 1.5;
 // rings are not given (`set` null), as the resolve's pixels take it.
 public float ring_sun(RingSet* set, float3 relative, float turn)
 {
+    return ring_sun_taps(set, relative, turn, RING_SUN_TAPS);
+}
+
+// `ring_sun` with `taps` taps of its filter: one for a reader that averages many points itself
+// (the light the city leaves a surface, D-108 step 6).
+public float ring_sun_taps(RingSet* set, float3 relative, float turn, uint taps)
+{
     if (set == nullptr)
         return 1.0;
     for (uint i = 0u; i < RING_COUNT; i++)
@@ -86,9 +93,9 @@ public float ring_sun(RingSet* set, float3 relative, float turn)
             return 1.0;
         float2 at = uv * RING_TEXELS;
         float lit = 0.0;
-        for (uint k = 0u; k < RING_SUN_TAPS; k++)
-            lit += ring_tap(r.image, at + ring_disc(k, RING_SUN_TAPS, RING_SUN_RADIUS, turn * 6.2831853), z);
-        return lit / float(RING_SUN_TAPS);
+        for (uint k = 0u; k < taps; k++)
+            lit += ring_tap(r.image, at + ring_disc(k, taps, RING_SUN_RADIUS, turn * 6.2831853), z);
+        return lit / float(taps);
     }
     return 1.0;
 }

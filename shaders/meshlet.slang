@@ -260,6 +260,11 @@ static const uint OPTION_CUBE_FACE = 1u << 20;
 static const uint OPTION_CUBE_AMBIENT = 1u << 21;
 // The near light from the screen (D-108, step 4): `diffuse_bounce` in the resolve's push names it.
 static const uint OPTION_SCREEN_GI = 1u << 22;
+// With no probes, the open sky's light as the heights seen from above leave it (D-108 step 6,
+// `Frame::height_light`, `height_light.slang`).
+static const uint OPTION_HEIGHT_LIGHT = 1u << 23;
+// With it: the street cubes' ambient light stays over it; else only a room's cube does.
+static const uint OPTION_HEIGHT_STREETS = 1u << 24;
 static const uint OPTION_RING_MOVERS = 1u << 17;
 // With OPTION_RING: a ring past the scene's far shadows, whose casters are the far shadow rays' world.
 static const uint OPTION_RING_FAR = 1u << 18;
@@ -604,7 +609,7 @@ public struct Frame
     public float* far_shares;       // their shares of their light this frame, unshadowed
     public float* ladder;           // per instance on a ladder (D-075), this frame's crossing (`ladder_crossing`) with the fade after it packed in (`ladder_fade_share`, #363), written by the instance culls; null: no ladder
     public InstanceFade* fades;     // per instance slot, its fade (D-106), null: a scene without
-    public uint2 fades_pad;         // keeps what follows on its 16 bytes
+    public uint2 height_light;      // with OPTION_HEIGHT_LIGHT (D-108 step 6): the sampled indices of the light the heights leave this view (rgb: the share of the open sky's irradiance, a: of the sky its mirror direction sees) and of its view depth, both at half the view's resolution
     public float far_shadows;       // metres from the camera from which the shadow rays meet RAY_SHADOW_FAR's world (D-075 step 3, `shadow_world`); 0: never
     public uint lamp_restir_from;   // the first of the frame's lamps ReSTIR DI lights where it runs (`lamp_by_restir`, #372): 0 every lamp, ~0 none (the street lamps under --street-restir)
     public GrassCell* grass;        // the grass map's cells (#300, D-075), rows of increasing z; null: no grass
@@ -4304,6 +4309,9 @@ static float3 g_reflection_tint = float3(1.0);
 static float g_traced_scale = 1.0;
 // The near light from the screen at this pixel (D-108, step 4), over the ambient light.
 static float3 g_screen_near = float3(0.0);
+// What the heights seen from above leave this pixel (D-108, step 6): the share of the open sky's
+// irradiance it takes (rgb), and the share of the sky its mirror direction sees (a).
+static float4 g_height_light = float4(1.0);
 // The share of its reflection a decal-smoothed pixel's ray must carry to be traced, and from which
 // it carries all of it (#395): a puddle's middle, 1; the edge fades in between.
 static const float DECAL_MIRROR_LEAST = 0.5;
@@ -5032,16 +5040,31 @@ float3 sun_light(Frame* f, float3 albedo, float3 n, float3 geometric, float spec
             if (reflects)
                 sky_share = min(saturate(toward_r / max(open_r, 1e-4)), float3(sky_limit));
         }
-        else if ((f[0].options & OPTION_CUBE_AMBIENT) != 0u)
+        else
         {
-            // No probes: a room's light from its cube (D-108, step 4), the sky's dimmed by it.
-            float4 room = cube_ambient(f, world, n);
-            if (room.a > 0.0)
+            // No probes. The open sky's light as the heights seen from above leave it (D-108,
+            // step 6): the sky the buildings round the surface leave, and what they send back.
+            // The sky's reflection dims by what its mirror direction meets there.
+            float3 open_here = irradiance;
+            bool gathered = (f[0].options & OPTION_HEIGHT_LIGHT) != 0u;
+            if (gathered)
             {
-                float3 open_here = irradiance;
-                irradiance = lerp(open_here, room.rgb, room.a);
+                irradiance = open_here * max(g_height_light.rgb, float3(0.0));
                 if (reflects)
-                    sky_share = lerp(float3(1.0), saturate(room.rgb / max(open_here, 1e-4)), room.a);
+                    sky_share = float3(saturate(g_height_light.a));
+            }
+            if ((f[0].options & OPTION_CUBE_AMBIENT) != 0u)
+            {
+                // A room's light from its cube (D-108, step 4), the sky's dimmed by it. Rooms
+                // first: the gathered light takes the share they leave; the street cubes' stays
+                // over it only where the scene asks (OPTION_HEIGHT_STREETS).
+                float4 room = cube_ambient(f, world, n, gathered && (f[0].options & OPTION_HEIGHT_STREETS) == 0u);
+                if (room.a > 0.0)
+                {
+                    irradiance = lerp(irradiance, room.rgb, room.a);
+                    if (reflects)
+                        sky_share = lerp(sky_share, saturate(room.rgb / max(open_here, 1e-4)), room.a);
+                }
             }
         }
         // D-088's reference (`shade_pixel` traced it once): its rays see the occlusion GTAO
@@ -9146,6 +9169,33 @@ float3 screen_near_at(uint image, uint2 pixel, float z)
     return best;
 }
 
+// What the heights seen from above leave a pixel of view depth `z` (D-108 step 6): of the four
+// half-resolution texels round it, the one nearest in depth. `images`: the light's and its view
+// depth's sampled indices (`Frame::height_light`).
+float4 height_light_at(uint2 images, uint2 pixel, float z)
+{
+    Texture2D<float4> light = g_sampled_images[NonUniformResourceIndex(images.x)];
+    Texture2D<float> depths = g_sampled_images_r[NonUniformResourceIndex(images.y)];
+    int2 last = int2(resolve_push.width / 2u, resolve_push.height / 2u) - int2(1);
+    int2 first = int2((int(pixel.x) - 1) >> 1, (int(pixel.y) - 1) >> 1);
+    int2 best = clamp(first, int2(0), last);
+    float nearest = 1e30;
+    for (int y = 0; y <= 1; y++)
+    {
+        for (int x = 0; x <= 1; x++)
+        {
+            int2 at = clamp(first + int2(x, y), int2(0), last);
+            float apart = abs(depths.Load(int3(at, 0)) - z);
+            if (apart < nearest)
+            {
+                nearest = apart;
+                best = at;
+            }
+        }
+    }
+    return light.Load(int3(best, 0));
+}
+
 // Shades the pixel at `pixel` whose (non-empty) visibility id is `vis`, when its material is
 // of class `class_index` (a compile-time constant at every call); `SHADOWS` compiles the
 // shadow ray in (devices with ray queries). Returns the class it has. A grass blade's pixel
@@ -9245,6 +9295,9 @@ uint shade_pixel<let SHADOWS : int>(uint class_index, uint2 pixel, uint vis)
     g_screen_near = float3(0.0);
     if ((f[0].options & OPTION_SCREEN_GI) != 0u && bounce_image != 0xFFFFFFFFu && !grass)
         g_screen_near = screen_near_at(bounce_image, pixel, mul(f[0].view_proj, float4(surface_relative, 1.0)).w);
+    g_height_light = float4(1.0);
+    if ((f[0].options & OPTION_HEIGHT_LIGHT) != 0u && f[0].height_light.x != 0xFFFFFFFFu && s.probes == nullptr)
+        g_height_light = height_light_at(f[0].height_light, pixel, mul(f[0].view_proj, float4(surface_relative, 1.0)).w);
     g_near_on = SHADOWS != 0 && f[0].gi_reference != 0u && (s.probes != nullptr || f[0].gi_reference >= GI_REFERENCE_PATH) && s.sky != nullptr && f[0].tlas != 0;
     // The entry's own switch in the test, so an entry without rays holds no ray query (D-108 step 5).
     if (SHADOWS != 0 && g_near_on)
@@ -9616,9 +9669,9 @@ float4 cube_light(Frame* f, float3 p, float3 r, float rough)
 
 // A room's light from its cube (D-108, step 4), `cube_ambient_in` for the frame's cubes: a cube's
 // own faces count a cube not yet whole as dark.
-float4 cube_ambient(Frame* f, float3 p, float3 n)
+float4 cube_ambient(Frame* f, float3 p, float3 n, bool rooms_only)
 {
-    return cube_ambient_in(f[0].reflection_cubes, p, n, (f[0].options & OPTION_CUBE_FACE) != 0u);
+    return cube_ambient_among(f[0].reflection_cubes, p, n, (f[0].options & OPTION_CUBE_FACE) != 0u, rooms_only);
 }
 
 struct CubeFacePush

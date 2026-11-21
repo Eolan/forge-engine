@@ -87,6 +87,17 @@ pub(crate) struct RenderVars {
     screen_gi_radius: Var<f64>,
     /// Its slices per pixel.
     screen_gi_slices: Var<i64>,
+    /// With no probes, the open sky's light as the heights seen from above leave it (D-108 step 6).
+    height_light: Var<bool>,
+    /// How far a direction is marched against them, metres.
+    height_reach: Var<f64>,
+    /// What a blocked direction's face is taken to reflect.
+    height_reflectance: Var<f64>,
+    /// Directions a pixel marches each frame, and steps a direction takes.
+    height_directions: Var<i64>,
+    height_steps: Var<i64>,
+    /// The street cubes' ambient light over it, else left out.
+    height_street_cubes: Var<bool>,
     /// The rings' filter and cost (`r.shadows.*`, D-108).
     ring_search_taps: Var<i64>,
     ring_filter_taps: Var<i64>,
@@ -423,6 +434,42 @@ impl Gallery {
                 self.renderer.cube_ambient,
                 "With no probes, a room's ambient light from its reflection cube, else the sky's.",
             )),
+            height_light: s.add(Spec::bool(
+                "r.gi.heights",
+                self.scene.rays().is_none(),
+                "Without rays, the open sky's light as the buildings round a surface leave it: \
+                 directions marched against the heights seen from above (D-108 step 6).",
+            )),
+            height_reach: s.add(Spec::float(
+                "r.gi.heights_reach",
+                f64::from(self.renderer.height_settings.reach),
+                8.0..=1024.0,
+                "Light from the heights: how far a direction is marched, metres.",
+            )),
+            height_reflectance: s.add(Spec::float(
+                "r.gi.heights_reflectance",
+                f64::from(self.renderer.height_settings.reflectance),
+                0.0..=1.0,
+                "Light from the heights: what a blocked direction's face is taken to reflect.",
+            )),
+            height_directions: s.add(Spec::int(
+                "r.gi.heights_directions",
+                i64::from(self.renderer.height_settings.directions),
+                1..=32,
+                "Light from the heights: directions a pixel marches each frame.",
+            )),
+            height_steps: s.add(Spec::int(
+                "r.gi.heights_steps",
+                i64::from(self.renderer.height_settings.steps),
+                4..=48,
+                "Light from the heights: steps a direction takes out to its reach.",
+            )),
+            height_street_cubes: s.add(Spec::bool(
+                "r.gi.heights_street_cubes",
+                self.renderer.height_settings.street_cubes,
+                "Light from the heights: the street cubes' ambient light stays over it where they \
+                 stand, else only a room's cube does.",
+            )),
             shadow_mode: s.add(Spec::choice(
                 "r.shadows.mode",
                 SHADOW_MODES,
@@ -594,6 +641,25 @@ impl Gallery {
         if self.screen_gi.is_none() {
             self.renderer.screen_gi_on = false;
         }
+        // The light the heights leave (D-108 step 6): where there are no rays, as the near light.
+        let heights = s.get(v.height_light) && self.scene.rays().is_none();
+        self.renderer.height_settings = forge_render::height_light::HeightLightSettings {
+            reach: s.get(v.height_reach) as f32,
+            reflectance: s.get(v.height_reflectance) as f32,
+            directions: s.get(v.height_directions) as u32,
+            steps: s.get(v.height_steps) as u32,
+            street_cubes: s.get(v.height_street_cubes),
+        };
+        if heights
+            && !self.height_light_failed
+            && let Err(error) =
+                self.renderer
+                    .enable_height_light(&ctx.device, &ctx.shaders, self.screen_gi_extent)
+        {
+            tracing::error!(%error, "the light from the heights could not be made");
+            self.height_light_failed = true;
+        }
+        self.renderer.height_light_on = heights && !self.height_light_failed;
         self.renderer.screen_steps = s.get(v.screen_steps) as u32;
         self.renderer.screen_thickness = s.get(v.screen_thickness) as f32;
         let rings = SHADOW_MODES[s.get(v.shadow_mode)] == "rings";

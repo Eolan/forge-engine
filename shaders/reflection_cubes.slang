@@ -54,6 +54,13 @@ public float2 cube_in_tile(float3 d, uint level)
 // cubes' wider blend: near a street cube's walls the cube still stands for the place, not the sky.
 public void cube_pick(CubeSet* set, float3 p, bool face, out uint found[CUBE_PICKED], out float weight[CUBE_PICKED], out float cover)
 {
+    cube_pick_among(set, p, face, false, found, weight, cover);
+}
+
+// `cube_pick`, with `rooms_only` among the rooms' cubes alone: the street cubes left out, where
+// the open sky's light comes as the heights seen from above leave it (D-108 step 6).
+public void cube_pick_among(CubeSet* set, float3 p, bool face, bool rooms_only, out uint found[CUBE_PICKED], out float weight[CUBE_PICKED], out float cover)
+{
     cover = 0.0;
     float rank[CUBE_PICKED];
     for (uint k = 0u; k < CUBE_PICKED; k++)
@@ -66,6 +73,8 @@ public void cube_pick(CubeSet* set, float3 p, bool face, out uint found[CUBE_PIC
     {
         Cube c = set[0].cubes[i];
         if (c.tile.z == 0u && !face)
+            continue;
+        if (rooms_only && c.tile.w == 0u)
             continue;
         float3 inside = min(p - c.lo.xyz, c.hi.xyz - p) + float3(CUBE_PAST_ITS_WALLS);
         float edge = min(inside.x, min(inside.y, inside.z));
@@ -117,12 +126,18 @@ public void cube_pick(CubeSet* set, float3 p, bool face, out uint found[CUBE_PIC
 // round is the direct light alone, and the others build on it.
 public float4 cube_ambient_in(CubeSet* set, float3 p, float3 n, bool face)
 {
+    return cube_ambient_among(set, p, n, face, false);
+}
+
+// `cube_ambient_in`, with `rooms_only` from the rooms' cubes alone (`cube_pick_among`).
+public float4 cube_ambient_among(CubeSet* set, float3 p, float3 n, bool face, bool rooms_only)
+{
     if (set == nullptr)
         return float4(0.0);
     uint found[CUBE_PICKED];
     float weight[CUBE_PICKED];
     float cover;
-    cube_pick(set, p, face, found, weight, cover);
+    cube_pick_among(set, p, face, rooms_only, found, weight, cover);
     float3 sum = float3(0.0);
     float total = 0.0;
     for (uint k = 0u; k < CUBE_PICKED; k++)

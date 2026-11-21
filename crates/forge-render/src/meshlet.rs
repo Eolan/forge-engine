@@ -797,8 +797,10 @@ struct GpuFrame {
     ladder: u64,
     /// Per instance slot, its fade's two sides (D-106, `InstanceFade`), 0 in a scene without.
     fades: u64,
-    /// Keeps what follows on its 16 bytes.
-    fades_pad: u64,
+    /// The light the heights seen from above leave this view (D-108 step 6,
+    /// [`crate::height_light::HeightLight`]): the sampled indices of its light and of its view
+    /// depth, both at half the view's resolution. Read with `OPTION_HEIGHT_LIGHT`.
+    height_light: [u32; 2],
     /// The distance from which the shadow rays meet the far shadows' world (D-075 step 3,
     /// [`MeshletSceneBuilder::set_far_shadows`]), metres; 0: never.
     far_shadows: f32,
@@ -873,6 +875,11 @@ const OPTION_CUBE_FACE: u32 = 1 << 20;
 const OPTION_CUBE_AMBIENT: u32 = 1 << 21;
 /// `options`: the resolve's `diffuse_bounce` names the near light from the screen (`OPTION_SCREEN_GI`).
 const OPTION_SCREEN_GI: u32 = 1 << 22;
+/// `options`: with no probes, the open sky's light as the heights seen from above leave it
+/// (D-108 step 6, `Frame::height_light`; `OPTION_HEIGHT_LIGHT`).
+const OPTION_HEIGHT_LIGHT: u32 = 1 << 23;
+/// `options`, with it: the street cubes' ambient light stays over it (`OPTION_HEIGHT_STREETS`).
+const OPTION_HEIGHT_STREETS: u32 = 1 << 24;
 /// `options` of a shadow ring's draw: orthographic, its LOD by its texels (`OPTION_RING`).
 const OPTION_RING: u32 = 1 << 16;
 /// With [`OPTION_RING`]: it draws the movers, not the casters that stay.
@@ -945,6 +952,8 @@ pub struct RingFrame {
     instances: Option<forge_gpu::BufferHandle>,
     /// See `instances`.
     cells: Option<forge_gpu::BufferHandle>,
+    /// The heights seen from above, with their light on (D-108 step 6).
+    heights: Option<crate::height_light::CityHeights>,
 }
 
 /// The sun's shadow rings as a pass of another module reads them (D-108 step 5, `ring_sun` in
@@ -999,6 +1008,11 @@ impl RingFrame {
         }
     }
 
+    /// The heights seen from above this frame, with their light on (D-108 step 6).
+    pub fn heights(&self) -> Option<crate::height_light::CityHeights> {
+        self.heights
+    }
+
     /// The lamps' shadow atlas's composed layer this frame, with the atlas on (D-108 step 2):
     /// what a pass that reads the frame record's atlas (`atlas_seen`) declares.
     pub fn lamp_atlas(&self) -> Option<ImageHandle> {
@@ -1021,6 +1035,19 @@ struct ResolveView<'f> {
     atlas: Option<ImageHandle>,
     /// The cubes' atlas, whose diffuse level a face's shading reads.
     cube_light: Option<ImageHandle>,
+    /// The light the heights seen from above leave the view (D-108 step 6), which its block names.
+    height_light: Option<crate::height_light::HeightLightImages>,
+}
+
+/// The heights seen from above on the GPU (D-108 step 6), made when first asked for
+/// ([`MeshletRenderer::enable_height_light`]).
+struct HeightsGpu {
+    /// The levels: the static casters' highest point in each texel, tiles wrapped.
+    levels: Vec<GraphImage>,
+    /// Per frame slot, the `HeightSet` the marches read.
+    sets: Vec<Buffer>,
+    /// The passes that gather the light against them.
+    light: crate::height_light::HeightLight,
 }
 
 /// Declares what a view's shading reads of the reflection cubes' atlas: a face's, the diffuse level
@@ -1039,6 +1066,20 @@ fn reads_cubes<'b, 'f>(
             ImageAccess::Sampled(compute),
         ),
         _ => builder,
+    }
+}
+
+/// Declares what a view's shading reads of the light the heights leave it (D-108 step 6).
+fn reads_height_light<'b, 'f>(
+    builder: forge_gpu::PassBuilder<'b, 'f>,
+    light: Option<crate::height_light::HeightLightImages>,
+) -> forge_gpu::PassBuilder<'b, 'f> {
+    let compute = vk::PipelineStageFlags2::COMPUTE_SHADER;
+    match light {
+        Some(l) => builder
+            .image(l.light, ImageAccess::Sampled(compute))
+            .image(l.z, ImageAccess::Sampled(compute)),
+        None => builder,
     }
 }
 
@@ -5364,6 +5405,19 @@ pub struct MeshletRenderer {
     pub atlas_budget: usize,
     /// The faces a frame may lay again with movers over them (`r.shadows.atlas_movers`).
     pub atlas_mover_budget: usize,
+    /// The heights seen from above and the light gathered against them (D-108 step 6), once
+    /// asked for.
+    heights: Option<HeightsGpu>,
+    /// Their levels' tiles, planned as rings under a sun straight up.
+    height_cache: RefCell<crate::shadow_rings::RingCache>,
+    /// Whether, with no probes, the open sky's light is what the heights leave of it
+    /// (`r.gi.heights`). Needs the shadow rings, whose chains draw the heights.
+    pub height_light_on: bool,
+    /// Its settings (`r.gi.heights_*`).
+    pub height_settings: crate::height_light::HeightLightSettings,
+    /// This frame's gathered light for the camera's resolve, once
+    /// [`Self::gather_height_light`] has run.
+    height_light_frame: Cell<Option<crate::height_light::HeightLightImages>>,
     /// Frames more to go round the rings' tiles since cluster pages last came in.
     ring_refresh: Cell<u32>,
     /// Whether the shadow rings give the sun's shadow (`r.shadows.mode`).
@@ -6053,6 +6107,11 @@ impl MeshletRenderer {
             atlas_ran: Cell::new(false),
             atlas_budget: 6,
             atlas_mover_budget: 8,
+            heights: None,
+            height_cache: RefCell::new(crate::shadow_rings::RingCache::heights()),
+            height_light_on: false,
+            height_settings: crate::height_light::HeightLightSettings::default(),
+            height_light_frame: Cell::new(None),
             ring_refresh: Cell::new(0),
             shadow_rings: false,
             ring_denoised: false,
@@ -6689,6 +6748,16 @@ impl MeshletRenderer {
                 } else {
                     0
                 }
+                | if self.height_light_live() {
+                    OPTION_HEIGHT_LIGHT
+                        | if self.height_settings.street_cubes {
+                            OPTION_HEIGHT_STREETS
+                        } else {
+                            0
+                        }
+                } else {
+                    0
+                }
                 | self.relief.option_bits(),
             ground_window: scene.ground_window.get(),
             planet: scene.planet.get().camera,
@@ -6716,7 +6785,14 @@ impl MeshletRenderer {
                 .as_ref()
                 .and_then(|d| d.fades.as_ref())
                 .map_or(0, |b| b.address()),
-            fades_pad: 0,
+            height_light: {
+                // A new frame: the camera's gathered light is declared after this, if at all.
+                self.height_light_frame.set(None);
+                self.heights
+                    .as_ref()
+                    .filter(|_| self.height_light_live())
+                    .map_or([u32::MAX; 2], |h| h.light.next_indices())
+            },
             far_shadows: scene.far_shadows,
             lamp_restir_from: self.lamp_restir_from.unwrap_or(u32::MAX),
             grass,
@@ -7821,6 +7897,13 @@ impl MeshletRenderer {
             .movers
             .as_ref()
             .map_or((0, 0), |m| (m.first, m.first + m.len() as u32));
+        // With no probes, a face takes the light the heights leave its own texels (D-108 step 6),
+        // marched when it is drawn, so that its rounds start from it.
+        let face_heights = self
+            .heights
+            .as_ref()
+            .filter(|_| self.height_light_live() && ambient.probes.is_none())
+            .zip(rings.heights);
         for (k, draw) in plan.draws.iter().enumerate() {
             let index = RING_CHAINS - CUBE_CHAINS + k as u64;
             let position = scene.origin.offset(draw.center);
@@ -7855,7 +7938,14 @@ impl MeshletRenderer {
                 cluster_groups: cull_groups(work),
                 page_need: 0,
                 ladder: 0,
-                options: OPTION_CUBE_FACE | (base.options & OPTION_CUBE_AMBIENT),
+                options: OPTION_CUBE_FACE
+                    | (base.options & OPTION_CUBE_AMBIENT)
+                    | if face_heights.is_some() {
+                        base.options & (OPTION_HEIGHT_LIGHT | OPTION_HEIGHT_STREETS)
+                    } else {
+                        0
+                    },
+                height_light: face_heights.map_or([u32::MAX; 2], |(h, _)| h.light.face_indices()),
                 sw_raster_area: 0.0,
                 ring_mover_first: mover_first,
                 ring_mover_end: mover_end,
@@ -7924,6 +8014,24 @@ impl MeshletRenderer {
                 );
                 Ok(())
             });
+            let height_light = face_heights.map(|(h, heights)| {
+                h.light.draw_face(
+                    graph,
+                    slot,
+                    k,
+                    depth,
+                    draw.view_proj,
+                    crate::height_light::HeightLightScene {
+                        heights,
+                        rings: Some(rings.sun()),
+                        sky,
+                        sun_dir: self.sun_dir,
+                        sun_color: self.sun_color,
+                        offset: draw.center - camera,
+                    },
+                    self.height_settings,
+                )
+            });
             self.resolve_view(
                 graph,
                 slot,
@@ -7934,6 +8042,7 @@ impl MeshletRenderer {
                     imported: Some(face_tiles),
                     atlas: rings.atlas,
                     cube_light: Some(atlas),
+                    height_light,
                 },
                 DrawTargets {
                     depth,
@@ -8037,7 +8146,11 @@ impl MeshletRenderer {
         self.shadow_rings = true;
         // What changed while they were off was not kept.
         self.ring_cache.get_mut().clear();
+        self.height_cache.get_mut().clear();
         self.lamp_atlas.get_mut().clear();
+        if let Some(heights) = &self.heights {
+            heights.light.invalidate();
+        }
         if self.rings.is_some() {
             return Ok(());
         }
@@ -8232,7 +8345,122 @@ impl MeshletRenderer {
     /// Has the rings drawn again from nothing: what they hold no longer holds (`r.shadows.lod`).
     pub fn invalidate_shadow_rings(&mut self) {
         self.ring_cache.get_mut().clear();
+        self.height_cache.get_mut().clear();
         self.lamp_atlas.get_mut().clear();
+    }
+
+    /// Makes the heights seen from above and the passes that gather the light against them
+    /// (D-108 step 6) for a frame of `extent`, if they are not there: two levels of 2048 × 2048
+    /// `D32_SFLOAT`, about 32 MB. [`Self::height_light_on`] turns them on, with the shadow rings,
+    /// whose chains draw them.
+    pub fn enable_height_light(
+        &mut self,
+        device: &Arc<Device>,
+        shaders: &ShaderCompiler,
+        extent: vk::Extent2D,
+    ) -> Result<()> {
+        use crate::shadow_rings::{GpuHeightSet, HEIGHT_LEVELS, RING_TEXELS};
+        if self
+            .heights
+            .as_ref()
+            .is_some_and(|h| h.light.extent() == extent)
+        {
+            return Ok(());
+        }
+        let levels = (0..HEIGHT_LEVELS)
+            .map(|i| {
+                GraphImage::new(
+                    device,
+                    ImageDesc {
+                        width: RING_TEXELS,
+                        height: RING_TEXELS,
+                        format: vk::Format::D32_SFLOAT,
+                        usage: vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT
+                            | vk::ImageUsageFlags::SAMPLED,
+                        aspect: vk::ImageAspectFlags::DEPTH,
+                        mip_levels: 1,
+                        name: &format!("heights from above {i}"),
+                    },
+                )
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let sets = (0..FRAMES_IN_FLIGHT)
+            .map(|i| {
+                device.create_buffer(BufferDesc {
+                    size: std::mem::size_of::<GpuHeightSet>() as u64,
+                    usage: vk::BufferUsageFlags::STORAGE_BUFFER,
+                    location: MemoryLocation::CpuToGpu,
+                    category: MemoryCategory::Frame,
+                    name: &format!("heights from above, set {i}"),
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let light = crate::height_light::HeightLight::new(
+            device,
+            shaders,
+            extent,
+            crate::reflection_cubes::CUBE_FACE_TEXELS,
+        )?;
+        self.heights = Some(HeightsGpu {
+            levels,
+            sets,
+            light,
+        });
+        // New images hold nothing.
+        self.height_cache.get_mut().clear();
+        tracing::info!("the heights seen from above are made (D-108 step 6)");
+        Ok(())
+    }
+
+    /// Lets the heights and their passes go: the frame's size changed, and
+    /// [`Self::enable_height_light`] makes them again.
+    pub fn release_height_light(&mut self) {
+        self.heights = None;
+        self.height_light_frame.set(None);
+    }
+
+    /// Whether this frame's shading takes the open sky's light as the heights leave it.
+    fn height_light_live(&self) -> bool {
+        self.height_light_on && self.heights.is_some() && self.shadow_rings && self.rings.is_some()
+    }
+
+    /// Declares the passes that gather, for the camera's view, the light the heights seen from
+    /// above leave each surface (D-108 step 6), before [`Self::resolve`], which then reads it in
+    /// the open sky's place. Nothing where it is off, under probes or without a sky.
+    pub fn gather_height_light<'f>(
+        &'f self,
+        graph: &mut FrameGraph<'f>,
+        slot: FrameSlot,
+        targets: DrawTargets,
+        ambient: &AmbientLight,
+        view: crate::height_light::HeightLightView,
+    ) {
+        let Some(gpu) = self.heights.as_ref().filter(|_| self.height_light_live()) else {
+            return;
+        };
+        let (Some(rings), Some(sky), None) = (targets.rings, ambient.sky, ambient.probes) else {
+            return;
+        };
+        let Some(heights) = rings.heights else {
+            return;
+        };
+        let scene = crate::height_light::HeightLightScene {
+            heights,
+            rings: Some(rings.sun()),
+            sky,
+            sun_dir: self.sun_dir,
+            sun_color: self.sun_color,
+            offset: Vec3::ZERO,
+        };
+        self.height_light_frame.set(Some(gpu.light.draw(
+            graph,
+            slot,
+            self.ring_frame.get(),
+            targets.depth,
+            view,
+            scene,
+            self.height_settings,
+        )));
     }
 
     /// Tells the rings that what stands within `radius` metres of `center` (the coordinates of
@@ -8307,6 +8535,7 @@ impl MeshletRenderer {
             );
             self.ring_lists.set([grown.0, grown.1]);
             cache.clear();
+            self.height_cache.borrow_mut().clear();
             self.lamp_atlas.borrow_mut().redraw_all();
             grown
         } else {
@@ -8345,11 +8574,11 @@ impl MeshletRenderer {
         let composed: Vec<ImageHandle> = gpu.composed.iter().map(|i| graph.import(i)).collect();
 
         let keep = CullFlags::FRUSTUM | CullFlags::LOD | CullFlags::GROUP_WINDOW_OFF;
-        let block_of = |ring: usize, tile: [i64; 2], tiles: [u32; 2], layer: u32| {
-            let r = cache.ring(ring);
-            let far = scene.far_shadows > 0.0
-                && ring > 0
-                && cache.ring(ring - 1).width() * 0.5 >= f64::from(scene.far_shadows);
+        let block_for = |r: &crate::shadow_rings::Ring,
+                         far: bool,
+                         tile: [i64; 2],
+                         tiles: [u32; 2],
+                         layer: u32| {
             let layer = layer | if far { OPTION_RING_FAR } else { 0 };
             let view = r.clip_from_relative(camera, tile, tiles);
             let (first, end) = scene
@@ -8381,6 +8610,12 @@ impl MeshletRenderer {
                 ring_mover_end: end,
                 ..base
             }
+        };
+        let block_of = |ring: usize, tile: [i64; 2], tiles: [u32; 2], layer: u32| {
+            let far = scene.far_shadows > 0.0
+                && ring > 0
+                && cache.ring(ring - 1).width() * 0.5 >= f64::from(scene.far_shadows);
+            block_for(cache.ring(ring), far, tile, tiles, layer)
         };
         let texels = |slots: u32| slots * TILE_TEXELS;
         let extent_height = params.extent.height as f32;
@@ -8508,6 +8743,64 @@ impl MeshletRenderer {
                 chain(graph, block, to, rect, false, RING_TEXELS);
             }
         }
+        // The heights seen from above (D-108, step 6): the rings' tiles under a sun straight up,
+        // the casters that stay and nothing else, read wrapped as they are drawn. A level's tile
+        // is drawn when the camera comes within its reach, and kept: nothing turns.
+        let heights = self
+            .heights
+            .as_ref()
+            .filter(|_| self.height_light_on)
+            .map(|h| {
+                use crate::shadow_rings::{DEPTH_HALF_RANGE, GpuHeightLevel, GpuHeightSet};
+                let mut levels = self.height_cache.borrow_mut();
+                for &(center, radius) in &atlas_changes {
+                    levels.mark_changed(center, radius);
+                }
+                let height_plan = levels.plan(
+                    camera,
+                    DVec3::Y,
+                    self.ring_budget,
+                    RingMovers::None,
+                    &[],
+                    frame,
+                    refresh,
+                );
+                let layers: [ImageHandle; crate::shadow_rings::HEIGHT_LEVELS] =
+                    std::array::from_fn(|i| graph.import(&h.levels[i]));
+                for draw in &height_plan.draws {
+                    let rect = vk::Rect2D {
+                        offset: vk::Offset2D {
+                            x: texels(draw.rect.x) as i32,
+                            y: texels(draw.rect.y) as i32,
+                        },
+                        extent: vk::Extent2D {
+                            width: texels(draw.rect.w),
+                            height: texels(draw.rect.h),
+                        },
+                    };
+                    let block = block_for(
+                        levels.ring(draw.ring),
+                        false,
+                        draw.tile,
+                        [draw.rect.w, draw.rect.h],
+                        0,
+                    );
+                    chain(graph, block, layers[draw.ring], rect, true, RING_TEXELS);
+                }
+                let mut set = GpuHeightSet {
+                    levels: [GpuHeightLevel::none(); crate::shadow_rings::HEIGHT_LEVELS],
+                    range: (2.0 * DEPTH_HALF_RANGE) as f32,
+                    pad: [0.0; 3],
+                };
+                for (i, level) in set.levels.iter_mut().enumerate() {
+                    *level = levels.ring(i).heights(camera, h.levels[i].sampled().0);
+                }
+                h.sets[slot.index].write(0, &[set]);
+                crate::height_light::CityHeights {
+                    set: h.sets[slot.index].address(),
+                    layers,
+                }
+            });
         // The lamps' atlas (D-108, step 2), as the rings: what stays, laid, the movers over it.
         // Turned on again, what it holds can't be trusted: what changed meanwhile was not told to it.
         let atlas_resumed = self.atlas_on && !self.atlas_ran.get();
@@ -8712,6 +9005,7 @@ impl MeshletRenderer {
             stats: ring_io.stats,
             instances: ring_io.instances,
             cells: ring_io.cells,
+            heights,
         };
         if self.ring_denoised {
             return Some((None, ring_frame));
@@ -9619,6 +9913,10 @@ impl MeshletRenderer {
             imported: None,
             atlas: None,
             cube_light: None,
+            height_light: self
+                .height_light_frame
+                .take()
+                .filter(|_| ambient.sky.is_some() && ambient.probes.is_none()),
         };
         self.resolve_view(
             graph, slot, view, targets, color, extent, background, ambient,
@@ -9745,6 +10043,7 @@ impl MeshletRenderer {
                 None => b,
             })
             .with(|b| reads_cubes(b, camera_cubes, face_cubes))
+            .with(|b| reads_height_light(b, view.height_light))
             .buffer(tiles, BufferAccess::ShaderWrite(compute))
             .buffer(args, BufferAccess::ShaderReadWrite(compute));
         if let Some(sky) = ambient.sky {
@@ -9819,6 +10118,7 @@ impl MeshletRenderer {
                     None => b,
                 })
                 .with(|b| reads_cubes(b, camera_cubes, face_cubes))
+                .with(|b| reads_height_light(b, view.height_light))
                 .buffer(tiles, BufferAccess::ShaderRead(compute))
                 .buffer(args, BufferAccess::IndirectArgsAndShaderRead(compute));
             if let Some(sky) = ambient.sky {

@@ -1002,6 +1002,9 @@ struct Gallery {
     screen_gi_drawn: bool,
     /// Its images could not be made: not tried again.
     screen_gi_failed: bool,
+    /// The light from the heights seen from above (D-108 step 6, `r.gi.heights`) could not be
+    /// made: not tried again.
+    height_light_failed: bool,
     /// The cubes misses read (D-108), which the screen's reflections are given when first on.
     cube_volumes: Vec<forge_render::reflection_cubes::CubeVolume>,
     /// Whether the renderer has them.
@@ -2545,6 +2548,7 @@ impl Gallery {
             screen_gi_extent: ctx.extent(),
             screen_gi_drawn: false,
             screen_gi_failed: false,
+            height_light_failed: false,
             reflection_history,
             reflection_motion: true,
             sun_scale,
@@ -2763,6 +2767,8 @@ impl Gallery {
             self.reflection_history.resize(render)?;
             self.screen_gi = None;
             self.screen_gi_extent = render;
+            // The light from the heights is made again at the new size (`apply_vars`).
+            self.renderer.release_height_light();
             // The tank's water's FSR anti-aliases the scene behind it at the scene's size.
             if let Some(behind) = &mut self.behind_aa {
                 behind.configure(forge_render::FsrMode::NativeAa, render)?;
@@ -4585,6 +4591,20 @@ impl Demo for Gallery {
             diffuse_bounce: ambient.diffuse_bounce.or(near_light.map(|n| n.near)),
             ..ambient
         };
+        // The light the heights seen from above leave each surface (D-108 step 6), which the
+        // resolve reads in the open sky's place; nothing where it is off or under probes.
+        self.renderer.gather_height_light(
+            &mut frame.graph,
+            frame.slot,
+            targets,
+            &ambient,
+            forge_render::height_light::HeightLightView {
+                view_proj: taa_frame.jittered_projection * self.camera.view_rotation(),
+                previous_from_current: taa_frame.previous_from_current,
+                frame: (self.taa.frame_index() % 64) as u32,
+                reset: taa_frame.reset,
+            },
+        );
         self.renderer.capture_reflection_cubes(
             &mut frame.graph,
             frame.slot,
