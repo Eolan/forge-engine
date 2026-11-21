@@ -3506,7 +3506,7 @@ void frag_ring_cutout_main(float4 position : SV_Position, float2 uv : TEXCOORD0,
     float2 dx = ddx(uv);
     float2 dy = ddy(uv);
     // Both faces, as the rays meet them: `true` for the face the camera's raster would test.
-    if (!cutout_kept(push.frame, id, uv, true, ground, dx, dy, slant, position))
+    if (!cutout_kept(push.frame, id, uv, true, ground, dx, dy, slant, position, 1.0))
         discard;
 }
 
@@ -3516,7 +3516,7 @@ void frag_ring_fallback_cutout_main(float4 position : SV_Position, nointerpolati
     uint id = id_base | triangle;
     float2 dx = ddx(uv);
     float2 dy = ddy(uv);
-    if (!cutout_kept(push.frame, id, uv, true, ground, dx, dy, slant, position))
+    if (!cutout_kept(push.frame, id, uv, true, ground, dx, dy, slant, position, 1.0))
         discard;
 }
 
@@ -3945,7 +3945,9 @@ float pixel_distance(Frame* f, float4 position)
 // ground's in the ground window, at `ground` in its mesh's frame (#197). A grating's pixels by
 // the share its bars cover (`grating_coverage`) against the frame's spatio-temporal noise at
 // `pixel`, `duv_dx` and `duv_dy` the UV's change per pixel and `slant` the view's (`card_slant`).
-bool cutout_kept(Frame* f, uint id, float2 uv, bool front, float2 ground, float2 duv_dx, float2 duv_dy, float slant, float4 position)
+// `lod_scale` scales that change for the alpha map's mip alone: the view's `texture_lod_scale`,
+// 1 for a draw no upscaler follows (the rings').
+bool cutout_kept(Frame* f, uint id, float2 uv, bool front, float2 ground, float2 duv_dx, float2 duv_dy, float slant, float4 position, float lod_scale)
 {
     uint2 pixel = uint2(position.xy);
     uint slot = id >> VISIBILITY_TRIANGLE_BITS;
@@ -4026,7 +4028,12 @@ bool cutout_kept(Frame* f, uint id, float2 uv, bool front, float2 ground, float2
         // By the UV's change across the pixel the caller took where the quad was whole: this
         // runs after the ladder's and the ground window's early returns, where a quad's pixels
         // part ways and the implicit derivatives are undefined.
-        float scale = exp2(CUTOUT_MIP_BIAS);
+        // Under an upscaler the drawn pixels are larger, and the mip followed them: at DLSS
+        // ultra performance the alpha came from a level 0.6 coarser than the colour's, where
+        // DLAA's is one finer, and the far crowns lost their leaves (#382: the tree line over
+        // the lake a third brighter, the lake showing through). The view's `lod_scale` takes
+        // the same level as at the window's size, as the colour's mip does.
+        float scale = exp2(CUTOUT_MIP_BIAS) * lod_scale;
         float2 tdx = float2(dot(mat.uv_u.xy, duv_dx), dot(mat.uv_v.xy, duv_dx)) * scale;
         float2 tdy = float2(dot(mat.uv_u.xy, duv_dy), dot(mat.uv_v.xy, duv_dy)) * scale;
         alpha *= g_sampled_images[NonUniformResourceIndex(mat.albedo_texture)].SampleGrad(g_samplers[NonUniformResourceIndex(mat.sampler)], t, tdx, tdy).a;
@@ -4039,7 +4046,7 @@ uint frag_cutout_main(float4 position : SV_Position, float2 uv : TEXCOORD0, floa
 {
     float2 dx = ddx(uv);
     float2 dy = ddy(uv);
-    if (!cutout_kept(push.frame, id, uv, front, ground, dx, dy, slant, position))
+    if (!cutout_kept(push.frame, id, uv, front, ground, dx, dy, slant, position, push.frame[0].texture_lod_scale))
         discard;
     return id;
 }
@@ -4050,7 +4057,7 @@ uint frag_fallback_cutout_main(float4 position : SV_Position, nointerpolation ui
     uint id = id_base | triangle;
     float2 dx = ddx(uv);
     float2 dy = ddy(uv);
-    if (!cutout_kept(push.frame, id, uv, front, ground, dx, dy, slant, position))
+    if (!cutout_kept(push.frame, id, uv, front, ground, dx, dy, slant, position, push.frame[0].texture_lod_scale))
         discard;
     return id;
 }

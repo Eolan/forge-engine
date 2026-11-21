@@ -8094,6 +8094,27 @@ and the pops the full-detail reference does not have fell 13 %; a still camera's
 change grew from 956 to 1003 pixels from the air and 398 to 474 at the green (3 codes); the
 map check's foliage moved by ꟻLIP means up to 0.017 and was accepted.
 
+**The cards' alpha test follows the upscaler (2026-11-21, #382).** `cutout_kept` took the alpha
+map's level from the drawn pixels, which an upscaler makes larger, while the colour's level is
+taken as at the window's size (`texture_lod_scale`). So the alpha was one level finer than the
+colour under DLAA alone: the same level under DLSS Performance, 0.6 coarser under ultra
+performance, and the far crowns thinned as #363's had. The alpha's level now follows the view's
+`texture_lod_scale` too; the rings' draws do not (no upscaler changes their texels).
+- **The tree line over the lake from the green** (sRGB means of its band, 1600 x 900, an RTX
+  5060 Laptop GPU): DLAA 18 / 37 / 29. Ultra performance 37 / 52 / 50 before, the lake showing
+  through a scatter of leaves, 19 / 41 / 31 after. Performance 20 / 40 / 32 before, 18 / 39 / 30
+  after. Balanced and quality within 0.1 of before; the near crowns the same in every mode.
+- **Each mode nearer DLAA's image** (ꟻLIP mean, the whole frame): ultra performance 0.079 →
+  0.064, performance 0.044 → 0.043, balanced 0.028 → 0.027, quality 0.024 → 0.024.
+- **No more flicker for it:** the forest turning 2 px a frame, the pixels of the middle strip
+  that change from a frame to the next: balanced 0.54 → 0.62 %, performance 0.99 → 0.96 %.
+- **Unchanged:** DLAA and no anti-aliasing (0 pixels: their scale is 1).
+- **Checks:** validation clean at ultra performance on the mesh path, at performance on the
+  fallback and without rays, and under FSR ultra performance. The issue's own view (1920 x
+  1080 from the start) was not rerun: the same cards, seen from the green.
+- **Images meant to change:** captures taken under DLSS or FSR rendering smaller where leaf
+  cards show (the galleries' upscaling modes).
+
 **The shells' tone refitted (2026-10-29, #363).** The owner, walking in at noon: "still a lot of
 popping (I believed imposters with not the same colours being replaced)". With the cards' leaves
 kept, the 2026-10-25 fit (on green-only means, which left out the dark gaps the cards show) had
