@@ -5820,14 +5820,19 @@ void standard_surface(Material mat, Surface s, out float3 albedo, out float3 n)
     albedo = tint * ((1.0 - mat.cavity) + mat.cavity * cavity);
     if (mat.albedo_texture != TEXTURE_NONE || mat.normal_texture != TEXTURE_NONE)
     {
-        float3 w = triplanar_weights(s.object_normal);
         // Projected from the scene frame, the ground's tiles meet with one pattern and one
         // noise: from each mesh's own origin, a polygon kept in the next tile's mesh showed as
         // a band of another brightness (the city's pavements, the owner).
         bool world = (mat.flags & MATERIAL_FLAG_WORLD_PROJECTED) != 0;
+        // Such a row's planes, weights and gradients are the scene's too, as its position is
+        // (#403): with the object's, an instance turned or scaled took its three projections'
+        // weights and its mips from axes its position was not in. Nothing changes for an
+        // instance that is neither (its frames are the identity).
+        float3 plane_normal = world ? mul(s.normal_frame, s.object_normal) : s.object_normal;
+        float3 w = triplanar_weights(plane_normal);
         float3 p = (world ? s.world : s.object_position) * mat.inv_texture_scale;
-        float3 dpdx = s.dpdx * mat.inv_texture_scale;
-        float3 dpdy = s.dpdy * mat.inv_texture_scale;
+        float3 dpdx = (world ? mul(s.frame, s.dpdx) : s.dpdx) * mat.inv_texture_scale;
+        float3 dpdy = (world ? mul(s.frame, s.dpdy) : s.dpdy) * mat.inv_texture_scale;
         if ((mat.flags & MATERIAL_FLAG_HEX_TILING) != 0)
         {
             // Each instance its own place in the texture (a few dozen repeats away), so the
@@ -5836,11 +5841,11 @@ void standard_surface(Material mat, Surface s, out float3 albedo, out float3 n)
                 p += hash_color(s.instance_id ^ 0x9E3779B9u) * 61.0;
             float broad = 0.65 * value_noise3(p * 0.137) + 0.35 * value_noise3(p * 0.41 + 17.0);
             float3 texel, bent;
-            hex_triplanar(mat, s.object_normal, w, p, dpdx, dpdy, texel, bent);
+            hex_triplanar(mat, plane_normal, w, p, dpdx, dpdy, texel, bent);
             if (mat.albedo_texture != TEXTURE_NONE)
                 albedo *= texel * (0.7 + 0.6 * broad);
             if (mat.normal_texture != TEXTURE_NONE)
-                n = normalize(mul(s.normal_frame, bent));
+                n = world ? normalize(bent) : normalize(mul(s.normal_frame, bent));
             return;
         }
         if (mat.albedo_texture != TEXTURE_NONE)
@@ -5851,8 +5856,9 @@ void standard_surface(Material mat, Surface s, out float3 albedo, out float3 n)
         }
         if (mat.normal_texture != TEXTURE_NONE)
         {
-            float3 bent = triplanar_normal(mat.normal_texture, mat.normal_strength, s.object_normal, w, p, dpdx, dpdy);
-            n = normalize(mul(s.normal_frame, bent));
+            float3 bent = triplanar_normal(mat.normal_texture, mat.normal_strength, plane_normal, w, p, dpdx, dpdy);
+            // A world-projected row's bent normal is the scene's already.
+            n = world ? normalize(bent) : normalize(mul(s.normal_frame, bent));
         }
     }
 }
