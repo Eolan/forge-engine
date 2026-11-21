@@ -8811,9 +8811,11 @@ settings screen of three pages.
   What is left of a frame under DLSS is the probes' rays (6.8 ms), which do not follow the
   render size. One batch of runs to another, the laptop's frames move by up to 0.8 ms as it
   warms: the two rows that do not change were run twice more, back to back.
-- **Who it changes:** a user's file holding high, medium or low on an RTX GPU draws smaller from
-  its next start, as its preset says. Ultra (the first launch's choice from 12 GB) and custom
-  (every scripted run and capture) are as before.
+- **Who it changes:** a user's file holding high, medium or low on an RTX GPU, and no `r.aa`
+  of its own, draws smaller from its next start, as its preset says. A file that holds an
+  `r.aa` keeps it (`presets::picks_family`): a player who chose DLAA by hand under high keeps
+  that image. Ultra (the first launch's choice from 12 GB) and custom (every scripted run and
+  capture) are as before.
 - **Checks:** unit tests of the choice per preset and family, and of the menu (low upscales,
   ultra is DLAA, DLSS Quality by hand under ultra makes it custom, a preset under FSR keeps
   FSR); the runs above; with the second fix taken out, the log shows low going back to custom

@@ -113,6 +113,14 @@ pub fn patch_at(preset: &str, aa: Option<&str>) -> Vec<(&'static str, &'static s
     patch
 }
 
+/// Whether a preset picks DLAA or DLSS at all ([`patch_at`]): not one read from the user's file
+/// (`from_users_file`) beside an `r.aa` the file holds too (`file_holds_aa`). That line is the
+/// player's choice, or a preset's own and then already its pick: a file written before presets
+/// picked may say high and DLAA, and keeps the image the player chose.
+pub fn picks_family(from_users_file: bool, file_holds_aa: bool) -> bool {
+    !(from_users_file && file_holds_aa)
+}
+
 /// Whether `r.aa` at `aa` is as `preset` leaves it ([`patch_at`]): any value outside NVIDIA's
 /// family, and the preset's own choice within it.
 pub fn aa_kept(preset: &str, aa: &str) -> bool {
@@ -325,5 +333,11 @@ mod tests {
         assert!(aa_kept("low", "fsr") && aa_kept("low", "off") && aa_kept("low", "dlss"));
         assert!(!aa_kept("low", "dlaa") && !aa_kept("ultra", "dlss") && aa_kept("ultra", "dlaa"));
         assert!(aa_kept("custom", "dlaa") && aa_kept("custom", "dlss"));
+        // A preset from the user's file leaves the file's own `r.aa`; from anywhere else, or
+        // with no such line (the first launch's file), it picks.
+        assert!(!picks_family(true, true));
+        assert!(
+            picks_family(true, false) && picks_family(false, true) && picks_family(false, false)
+        );
     }
 }

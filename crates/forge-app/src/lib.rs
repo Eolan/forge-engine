@@ -1335,9 +1335,15 @@ impl<D: Demo> State<D> {
         if chosen || (grown && preset != presets::CUSTOM) {
             if preset != presets::CUSTOM {
                 let source = s.source(self.preset);
-                // Where the demo renders smaller under DLSS, the preset picks DLAA or DLSS too.
+                // Where the demo renders smaller under DLSS, the preset picks DLAA or DLSS too,
+                // unless it comes from the user's file beside an `r.aa` of the file's own.
+                let picks = presets::picks_family(
+                    source == settings::Source::User,
+                    s.user_value("r.aa").is_some(),
+                );
                 let aa = s
                     .info("r.dlss.mode")
+                    .filter(|_| picks)
                     .and_then(|_| s.info("r.aa"))
                     .map(|v| v.value_text());
                 for (name, value) in presets::patch_at(presets::PRESETS[preset], aa.as_deref()) {
