@@ -291,8 +291,8 @@ fn square_at(front: &Line, s: f64) -> DVec2 {
     let left = |t: DVec2| DVec2::new(-t.y, t.x);
     let edge = |k: usize| (front.points[k + 1] - front.points[k]).normalize_or_zero();
     let last = front.points.len() - 2;
-    for k in 1..=last {
-        if (front.at[k] - s).abs() < 1e-6 {
+    for (k, &at) in front.at.iter().enumerate().take(last + 1).skip(1) {
+        if (at - s).abs() < 1e-6 {
             return (left(edge(k - 1)) + left(edge(k))).normalize_or_zero();
         }
     }

@@ -599,9 +599,9 @@ mod tests {
     fn nudge(r: &mut SplitMix64, s: &QState) -> QState {
         let mut t = *s;
         let scale = [0, 30, 3000, 2_000_000][r.below(4) as usize];
-        for a in 0..3 {
+        for axis in &mut t.position {
             if scale > 0 && r.next_bool() {
-                t.position[a] += r.below(2 * scale) as i64 - scale as i64;
+                *axis += r.below(2 * scale) as i64 - scale as i64;
             }
         }
         if r.below(4) == 0 {

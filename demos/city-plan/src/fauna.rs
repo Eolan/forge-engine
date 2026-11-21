@@ -618,9 +618,9 @@ impl FaunaRun {
             for c in 0..coats.len() {
                 let first = out.blocks.len();
                 let mut n = 0;
-                for i in 0..self.fauna.len() {
+                for (i, slot) in out.slot.iter_mut().enumerate().take(self.fauna.len()) {
                     if self.species_index(i) == s && i % coats.len() == c {
-                        out.slot[i] = Some((first, n));
+                        *slot = Some((first, n));
                         n += 1;
                     }
                 }
