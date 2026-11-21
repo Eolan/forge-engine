@@ -18,6 +18,9 @@ the GPU (two in flight), so the per-pass sum can exceed the wall-clock frame: th
 is the truth, the zones are the split. With `--features profiling` the same GPU zones appear
 in Tracy's GPU timeline next to the CPU zones. At exit every demo logs the GPU zones (`gpu:`)
 and the CPU zones (`cpu:`) averaged over the whole run, unsmoothed, and the memory counters.
+Since 2026-11-21 it also logs the run's frames by their GPU time (`gpu frames:`): the median, the
+99th percentile, the worst frame with its number, and how many frames took over twice the
+median. A mean hides a hitch: one frame of 30 ms in a hundred of 2 ms moves it to 2.28.
 
 Machine: RTX 5070 Ti, driver 617.14, 1600×900, 2026-09-24 (shading rows updated 2026-09-25, #20).
 
@@ -3157,6 +3160,16 @@ The no-ray path complete (D-108, step 5). The private district's bar with its sm
 | The frame | 11.76 | 18.03 |
 
 D-108's tables' runs (1600 x 900, the anti-aliasing off, the frame's GPU ms without rays against traced, over four times of day each): the city's street 2.1 to 2.3 against 5.5 to 6.0, its avenue 2.1 to 2.3 against 5.4 to 5.7, the city from above 2.7 to 2.9 against 5.6 to 6.0, the private bar 9.1 to 9.9 against 15.7 to 16.7.
+
+Both tiers on an RTX 5060 Laptop GPU (8 GB, driver 621.24, 2026-11-21; 1600 x 900, the anti-aliasing off, best of two runs each, `--set r.rays=0` against the default; milliseconds of GPU time per frame):
+
+| View | Traced | Without rays | Traced: the largest zones | Without rays: the largest zones |
+|---|---|---|---|---|
+| The city (`city-blocks`, its start view, 1,200 frames) | 13.14 | 8.13 | `gi/probe rays` 4.41, `shading/standard` 2.85, cluster cull 1 1.07, `shading/reflections` 1.05, `gi/probe blend` 0.95 | `shading/standard` 1.82, cluster cull 1 0.74, `shading/reflections` 0.71, `meshlet pass 1` 0.56, `shadow/ring samples` 0.43 |
+| The village's street (`city-plan --village 600 --time-of-day 0.75`, 900 frames) | 15.67 | 9.34 | `gi/probe rays` 5.85, `shading/standard` 4.34, `meshlet pass 1` 2.51, `gi/probe blend` 1.43, `shadow/trace` 0.88 | `shading/standard` 2.75, `meshlet pass 1` 2.33, `shadow/ring samples` 0.46, `sky/clouds` 0.41, `ao/gtao` 0.34 |
+| A room of the village | 17.59 | 14.73 | `shading/standard` 5.13, `gi/probe rays` 4.88, `gi/probe blend` 1.72, `shadow/lamp rays` 1.66, `shadow/lamp filter` 0.75 | `shading/standard` 6.60, `shadow/lamp rays` 2.19, `shadow/lamp filter` 0.81, `meshlet pass 1` 0.59, `shadow/lamp spread` 0.50 |
+
+Video memory in use: 1.3 to 1.7 GiB of a 7.1 GiB budget in these views, the same in both tiers within 40 MiB. To look at next: the room without rays, where `shading/standard` costs 1.5 ms more than traced.
 
 ## Not measured yet
 

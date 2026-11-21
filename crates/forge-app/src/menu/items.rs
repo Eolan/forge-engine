@@ -18,6 +18,8 @@ use crate::presets;
 pub struct Caps {
     /// The device runs DLSS (an RTX GPU, NVIDIA's Streamline loaded at start).
     pub dlss: bool,
+    /// The GPU has ray queries (whether or not this run uses them: `r.rays`).
+    pub ray_query: bool,
     /// The monitors, in the system's order.
     pub monitors: Vec<Monitor>,
     /// The window's monitor, an index into `monitors`.
@@ -444,6 +446,20 @@ fn graphics(settings: &Settings, caps: &Caps, value: &dyn Fn(&str) -> Option<Str
         rows.push(Row::Setting(s));
     }
     rows.push(Row::Header("LIGHTING"));
+    // D-108's choice: the traced tier or the one without rays, where the GPU has ray queries.
+    if let Some(Row::Setting(mut s)) = setting(
+        settings,
+        "r.rays",
+        "Ray tracing",
+        "Shadows, reflections and indirect light by rays. Off: the lighter tier without rays \
+         (shadow maps, the screen's reflections, the light of cubes), a little brighter outdoors.",
+        switch("r.rays"),
+    ) {
+        if !caps.ray_query {
+            s.off = Some("This GPU has no ray queries: the tier without rays is drawn.".to_owned());
+        }
+        rows.push(Row::Setting(s));
+    }
     rows.extend(setting(
         settings,
         "r.shadows",
@@ -895,6 +911,7 @@ mod tests {
     fn caps(dlss: bool) -> Caps {
         Caps {
             dlss,
+            ray_query: true,
             monitors: vec![
                 Monitor {
                     size: [2560, 1440],
@@ -926,6 +943,41 @@ mod tests {
             .iter()
             .map(|c| (c.label.as_str(), c.available))
             .collect()
+    }
+
+    #[test]
+    fn the_ray_tracing_row_is_a_restart_choice_where_the_gpu_has_ray_queries() {
+        // D-108: the tier without rays is the player's choice where the GPU has ray queries.
+        let mut s = registry(true);
+        s.add(Spec::bool("r.rays", true, "rays").release().restart());
+        let draft = Draft::default();
+        let value = |n: &str| draft.value(&s, n);
+        let rows_with = rows(Tab::Graphics, &s, &caps(true), &value);
+        let rays = row(&rows_with, "Ray tracing");
+        assert_eq!(labels(rays), [("Off", true), ("On", true)]);
+        assert_eq!(rays.current(&value), Some(1), "rays by default");
+        assert!(rays.off.is_none());
+        assert!(restart(&s, "r.rays"));
+        // On a GPU without ray queries the row stays, greyed, and says why.
+        let without = Caps {
+            ray_query: false,
+            ..caps(true)
+        };
+        let rows_without = rows(Tab::Graphics, &s, &without, &value);
+        assert!(
+            row(&rows_without, "Ray tracing")
+                .off
+                .as_deref()
+                .is_some_and(|why| why.contains("no ray queries"))
+        );
+        // A demo that registers no `r.rays` has no such row.
+        let plain = registry(true);
+        let value = |n: &str| draft.value(&plain, n);
+        assert!(
+            !rows(Tab::Graphics, &plain, &caps(true), &value)
+                .iter()
+                .any(|r| matches!(r, Row::Setting(s) if s.label == "Ray tracing"))
+        );
     }
 
     #[test]

@@ -130,6 +130,9 @@ pub struct DeviceOptions {
     /// Enable what NVIDIA's NRC needs where the GPU offers it ([`DeviceFeatures::nrc`]): the app
     /// asks only when NRC's library is there to load (D-088's trial).
     pub nrc: bool,
+    /// Leave ray queries disabled even when the GPU has them: D-108's tier without rays, a
+    /// player's choice (`r.rays 0`). `FORGE_NO_RAY_QUERY=1` does the same for a run.
+    pub no_ray_query: bool,
 }
 
 /// Mesh-shader limits worth knowing when sizing meshlets.
@@ -165,6 +168,8 @@ pub struct Device {
     /// created `CONCURRENT` over these when there is more than one.
     families: Vec<u32>,
     features: DeviceFeatures,
+    /// Whether the GPU has ray queries, whatever [`DeviceOptions::no_ray_query`] made of them.
+    gpu_ray_query: bool,
     mesh_limits: Option<MeshShaderLimits>,
     timestamp_period_ns: f32,
     limits: vk::PhysicalDeviceLimits,
@@ -251,10 +256,18 @@ impl Device {
             tracing::info!("mesh shaders left disabled (fallback paths forced)");
             best.features.mesh_shader = false;
         }
-        if best.features.ray_query
-            && std::env::var_os("FORGE_NO_RAY_QUERY").is_some_and(|v| v != "0")
-        {
-            tracing::info!("ray queries left disabled (FORGE_NO_RAY_QUERY)");
+        // What the GPU itself offers, before a choice turns it off (the menu says which).
+        let gpu_ray_query = best.features.ray_query;
+        let by_variable = std::env::var_os("FORGE_NO_RAY_QUERY").is_some_and(|v| v != "0");
+        if best.features.ray_query && (options.no_ray_query || by_variable) {
+            tracing::info!(
+                "ray queries left disabled ({})",
+                if by_variable {
+                    "FORGE_NO_RAY_QUERY"
+                } else {
+                    "r.rays 0"
+                }
+            );
             best.features.ray_query = false;
             best.features.opacity_micromap = false;
         }
@@ -605,6 +618,7 @@ impl Device {
             separate,
             families: family_list,
             features: best.features,
+            gpu_ray_query,
             mesh_limits,
             timestamp_period_ns,
             limits,
@@ -1067,6 +1081,13 @@ impl Device {
     /// Optional features detected.
     pub fn features(&self) -> DeviceFeatures {
         self.features
+    }
+
+    /// Whether the GPU has ray queries, even when the device was made without them
+    /// ([`DeviceOptions::no_ray_query`], `FORGE_NO_RAY_QUERY`): what a settings screen needs to
+    /// tell a choice from a limit of the machine.
+    pub fn gpu_has_ray_query(&self) -> bool {
+        self.gpu_ray_query
     }
 
     /// Mesh-shader limits when the feature is present.

@@ -70,13 +70,19 @@ impl Headless {
     /// `FORGE_GPU_TESTS_NO_VALIDATION=1`), the device, the frames and the compiler over
     /// `shader_dir` ([`shaders_of`]).
     pub fn new(shader_dir: impl Into<PathBuf>) -> Result<Self> {
+        Self::with_options(shader_dir, DeviceOptions::default())
+    }
+
+    /// [`Headless::new`] with the device made by `options`: a test of a tier a device option
+    /// selects ([`DeviceOptions::no_ray_query`], D-108).
+    pub fn with_options(shader_dir: impl Into<PathBuf>, options: DeviceOptions) -> Result<Self> {
         let serial = ONE_AT_A_TIME
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let validation = std::env::var_os("FORGE_GPU_TESTS_NO_VALIDATION").is_none_or(|v| v == "0");
         let errors_at_start = validation_errors();
         let instance = Arc::new(Instance::new(c"forge headless", validation, None)?);
-        let device = Device::with_options(Arc::clone(&instance), None, DeviceOptions::default())?;
+        let device = Device::with_options(Arc::clone(&instance), None, options)?;
         let frames = Frames::headless(Arc::clone(&device))?;
         let mut graph = RenderGraph::new(&device);
         graph.allow_readback();
@@ -250,5 +256,35 @@ mod tests {
         if std::env::var_os(TESTS_VARIABLE).is_none() {
             assert!(!Headless::wanted());
         }
+    }
+
+    /// A GPU test (`FORGE_GPU_TESTS=1`): D-108's choice. A device made with
+    /// [`DeviceOptions::no_ray_query`] has no ray queries and no opacity micromaps, whatever
+    /// the GPU offers, and still says what the GPU itself has, for the settings screen.
+    #[test]
+    fn a_device_made_without_ray_queries_keeps_what_the_gpu_has() {
+        if !Headless::wanted() {
+            return;
+        }
+        let shaders = shaders_of(env!("CARGO_MANIFEST_DIR"));
+        let with = Headless::new(&shaders).expect("a headless device");
+        let gpu_has = with.device.gpu_has_ray_query();
+        // Unless the variable turns them off for the run, the default device has what the GPU has.
+        if std::env::var_os("FORGE_NO_RAY_QUERY").is_none_or(|v| v == "0") {
+            assert_eq!(with.device.features().ray_query, gpu_has);
+        }
+        drop(with);
+        let without = Headless::with_options(
+            &shaders,
+            DeviceOptions {
+                no_ray_query: true,
+                ..DeviceOptions::default()
+            },
+        )
+        .expect("a headless device without ray queries");
+        assert!(!without.device.features().ray_query);
+        assert!(!without.device.features().opacity_micromap);
+        assert_eq!(without.device.gpu_has_ray_query(), gpu_has);
+        without.finish().expect("no validation error making it");
     }
 }

@@ -494,6 +494,9 @@ fn run_with<D: Demo>(
         if let Some(gpu) = state.ctx.profile.gpu_run_summary() {
             tracing::info!("gpu: {gpu}");
         }
+        if let Some(frames) = state.ctx.profile.gpu_frames_summary() {
+            tracing::info!("gpu frames: {frames}");
+        }
         if let Some(cpu) = state.ctx.profile.cpu_run_summary() {
             tracing::info!("cpu: {cpu}");
         }
@@ -595,6 +598,8 @@ struct Start {
     width: Var<i64>,
     height: Var<i64>,
     monitor: Var<i64>,
+    /// `r.rays`: whether the device is made with the GPU's ray queries (D-108's choice).
+    rays: Var<bool>,
 }
 
 impl Start {
@@ -643,6 +648,19 @@ impl Start {
             )
             .release(),
         );
+        let rays = settings.add(
+            Spec::bool(
+                "r.rays",
+                true,
+                "Ray tracing, where the GPU has ray queries: the sun's and the lamps' shadows, \
+                 the reflections and the indirect light by rays. Off: the tier without rays \
+                 (D-108): shadow rings, a lamp atlas, the screen's reflections and cubes; \
+                 lighter, the open city a quarter of a stop brighter. FORGE_NO_RAY_QUERY=1 does \
+                 the same for one run.",
+            )
+            .release()
+            .restart(),
+        );
         Self {
             settings,
             user_file,
@@ -652,6 +670,7 @@ impl Start {
             width,
             height,
             monitor,
+            rays,
         }
     }
 }
@@ -1282,6 +1301,7 @@ impl<D: Demo> State<D> {
         let size = window.inner_size();
         self.menu.set_caps(menu::items::Caps {
             dlss: self.ctx.device.dlss().is_some(),
+            ray_query: self.ctx.device.gpu_has_ray_query(),
             monitor: current
                 .as_ref()
                 .and_then(|c| monitors.iter().position(|m| m == c)),
@@ -1479,6 +1499,7 @@ impl<D: Demo> State<D> {
             width: window_width,
             height: window_height,
             monitor: monitor_choice,
+            rays,
         } = start;
         // The frame's pace (#377): VSync and a frame-rate limit, in interactive runs; a scripted
         // run keeps measuring its frames uncapped.
@@ -1514,6 +1535,9 @@ impl<D: Demo> State<D> {
             no_mesh_shader: config.force_fallback,
             // NRC's extensions only where its shim is there to load (D-088's trial).
             nrc: cfg!(feature = "nrc") && nrc_dir().join(forge_gpu::nrc::NRC_SHIM).exists(),
+            // `r.rays 0` (D-108): the tier without rays on a GPU that has them, the player's
+            // choice, read at start as the window's settings are.
+            no_ray_query: !settings.get(rays),
         };
         // NVIDIA Streamline's interposer becomes the Vulkan loader, so it is loaded only when the
         // GPU the device selection prefers is NVIDIA's (issue #67): a plain instance asks first.

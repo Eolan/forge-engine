@@ -13007,6 +13007,22 @@ screen, kept until that is well off. A cone takes a slot; anything else six, a c
 
 *Its check.* 0 pixels with rays against `main`; validation and sync validation without ray queries on both paths; the bar with its smoke and its fog against the rays' at one exposure; the cost of each part.
 
+**Amended 2026-11-21: the tier as the player's choice (`r.rays`), and both tiers measured on an 8 GB laptop GPU.** The decision made the tier without rays "a choice where it has them"; until now that choice was the variable `FORGE_NO_RAY_QUERY=1` alone.
+
+- **`r.rays`** (1 by default, read at start, kept in a shipped game): 0 makes the device without the GPU's ray queries (`DeviceOptions::no_ray_query`), and the frame is the tier without rays, as on a device that has none. Rays stay the default wherever the device has them, as decided. The variable does the same for one run and wins over the setting.
+- **The menu's "Ray tracing" row** (Graphics, under LIGHTING): saved to the user's file, marked as applying after a restart. On a GPU without ray queries the row is greyed and says why (`Device::gpu_has_ray_query`: what the GPU has, whatever the run made of it).
+- **Measured on an RTX 5060 Laptop GPU** (8 GB, driver 621.24; 1600 x 900, the anti-aliasing off, the frame's GPU time, best of two runs each; `--set r.rays=0` against the default):
+
+| View | Traced | Without rays | The largest zones without rays |
+|---|---|---|---|
+| The city (`city-blocks`, its start view) | 13.1 ms | 8.1 ms | `shading/standard` 1.8, the first cluster cull 0.7, `shading/reflections` 0.7 |
+| The village's street (`city-plan --village 600`, 18:00) | 15.7 ms | 9.3 ms | `shading/standard` 2.7, `meshlet pass 1` 2.3, `shadow/ring samples` 0.5 |
+| A room of the village | 17.6 ms | 14.7 ms | `shading/standard` 6.6, `shadow/lamp rays` 2.2, `shadow/lamp filter` 0.8 |
+
+- **What the numbers say.** Outdoors the tier takes two fifths off the frame: the probes' rays and blend alone were 5.4 to 7.3 ms of the traced frames. In a room it takes a sixth: `shading/standard` costs more without rays than traced there (6.6 ms against 5.1) and the lamps' atlas as much as their rays (`shadow/lamp rays` 2.2 ms against 1.7). A room is where this tier's cost is to look at next. The RTX 5070 Ti's tables above (2.1 to 2.9 ms against 5.4 to 6.0 in the city) are other views: read each machine's two columns, not across machines.
+- **Checks:** a GPU test makes a device with the option and finds no ray query and no opacity micromap on it, the GPU's own still reported; a test of the menu's row, with and without ray queries on the GPU and without the setting. The measured runs are the setting's own path (`--set r.rays=0`): their zones are the tier's (`shadow/ring samples`, `gi/screen trace`).
+- **For the owner:** whether the first launch picks this tier on such a GPU is D-111's question; nothing here changes a default.
+
 **Amended 2026-11-11: step 5 built** (the owner's go for step 5). The rings' records and a point's share of the sun in `shaders/shadow_rings.slang`, the cubes' records and lookups in `shaders/reflection_cubes.slang`, both imported by `meshlet.slang` and the passes below; `SunRings` and `CubeLight` hand them to the passes of other modules. Where the device has ray queries nothing changes: 0 pixels against `main` in the city, the gallery and the island.
 
 - **No module asks for ray queries on a device without them.** Every entry of the frame's shaders compiled offline: 74 hold no ray query, 18 do, and those are only the traced entries and the passes that exist only with rays. Each pass a device without ray queries creates has its own entry without the traced code (`advance_rings_main`, `vert_rings_main`, `light_rings_main`, `impostor_*_rings_main`, `fog_light_rings_main`, `march_rings_main`), picked by the device's features. The resolve's plain entries had two traced calls behind run-time switches; their tests now carry the entry's own. Validation with `FORGE_NO_RAY_QUERY=1`: 0 errors in the city (16 before), the private bar (24 before) and the island.
@@ -13204,3 +13220,22 @@ Measured on the city flight (2026-11-11, after the hull rule and the played run'
 2. On by default if the flight shows fewer steps and under 0.2 ms; the private viewer flags its pieces from their arrival to the end of their band.
 
 **Not in this decision:** the probes and the surface cache already cross over a second or more by their own blend; the rings of the tier without rays (D-108) keep their cut.
+
+## D-111 — The first launch on a GPU with ray queries but little headroom: which tier it picks 🟡 (proposed 2026-11-21, waiting for the owner)
+
+**The question:** D-108 decided that rays stay the default wherever the device has them, and D-081's first launch picks a quality preset by the GPU's memory. Since 2026-11-21 the tier without rays is a setting (`r.rays 0`, the menu's "Ray tracing" row). Should the first launch pick it on a GPU that has ray queries but little headroom?
+
+**What was measured** (D-108's amendment of 2026-11-21): on an RTX 5060 Laptop GPU (8 GB), at 1600 x 900 with the anti-aliasing off, the traced frame is 13.1 ms in the city, 15.7 in the village's street and 17.6 in a room; without rays 8.1, 9.3 and 14.7. That resolution is about what DLSS Balanced renders for a 2560 x 1440 screen, the medium preset's mode. The traced tier holds 60 frames a second there with little to spare; the tier without rays holds it with room outdoors, and stands a quarter of a stop bright in the open city (D-108's tables).
+
+| | How | For | Against |
+|---|---|---|---|
+| **A. As decided** | Rays wherever the device has them; the player switches in the menu. | The best picture first. Nothing to build. | A first launch at 57 to 76 frames a second of GPU time on an 8 GB laptop, and the player has to know the row exists. |
+| **B. By the preset** (recommended) | The first launch writes `r.rays 0` when it picks the low or the medium preset (under 8 GiB of video memory); high and ultra keep rays. The presets themselves do not set it: choosing a preset in the menu later changes no tier. | One rule, the one that already picks the preset, on a number the device gives. The player's later choices are untouched. | Memory stands in for speed: a slow GPU with 12 GB keeps rays, a fast one with 6 GB loses them. |
+| **C. By a measured frame** | The first launch times a few hundred frames of the scene traced and switches when the GPU frame passes a target. | The rule is the thing that matters. | The switch needs the device made again or a restart; a target per game; a first launch that takes longer. D-094's frame budget work would give the target. |
+
+**Recommendation:** B now, with its rule in one function beside the preset's (`presets::first_launch`), and C when D-094's budget gives a target worth timing against.
+
+**For the owner to decide:** A, B or C; under B, whether the line is the medium preset (under 8 GiB) or the low one alone (under 5 GiB).
+
+**Not in this decision:** what the presets set (D-081), and the tier's own quality (D-108's limits).
+
