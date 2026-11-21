@@ -5383,7 +5383,7 @@ uint2 column_run(uint4* slots, uint slot_mask, float cell, float3 world)
 // normal (`n`), by its coverage, as a layer of the ground. A decal fades out towards its
 // box's faces along its axis, and on the surfaces that do not face that axis (the ground under a
 // wall's grime). Its texture's gradients are its box's axes dotted with the surface's analytic
-// change per pixel, scaled as the rows' textures are (`texture_lod_scale`): no halo where the
+// change per pixel, which is scaled as the rows' textures are (`texture_lod_scale`): no halo where the
 // surface ends, its mips and anisotropy whole. A colour decal's normal map (`DecalKind::normal`)
 // adds its slopes, along the box's x and z laid on the surface, times its coverage, to `bend`:
 // the caller bends its final normal by it (`decal_bent`), its own map's or the row's.
@@ -5417,8 +5417,11 @@ void apply_decals(Frame* f, Surface s, inout float3 albedo, inout float3 n, inou
         if (k.strip != 0u)
             cell.x = frac(cell.x);
         float2 uv = k.uv_rect.xy + cell * k.uv_rect.zw;
-        float2 gx = quat_turn(d.rotation, mul(s.frame, s.dpdx), true).xz * scale * f[0].texture_lod_scale;
-        float2 gy = quat_turn(d.rotation, mul(s.frame, s.dpdy), true).xz * scale * f[0].texture_lod_scale;
+        // The surface's change per pixel already carries the upscaler's bias (`pixel_shading`,
+        // `grass_surface`): scaled again here, a decal drawn under DLSS Quality took its mips
+        // one bias sharper than the row under it and could alias (#402).
+        float2 gx = quat_turn(d.rotation, mul(s.frame, s.dpdx), true).xz * scale;
+        float2 gy = quat_turn(d.rotation, mul(s.frame, s.dpdy), true).xz * scale;
         float4 t = sample_image_grad(k.texture, k.sampler, uv, gx, gy);
         if (k.alpha == DECAL_STRAIGHT)
             t.rgb *= t.a;
